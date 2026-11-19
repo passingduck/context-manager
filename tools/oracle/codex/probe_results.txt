@@ -1,0 +1,44 @@
+PASS A root->cwd order, below-cwd skipped
+PASS A separator between global and project
+PASS A untrusted-unknown project still loads AGENTS.md
+PASS B empty project override shadows AGENTS.md
+PASS C empty global override falls back to AGENTS.md
+PASS C non-empty global override wins
+PASS D untrusted project skips project AGENTS.md
+PASS E truncates first file to budget
+PASS E later files dropped once budget spent
+PASS E global not counted against budget
+PASS F fallback used where AGENTS.md absent
+PASS F AGENTS.md beats fallback in same dir
+PASS F fallback not applied to global
+PASS G no root marker -> cwd only
+PASS H control: trusted project layer is loaded
+PASS H project-layer project_root_markers ignored
+PASS H user-layer marker (a plain file) honored
+PASS Q fake .git dir: AGENTS.md walk reaches it
+PASS Q fake .git dir: root .codex layer not loaded from sub
+PASS Q control: root .codex layer loads when cwd is the root
+PASS I unknown-trust project config ignored
+PASS I trusted project developer_instructions injected
+PASS I developer_instructions role is developer
+PASS J skill rootskill listed
+PASS J skill subskill listed
+PASS J skill codexhomeskill listed
+PASS J skill homeagentsskill listed
+PASS J skill nested listed
+PASS J skill below cwd not listed
+PASS J unknown-trust project .codex/skills still listed (disabled layer)
+PASS J explicitly untrusted: .codex/skills still listed
+PASS J explicitly untrusted: .agents/skills still listed
+PASS J trusted project .codex/skills listed
+PASS J skill without description rejected
+PASS J SKILL.md body not in context
+PASS K MEMORY.md never injected
+PASS L model_instructions_file replaces built-in base
+PASS M agent developer_instructions not in main prompt
+PASS M agent description not in prompt messages (tool spec only)
+PASS O symlinked AGENTS.md followed
+PASS O directory named AGENTS.override.md skipped
+PASS N global AGENTS.md > 32KiB not truncated
+PASS R @-references passed verbatim, not inlined
+PASS R CLAUDE.md not loaded by default
