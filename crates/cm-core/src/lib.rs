@@ -3,6 +3,7 @@
 
 pub mod agents;
 pub mod api;
+pub mod edit;
 pub mod env;
 pub mod model;
 pub mod probe_fs;

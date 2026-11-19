@@ -26,6 +26,10 @@ pub struct ScanCx<'a> {
 pub struct PlanCx<'a> {
     pub env: &'a ScanEnv,
     pub fs: &'a ProbeFs,
+    /// The fresh scan the plan runs against.
+    pub snapshot: &'a Snapshot,
+    /// Where the tool keeps parked hook records (`parked/`). A planner may write inside it.
+    pub parked_dir: &'a AbsPath,
 }
 
 /// A file an adapter looked at, with the edit policy it claims for it.
