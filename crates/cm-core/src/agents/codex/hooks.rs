@@ -57,6 +57,7 @@ const DEFAULT_TIMEOUT: u64 = 600;
 const SESSION_END_DEFAULT: u64 = 1;
 const SESSION_END_MAX: u64 = 3;
 
+pub(super) const RULE_PLUGIN_CONTENT: &str = "codex.assumption.plugin_hook_content";
 pub(super) const RULE_TOGGLE_MANAGED: &str = "codex.hooks.toggle_managed";
 pub(super) const RULE_TOGGLE_UNSUPPORTED: &str = "codex.hooks.toggle_unsupported";
 
@@ -597,14 +598,14 @@ fn eval_matcher(event: &str, raw: Option<&str>) -> MatcherEval {
 }
 
 /// `plugin_content_hash`, over the files of the plugin directory.
-fn plugin_content_hash(cx: &ScanCx, root: &AbsPath) -> Option<String> {
+fn plugin_content_hash(cx: &ScanCx, root: &AbsPath, max_entries: usize) -> Option<String> {
     let mut hash = Sha256::new();
     hash.update(b"codex-plugin-bundle-v1");
     let mut pending = vec![root.clone()];
     let mut seen = 0usize;
     while let Some(path) = pending.pop() {
         seen += 1;
-        if seen > 20_000 {
+        if seen > max_entries {
             return None;
         }
         let name = path.file_name().unwrap_or("");
@@ -876,10 +877,13 @@ fn build(
             if let Some((plugin_id, root)) = &source.plugin {
                 // The content hash reads the whole plugin, so a scan computes it only for
                 // hooks that have an approval to check. `inspect` always computes it.
+                // A plugin with many files (an installed `node_modules`) is not hashed in a scan.
+                // The trust then rests on the declaration hash alone, which is an assumption.
+                let max_entries = if full_hash { 200_000 } else { 5_000 };
                 let content = if full_hash || trusted_hash.is_some() {
                     content_hashes
                         .entry(root.clone())
-                        .or_insert_with(|| plugin_content_hash(cx, root))
+                        .or_insert_with(|| plugin_content_hash(cx, root, max_entries))
                         .clone()
                 } else {
                     None
@@ -1168,6 +1172,17 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             _ => EditPolicy::Editable,
         };
         out.claim(&found.hook.source.file, policy);
+        if matches!(found.hook.source.scope, Scope::Plugin { .. })
+            && found.hook.state == HookState::Active
+            && !out
+                .assumptions
+                .iter()
+                .any(|a| matches!(a, Assumption::Unknown { what } if what.0 == RULE_PLUGIN_CONTENT))
+        {
+            out.assumptions.push(Assumption::Unknown {
+                what: RuleRef::new(RULE_PLUGIN_CONTENT),
+            });
+        }
         out.hooks.push(found.hook);
     }
     hook_files(cx, setup, out);

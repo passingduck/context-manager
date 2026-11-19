@@ -63,7 +63,7 @@ fn compute(cx: &ScanCx) -> Computed {
     memory::run(cx, &setup, &mut out);
     hooks::run(cx, &setup, &plugins, &mut out);
     extras::slots(&setup, &mut out);
-    assumptions(cx, &setup, &mut out);
+    assumptions(cx, &setup, &plugins, &mut out);
 
     let home = HomeDir {
         role: RuleRef::new("codex.home"),
@@ -158,7 +158,7 @@ fn context_block(block: &Block) -> ContextBlock {
 }
 
 /// What a static scan had to assume (design section 3, `Assumption`).
-fn assumptions(cx: &ScanCx, setup: &Setup, out: &mut Out) {
+fn assumptions(cx: &ScanCx, setup: &Setup, plugins: &[plugins::Plugin], out: &mut Out) {
     for (name, on) in [
         ("hooks", setup.features.hooks),
         ("memories", setup.features.memories),
@@ -210,6 +210,11 @@ fn assumptions(cx: &ScanCx, setup: &Setup, out: &mut Out) {
     out.assumptions.push(Assumption::Unknown {
         what: RuleRef::new("codex.assumption.managed_sources"),
     });
+    if !plugins.is_empty() {
+        out.assumptions.push(Assumption::Unknown {
+            what: RuleRef::new("codex.assumption.plugin_marketplaces"),
+        });
+    }
 }
 
 impl Agent for Codex {

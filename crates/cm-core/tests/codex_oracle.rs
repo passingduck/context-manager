@@ -846,3 +846,52 @@ fn oracle_project_hooks_of_an_unknown_project_are_not_listed() {
         }
     ));
 }
+
+#[test]
+fn oracle_plugin_hooks_carry_the_content_hash_and_the_two_part_approval() {
+    if !codex_installed() {
+        return;
+    }
+    let case = Case::new();
+    let base = "plugins/cache/mkt/demo/1.0.0";
+    case.user(
+        &format!("{base}/.codex-plugin/plugin.json"),
+        "{\"name\":\"demo\"}",
+    );
+    case.user(
+        &format!("{base}/hooks/hooks.json"),
+        r#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"${PLUGIN_ROOT}/run.sh"}]}]}}"#,
+    );
+    case.user(&format!("{base}/run.sh"), "#!/bin/sh\necho hi\n");
+    case.user(&format!("{base}/scripts/helper.py"), "print('x')\n");
+    case.user("config.toml", "[plugins.\"demo@mkt\"]\nenabled = true\n");
+    let cwd = case.fx.project();
+
+    let first = oracle_rows(&hooks_list(&case, &cwd));
+    assert_eq!(first.len(), 1, "{first:#?}");
+    let (key, row) = first.iter().next().unwrap();
+    assert!(
+        key.starts_with("demo@mkt:hooks/hooks.json:pre_tool_use:0:0"),
+        "{key}"
+    );
+    assert!(
+        row.hash.contains('/'),
+        "declaration hash, a slash, content hash: {}",
+        row.hash
+    );
+    assert_eq!(our_rows(&case, &cwd), first);
+
+    // Approve both halves, then change a script: the content hash no longer matches.
+    let (declaration, content) = row.hash.split_once('/').unwrap();
+    case.append_user_config(&format!(
+        "[hooks.state.\"{key}\"]\ntrusted_hash = \"{declaration}\"\ntrusted_content_hash = \"{content}\"\n"
+    ));
+    let trusted = oracle_rows(&hooks_list(&case, &cwd));
+    assert_eq!(trusted[key].trust, "trusted");
+    assert_eq!(our_rows(&case, &cwd), trusted);
+
+    case.user(&format!("{base}/scripts/helper.py"), "print('changed')\n");
+    let modified = oracle_rows(&hooks_list(&case, &cwd));
+    assert_eq!(modified[key].trust, "modified");
+    assert_eq!(our_rows(&case, &cwd), modified);
+}

@@ -207,3 +207,15 @@ id = "codex.assumption.managed_sources"
 en = "A scan cannot read managed preferences, the cloud bundle or session flags. Their settings may change what Codex loads."
 ko = "검사로는 관리형 환경설정, 클라우드 설정 묶음, 세션 플래그를 읽을 수 없습니다. 이 설정들이 Codex가 읽는 내용을 바꿀 수 있습니다."
 evidence = "docs/agents/codex.md section 6.2"
+
+[[rule]]
+id = "codex.assumption.plugin_hook_content"
+en = "Codex also hashes the files of a plugin before it runs one of the plugin's hooks. This scan checks only the hook declaration for a large plugin, so the hook may still be marked as modified when Codex starts."
+ko = "Codex는 플러그인의 훅을 실행하기 전에 플러그인 파일 전체의 해시도 확인합니다. 이 검사는 큰 플러그인에서 훅 선언만 확인하므로, Codex를 시작할 때 이 훅이 변경됨으로 표시될 수도 있습니다."
+evidence = "docs/agents/codex.md section 2.5 (plugin hooks); codex-rs/hooks/src/engine/plugin_fingerprint.rs"
+
+[[rule]]
+id = "codex.assumption.plugin_marketplaces"
+en = "Which marketplace plugins Codex keeps active depends on the login of the user and on marketplace data that a scan cannot read. This scan follows the [plugins] table and the plugin cache, so the list can differ from Codex."
+ko = "Codex가 어떤 마켓플레이스 플러그인을 켜 두는지는 사용자의 로그인 상태와 검사로 읽을 수 없는 마켓플레이스 정보에 따라 달라집니다. 이 검사는 [plugins] 표와 플러그인 캐시를 따르므로 Codex가 보여 주는 목록과 다를 수 있습니다."
+evidence = "docs/agents/codex.md section 5.4 (open question 6); codex-rs/core-plugins/src/loader.rs"
