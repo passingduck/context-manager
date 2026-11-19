@@ -14,7 +14,7 @@ scripts/install.sh --headless    # 창이 없는 빌드: --serve만 동작합니
 PREFIX=$HOME/bin scripts/install.sh --headless
 ```
 
-창이 없는 빌드에는 GUI 라이브러리가 필요하지 않으므로 Linux 서버에는 이 빌드를 설치합니다. 코드가 Linux용으로 계속 컴파일되는지 확인하려면 `scripts/check-linux.sh`를 실행합니다. 프로젝트의 모든 검사를 돌리려면 `scripts/check.sh`를 실행합니다.
+창이 없는 빌드에는 GUI 라이브러리가 필요하지 않으므로 Linux 서버에는 이 빌드를 설치합니다. 코드가 Linux용으로 계속 컴파일되는지 확인하려면 `scripts/check-linux.sh`를 실행합니다. 프로젝트의 모든 검사를 돌리려면 `scripts/check.sh`를 실행합니다. 릴리스 빌드를 임시 홈에서 실행하고 헤드리스 Chrome으로 실제 화면을 조작해 확인하려면 `scripts/e2e.sh`를 실행합니다. 이 스크립트는 Node 24와 Chrome 또는 Chromium이 필요하며 `check.sh`에는 포함되지 않습니다.
 
 ## 실행
 

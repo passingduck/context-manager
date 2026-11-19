@@ -125,7 +125,7 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
               };
               if (!load) {
                 return (
-                  <span key={seg.index} aria-hidden title={t.prefix.glueTitle(seg.tokens)} className="absolute inset-y-0 flex items-center" style={style}>
+                  <span key={seg.index} aria-hidden data-testid="prefix-glue" data-start={seg.start} data-end={seg.end} title={t.prefix.glueTitle(seg.tokens)} className="absolute inset-y-0 flex items-center" style={style}>
                     <span className="block w-full" style={inner} />
                   </span>
                 );
