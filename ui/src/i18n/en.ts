@@ -250,7 +250,6 @@ export const en = {
     history: "History",
     sections: "Sections",
     totalAlways: (n: string) => `All agents load ${n} tokens at session start.`,
-    readOnlyHost: "The host runs in read-only mode.",
     pending: (n: number) => `${n} pending`,
   },
   context: {

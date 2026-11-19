@@ -226,7 +226,6 @@ export const ko: typeof en = {
     history: "변경 이력",
     sections: "구역",
     totalAlways: (n) => `모든 에이전트가 세션을 시작할 때 토큰 ${n}개를 불러옵니다.`,
-    readOnlyHost: "호스트가 읽기 전용으로 실행 중입니다.",
     pending: (n) => `대기 ${n}건`,
   },
   context: {

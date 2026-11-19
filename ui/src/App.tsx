@@ -98,7 +98,7 @@ export function App() {
           <div className="flex min-h-0 flex-col">
           {value.readOnly && <p role="status" className="border-b border-warn bg-warn-bg px-3 py-1 text-warn">{t.write.readOnlyHost}</p>}
           <div className="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,5fr)_minmax(0,6fr)]">
-            <Rail route={route} go={go} snapshot={value.snapshot} readOnly={value.readOnly} pending={session.data?.pending.length ?? 0} />
+            <Rail route={route} go={go} snapshot={value.snapshot} pending={session.data?.pending.length ?? 0} />
             <main className="flex min-h-0 min-w-0 flex-col border-r border-line" aria-label={t.title}>
               {route.q.trim() ? (
                 <SearchPanel route={route} go={go} />
