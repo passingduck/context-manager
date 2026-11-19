@@ -55,7 +55,7 @@ export function HookActions({ agent, hook, onTest }: { agent: AgentId; hook: Hoo
   const locked = hook.toggle.kind === "unavailable" ? project.rule(hook.toggle.why) : blocked;
   return (
     <>
-      <Button onClick={onTest}>{t.hooks.test}</Button>
+      <Button disabled={blocked !== null} title={blocked ?? undefined} onClick={onTest}>{t.hooks.test}</Button>
       <HookSwitch hook={hook} />
       <Button disabled={locked !== null} title={locked ?? undefined} onClick={() => setEditing(true)}>
         {t.write.edit}
@@ -311,6 +311,7 @@ export function HookForm({ agent, hook, onClose }: { agent: AgentId; hook: Hook 
 export function HookTest({ agent, hook }: { agent: AgentId; hook: Hook }) {
   const { t } = useI18n();
   const project = useProject();
+  const { blocked } = useWrite();
   const sample = useQuery({ queryKey: ["hook_sample", project.cwd, agent, hook.event], queryFn: () => call("hook_sample", { cwd: project.cwd, agent, event: hook.event }) });
   const [input, setInput] = useState("");
   const [seeded, setSeeded] = useState(false);
@@ -349,7 +350,7 @@ export function HookTest({ agent, hook }: { agent: AgentId; hook: Hook }) {
       </FormRow>
       {parseError && <p className="mt-1 text-bad">{t.write.rawInvalid(parseError)}</p>}
       <div className="mt-2">
-        <PrimaryButton disabled={parsed === undefined || state.kind === "running"} onClick={() => void run()}>
+        <PrimaryButton disabled={blocked !== null || parsed === undefined || state.kind === "running"} title={blocked ?? undefined} onClick={() => void run()}>
           {state.kind === "running" ? t.hooks.running : t.hooks.run}
         </PrimaryButton>
       </div>
