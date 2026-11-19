@@ -746,3 +746,330 @@ fn another_agents_edits_are_left_to_it() {
             .is_none()
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Memory
+// ---------------------------------------------------------------------------------------------
+
+fn add_memory(title: &str, description: &str, body: &str) -> Edit {
+    Edit::AddMemory {
+        agent: AgentId::builtin("claude"),
+        store: "claude.auto".to_owned(),
+        title: title.to_owned(),
+        description: description.to_owned(),
+        body: body.to_owned(),
+    }
+}
+
+fn store(rig: &Rig) -> MemoryStore {
+    rig.view()
+        .memory
+        .into_iter()
+        .find(|s| s.id == "claude.auto")
+        .unwrap()
+}
+
+fn problems(rig: &Rig) -> Vec<Problem> {
+    rig.scan()
+        .snapshot
+        .diagnostics
+        .into_iter()
+        .map(|d| d.problem)
+        .collect()
+}
+
+#[test]
+fn a_memory_is_a_topic_file_and_an_index_line_and_a_scan_then_shows_it_indexed() {
+    let rig = Rig::new();
+    let root = store(&rig).root;
+    // Neither the directory nor MEMORY.md exists yet.
+    assert!(!root.as_path().exists());
+    let preview = rig.apply(&add_memory(
+        "Prefer small PRs",
+        "Keep PRs under 400 lines",
+        "Reviewers drop off past that.\n",
+    ));
+    let mut touched: Vec<AbsPath> = preview
+        .change_set
+        .ops
+        .iter()
+        .map(|o| o.path.clone())
+        .collect();
+    touched.sort();
+    let mut expected = vec![root.join("prefer-small-prs.md"), root.join("MEMORY.md")];
+    expected.sort();
+    assert_eq!(touched, expected, "exactly the topic file and the index");
+    assert!(
+        preview
+            .change_set
+            .ops
+            .iter()
+            .all(|o| o.expect == Base::Absent)
+    );
+
+    let topic = rig.read(&root.join("prefer-small-prs.md"));
+    assert_eq!(
+        topic,
+        "---\nname: prefer-small-prs\ndescription: Keep PRs under 400 lines\nmetadata:\n  node_type: memory\n  type: project\n---\n\nReviewers drop off past that.\n"
+    );
+    assert!(!topic.contains("originSessionId"));
+    let fm = crate::md::frontmatter::parse(&topic);
+    assert!(fm.error.is_none());
+    assert_eq!(
+        rig.read(&root.join("MEMORY.md")),
+        "- [Prefer small PRs](prefer-small-prs.md) \u{2014} Keep PRs under 400 lines\n"
+    );
+
+    let entry = store(&rig)
+        .entries
+        .into_iter()
+        .find(|e| e.role == MemoryRole::Topic)
+        .unwrap();
+    assert_eq!(entry.indexed, Some(true));
+    assert_eq!(entry.title, "prefer-small-prs");
+    assert!(
+        !problems(&rig)
+            .iter()
+            .any(|p| matches!(p, Problem::MemoryNotInIndex { .. }))
+    );
+}
+
+#[test]
+fn a_second_memory_appends_one_line_and_keeps_the_index_bytes_before_it() {
+    let rig = Rig::new();
+    let root = store(&rig).root;
+    // An index that has no final newline and a line of the operator's own.
+    rig.fx.write(&root.join("MEMORY.md"), "# Notes\n- own line");
+    let preview = rig.apply(&add_memory("Second", "", "body"));
+    assert_eq!(
+        rig.read(&root.join("MEMORY.md")),
+        "# Notes\n- own line\n- [Second](second.md) \u{2014} Second\n"
+    );
+    assert_eq!(preview.change_set.ops.len(), 2);
+    // The same title again would overwrite the file, so it is refused.
+    assert_eq!(
+        rig.plan(&add_memory("Second", "", "")).unwrap_err(),
+        ApiError::InvalidEdit {
+            field: "title".into(),
+            why: RuleRef::new("claude.plan.name_exists")
+        }
+    );
+    assert!(matches!(
+        rig.plan(&add_memory("  ", "", "")).unwrap_err(),
+        ApiError::InvalidEdit { .. }
+    ));
+}
+
+#[test]
+fn trashing_a_topic_file_removes_its_index_line_in_the_same_plan() {
+    let rig = Rig::new();
+    let root = store(&rig).root;
+    rig.apply(&add_memory("One", "first", "a"));
+    rig.apply(&add_memory("Two", "second", "b"));
+    let one = root.join("one.md");
+    let text = rig.read(&one);
+    let preview = rig.apply(&Edit::Trash {
+        path: one.clone(),
+        base: Revision::of(text.as_bytes()),
+    });
+    assert_eq!(preview.change_set.ops.len(), 2);
+    assert!(!one.as_path().exists());
+    assert_eq!(
+        rig.read(&root.join("MEMORY.md")),
+        "- [Two](two.md) \u{2014} second\n"
+    );
+}
+
+#[test]
+fn trashing_a_file_that_is_not_a_memory_topic_is_left_to_the_generic_plan() {
+    let rig = Rig::new();
+    let file = rig.fx.project_path("CLAUDE.md");
+    rig.fx.write(&file, "x\n");
+    let preview = rig
+        .plan(&Edit::Trash {
+            path: file,
+            base: Revision::of(b"x\n"),
+        })
+        .unwrap();
+    assert_eq!(preview.change_set.ops.len(), 1);
+}
+
+#[test]
+fn the_doctor_fixes_for_the_index_apply_and_clear_their_diagnostics() {
+    let rig = Rig::new();
+    let root = store(&rig).root;
+    rig.fx.write(
+        &root.join("lost.md"),
+        "---\nname: lost\ndescription: not indexed\n---\nbody\n",
+    );
+    rig.fx.write(
+        &root.join("MEMORY.md"),
+        "- [Gone](gone.md) \u{2014} the file is missing\n- [Kept](lost-other.md)\n",
+    );
+    let fixes: Vec<Edit> = rig
+        .scan()
+        .snapshot
+        .diagnostics
+        .into_iter()
+        .filter(|d| {
+            matches!(
+                d.problem,
+                Problem::MemoryNotInIndex { .. } | Problem::IndexLinkMissing { .. }
+            )
+        })
+        .map(|d| d.fix.expect("the diagnostic carries a fix"))
+        .collect();
+    assert!(fixes.len() >= 2, "{fixes:?}");
+    // Each fix is planned against the file as the scan read it, so they apply one at a time.
+    let fixable = |rig: &Rig| {
+        rig.scan().snapshot.diagnostics.into_iter().find_map(|d| {
+            matches!(
+                d.problem,
+                Problem::MemoryNotInIndex { .. } | Problem::IndexLinkMissing { .. }
+            )
+            .then_some(d.fix)
+            .flatten()
+        })
+    };
+    while let Some(fix) = fixable(&rig) {
+        rig.apply(&fix);
+    }
+    let left = problems(&rig);
+    assert!(
+        !left.iter().any(|p| matches!(
+            p,
+            Problem::MemoryNotInIndex { .. } | Problem::IndexLinkMissing { .. }
+        )),
+        "{left:?}"
+    );
+    let index = rig.read(&root.join("MEMORY.md"));
+    assert!(
+        index.contains("(lost.md)") && !index.contains("gone.md"),
+        "{index}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// New items
+// ---------------------------------------------------------------------------------------------
+
+fn new_item(slot: &str, name: Option<&str>) -> Edit {
+    Edit::NewItem {
+        agent: AgentId::builtin("claude"),
+        slot: SlotId(slot.to_owned()),
+        name: name.map(str::to_owned),
+    }
+}
+
+#[test]
+fn a_new_skill_command_and_subagent_start_from_a_valid_skeleton_and_scan_as_active() {
+    let rig = Rig::new();
+    for (slot, name, rel) in [
+        (
+            "claude:skill:user",
+            "deploy",
+            ".claude/skills/deploy/SKILL.md",
+        ),
+        ("claude:command:project", "ship", ".claude/commands/ship.md"),
+        (
+            "claude:subagent:user",
+            "reviewer",
+            ".claude/agents/reviewer.md",
+        ),
+    ] {
+        let preview = rig.apply(&new_item(slot, Some(name)));
+        assert_eq!(preview.change_set.ops.len(), 1, "{slot}");
+        assert_eq!(preview.change_set.ops[0].expect, Base::Absent);
+        let path = if slot.contains("project") {
+            rig.fx.project_path(rel)
+        } else {
+            rig.fx.home_path(rel)
+        };
+        assert_eq!(preview.change_set.ops[0].path, path);
+        let text = rig.read(&path);
+        let fm = crate::md::frontmatter::parse(&text);
+        assert!(fm.error.is_none(), "{slot}: {text}");
+        let map = fm.map.unwrap();
+        assert!(
+            map.get("description")
+                .and_then(Value::as_str)
+                .is_some_and(|d| !d.is_empty())
+        );
+        assert_eq!(
+            map.get("name").and_then(Value::as_str),
+            (slot != "claude:command:project").then_some(name)
+        );
+        assert!(
+            rig.view()
+                .extensions
+                .iter()
+                .any(|e| e.name == name && e.status == ExtStatus::Active),
+            "{slot}: the scan lists it"
+        );
+    }
+}
+
+#[test]
+fn a_new_instruction_file_or_rule_starts_empty() {
+    let rig = Rig::new();
+    let preview = rig.apply(&new_item("claude:instructions:project", None));
+    assert_eq!(
+        preview.change_set.ops[0].path,
+        rig.fx.project_path("CLAUDE.md")
+    );
+    assert_eq!(rig.read(&rig.fx.project_path("CLAUDE.md")), "");
+    rig.apply(&new_item("claude:rule:project", Some("style.md")));
+    assert_eq!(rig.read(&rig.fx.project_path(".claude/rules/style.md")), "");
+}
+
+#[test]
+fn a_new_memory_slot_adds_a_memory() {
+    let rig = Rig::new();
+    let preview = rig.apply(&new_item("claude:memory:auto", Some("Remember this")));
+    assert_eq!(preview.change_set.ops.len(), 2);
+    assert!(
+        rig.read(&store(&rig).root.join("MEMORY.md"))
+            .contains("(remember-this.md)")
+    );
+}
+
+#[test]
+fn a_new_item_that_would_collide_or_has_no_usable_name_is_an_invalid_edit() {
+    let rig = Rig::new();
+    rig.fx.write(&rig.fx.project_path("CLAUDE.md"), "mine\n");
+    rig.fx
+        .write(&rig.fx.home_path(".claude/skills/deploy/SKILL.md"), "x");
+    rig.fx.mkdir(&rig.fx.home_path(".claude/skills/bare"));
+    let why = |edit: Edit| match rig.plan(&edit).unwrap_err() {
+        ApiError::InvalidEdit { field, why } => (field, why.0),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        why(new_item("claude:instructions:project", None)).1,
+        "claude.plan.name_exists"
+    );
+    assert_eq!(
+        why(new_item("claude:skill:user", Some("deploy"))).1,
+        "claude.plan.name_exists"
+    );
+    assert_eq!(
+        why(new_item("claude:skill:user", Some("bare"))).1,
+        "claude.plan.name_exists",
+        "a folder without an entry file still collides"
+    );
+    assert_eq!(
+        why(new_item("claude:skill:user", None)).1,
+        "claude.plan.name_required"
+    );
+    for bad in ["../x", "a/b", "-x", ".hidden", "a:b", "x y", "<x>"] {
+        assert_eq!(
+            why(new_item("claude:command:user", Some(bad))).1,
+            "claude.plan.name_invalid",
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        why(new_item("claude:nope", Some("x"))).1,
+        "claude.plan.slot_unknown"
+    );
+}

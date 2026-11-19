@@ -137,7 +137,11 @@ impl<'a> Planner<'a> {
     pub fn plan(&self, edit: &Edit) -> Result<Preview, ApiError> {
         match edit {
             Edit::Save { path, base, text } => self.save(path, base, text),
-            Edit::Trash { path, base } => self.trash(path, base),
+            // An agent may own the trash of a file it keeps an index of, such as a memory topic.
+            Edit::Trash { path, base } => match self.agent_plan(edit) {
+                Some(result) => result,
+                None => self.trash(path, base),
+            },
             Edit::Revert { change } => self.revert(change),
             Edit::NewItem { agent, .. }
             | Edit::AddMemory { agent, .. }
@@ -673,6 +677,30 @@ impl<'a> Planner<'a> {
     // -----------------------------------------------------------------------------------------
     // Agent-specific edits
     // -----------------------------------------------------------------------------------------
+
+    /// The first agent plan for an edit that also has a generic plan. `None`: the generic one
+    /// applies.
+    fn agent_plan(&self, edit: &Edit) -> Option<Result<Preview, ApiError>> {
+        let cx = PlanCx {
+            env: self.env,
+            fs: self.fs(),
+            snapshot: &self.scanned.snapshot,
+            parked_dir: self.parked_dir,
+        };
+        let preview = self.agents.iter().find_map(|agent| agent.plan(&cx, edit))?;
+        Some(preview.and_then(|preview| {
+            self.finish(
+                Mode::Agent,
+                Draft {
+                    summary: preview.change_set.summary,
+                    ops: preview.change_set.ops,
+                    before: preview.before,
+                    warnings: preview.warnings,
+                    conflicts: preview.conflicts,
+                },
+            )
+        }))
+    }
 
     fn by_agent(&self, agent: Option<&AgentId>, edit: &Edit) -> Result<Preview, ApiError> {
         let candidates: Vec<&&dyn Agent> = self
