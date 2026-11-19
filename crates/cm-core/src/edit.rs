@@ -330,6 +330,28 @@ impl<'a> Planner<'a> {
         owners
     }
 
+    /// The agents that use `path` today: a load of it that is delivered, a hook defined in it,
+    /// or a memory entry at it. A slot above the path makes an agent its owner for planning,
+    /// not a user of it.
+    fn users(&self, path: &AbsPath) -> Vec<AgentId> {
+        self.scanned
+            .snapshot
+            .agents
+            .iter()
+            .filter(|view| {
+                view.loads
+                    .iter()
+                    .any(|l| l.file == *path && l.delivered.is_some())
+                    || view.hooks.iter().any(|h| h.source.file == *path)
+                    || view
+                        .memory
+                        .iter()
+                        .any(|store| store.entries.iter().any(|e| e.file == *path))
+            })
+            .map(|view| view.agent.clone())
+            .collect()
+    }
+
     fn guard(
         &self,
         path: &AbsPath,
@@ -407,9 +429,9 @@ impl<'a> Planner<'a> {
             {
                 warnings.push(Warning::ThroughSymlink { target });
             }
-            let owners = self.owners(&op.path);
-            if owners.len() > 1 {
-                warnings.push(Warning::SharedFile { agents: owners });
+            let users = self.users(&op.path);
+            if users.len() > 1 {
+                warnings.push(Warning::SharedFile { agents: users });
             }
         }
         Ok(self.preview(summary, ops, before, warnings, conflicts))
