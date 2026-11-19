@@ -104,6 +104,7 @@ const warning: WarnMsgs = {
   newImportToken: (v) => `The text ${v.raw} becomes an import attempt. The agent will try to load a file with that name.`,
   parkedOnThisMachine: () => "The parked hook is kept in this tool's data directory on this machine only. It does not follow the project to another machine.",
   notRevertible: () => "This directory is too big to keep a copy. The OS trash holds the only copy, and Revert cannot bring it back.",
+  hookKeyShared: (v) => `${v.others} other hook(s) use the same name or command, and the switch turns them on or off too.`,
 };
 
 export const en = {

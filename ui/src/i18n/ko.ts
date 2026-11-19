@@ -80,6 +80,7 @@ const warning: typeof en.warning = {
   newImportToken: (v) => `${v.raw} 텍스트가 가져오기 시도로 바뀝니다. 에이전트가 그 이름의 파일을 불러오려고 합니다.`,
   parkedOnThisMachine: () => "보관한 훅은 이 컴퓨터의 이 도구 데이터 디렉터리에만 있습니다. 프로젝트를 다른 컴퓨터로 옮겨도 따라가지 않습니다.",
   notRevertible: () => "이 디렉터리는 너무 커서 사본을 보관하지 않습니다. OS 휴지통에 있는 것이 유일한 사본이며 되돌리기로는 복구할 수 없습니다.",
+  hookKeyShared: (v) => `이름이나 명령이 같은 다른 훅이 ${v.others}개 있으며, 이 전환은 그 훅도 함께 켜거나 끕니다.`,
 };
 
 export const ko: typeof en = {

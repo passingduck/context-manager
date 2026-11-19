@@ -13,6 +13,7 @@ mod exts;
 mod hooks;
 mod memory;
 mod misc;
+mod plan;
 mod render;
 mod trust;
 
