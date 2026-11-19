@@ -19,6 +19,7 @@ pub const MOVING_VARS: &[&str] = &[
     "GEMINI_SYSTEM_MD",
     "GEMINI_WRITE_SYSTEM_MD",
     "GEMINI_CLI_IDE_WORKSPACE_PATH",
+    "CODEX_SQLITE_HOME",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

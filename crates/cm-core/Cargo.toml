@@ -24,5 +24,6 @@ regex.workspace = true
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+cm-core = { path = ".", features = ["testing"] }
 tempfile.workspace = true
 tokio.workspace = true
