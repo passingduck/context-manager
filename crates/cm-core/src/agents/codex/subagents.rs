@@ -189,7 +189,6 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
         if layer.kind == LayerKind::LegacyManaged {
             continue;
         }
-        out.claim(&layer.folder.join("agents"), EditPolicy::Editable);
         all.extend(layer_roles(cx, setup, layer, &mut claimed));
     }
     let ids: Vec<ExtId> = all.iter().map(|r| ext_id(&r.file, &r.name)).collect();

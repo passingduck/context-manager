@@ -686,6 +686,7 @@ pub(super) fn discover(
     cx: &ScanCx,
     setup: &Setup,
     plugins: &[Plugin],
+    full_hash: bool,
     out: &mut Out,
 ) -> Vec<Discovered> {
     let (requirement, policy) = requirements(cx, out);
@@ -715,6 +716,7 @@ pub(super) fn discover(
                         &policy,
                         &states,
                         &mut content_hashes,
+                        full_hash,
                         Position {
                             event,
                             group: g,
@@ -749,6 +751,7 @@ fn build(
     policy: &Policy,
     states: &BTreeMap<String, State>,
     content_hashes: &mut BTreeMap<AbsPath, Option<String>>,
+    full_hash: bool,
     at: Position,
     handler: &Json,
     out: &mut Out,
@@ -871,10 +874,16 @@ fn build(
                 None => TrustStatus::Untrusted,
             };
             if let Some((plugin_id, root)) = &source.plugin {
-                let content = content_hashes
-                    .entry(root.clone())
-                    .or_insert_with(|| plugin_content_hash(cx, root))
-                    .clone();
+                // The content hash reads the whole plugin, so a scan computes it only for
+                // hooks that have an approval to check. `inspect` always computes it.
+                let content = if full_hash || trusted_hash.is_some() {
+                    content_hashes
+                        .entry(root.clone())
+                        .or_insert_with(|| plugin_content_hash(cx, root))
+                        .clone()
+                } else {
+                    None
+                };
                 if let Some(content) = &content {
                     current = format!("{declaration}/{content}");
                 }
@@ -1148,7 +1157,17 @@ pub(super) fn hook_files(cx: &ScanCx, setup: &Setup, out: &mut Out) {
 }
 
 pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out) {
-    for found in discover(cx, setup, plugins, out) {
+    for found in discover(cx, setup, plugins, false, out) {
+        let policy = match &found.hook.source.scope {
+            Scope::Plugin { id } => EditPolicy::ReadOnly {
+                why: ReadOnlyWhy::PluginCache { plugin: id.clone() },
+            },
+            Scope::Managed => EditPolicy::ReadOnly {
+                why: ReadOnlyWhy::Managed,
+            },
+            _ => EditPolicy::Editable,
+        };
+        out.claim(&found.hook.source.file, policy);
         out.hooks.push(found.hook);
     }
     hook_files(cx, setup, out);
@@ -1163,7 +1182,7 @@ pub fn inspect(cx: &ScanCx) -> Vec<HookInspection> {
     let setup = Setup::load(cx);
     let plugins = super::plugins::installed(cx, &setup);
     let mut out = Out::default();
-    discover(cx, &setup, &plugins, &mut out)
+    discover(cx, &setup, &plugins, true, &mut out)
         .into_iter()
         .filter_map(|d| d.inspection)
         .collect()

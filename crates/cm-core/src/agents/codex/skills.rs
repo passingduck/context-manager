@@ -28,6 +28,8 @@ const MAX_ENTRIES: usize = 20_000;
 const MAX_NAME_CHARS: usize = 64;
 /// `MAX_SKILL_PROMPT_BYTES`: the body Codex injects when the user names a skill.
 const MAX_BODY_BYTES: u64 = 8_000;
+/// The window most models in a Codex model cache have.
+const DEFAULT_WINDOW: i64 = 272_000;
 const MANIFEST_DIRS: [&str; 3] = [".codex-plugin", ".claude-plugin", ".cursor-plugin"];
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -351,6 +353,23 @@ struct Rejected {
     reject: Reject,
 }
 
+/// Spec 7.2: the bundled system skills are rewritten at startup, administrator skills are
+/// managed, and plugin skills belong to the plugin cache.
+fn skill_policy(scope: RootScope, shown: &Scope) -> EditPolicy {
+    match (scope, shown) {
+        (_, Scope::Plugin { id }) => EditPolicy::ReadOnly {
+            why: ReadOnlyWhy::PluginCache { plugin: id.clone() },
+        },
+        (RootScope::System, _) => EditPolicy::ReadOnly {
+            why: ReadOnlyWhy::Generated,
+        },
+        (RootScope::Admin, _) => EditPolicy::ReadOnly {
+            why: ReadOnlyWhy::Managed,
+        },
+        _ => EditPolicy::Editable,
+    }
+}
+
 fn ext_id(kind: &str, file: &AbsPath) -> ExtId {
     ExtId(sha256_hex(format!("codex\0{kind}\0{file}").as_bytes()))
 }
@@ -461,6 +480,33 @@ fn nested_namespace(
     None
 }
 
+/// The window the catalog budget follows: `model_context_window`, else the window the model
+/// cache of the Codex home records for `model`, else the 272,000 that most models in that cache
+/// have. A scan cannot read the live model catalog (spec 5.1), so the last step is an assumption.
+pub(super) fn context_window(cx: &ScanCx, setup: &Setup) -> Option<i64> {
+    if let Some(window) = setup
+        .merged
+        .get("model_context_window")
+        .and_then(toml::Value::as_integer)
+    {
+        return Some(window);
+    }
+    let model = super::setup::get_str(&setup.merged, &["model"]);
+    let cache = cx.fs.read(&setup.codex_home.join("models_cache.json")).ok();
+    if let (Some(model), Some(cache)) = (model, cache)
+        && let Ok(json) = serde_json::from_slice::<serde_json::Value>(&cache)
+        && let Some(found) = json["models"]
+            .as_array()
+            .and_then(|ms| ms.iter().find(|m| m["slug"] == model))
+        && let Some(window) = found["context_window"]
+            .as_i64()
+            .or_else(|| found["max_context_window"].as_i64())
+    {
+        return Some(window);
+    }
+    Some(DEFAULT_WINDOW)
+}
+
 pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out) {
     let roots = roots(cx, setup, plugins);
     let mut skills: Vec<Skill> = Vec::new();
@@ -474,7 +520,6 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             .real_path(&root.path)
             .unwrap_or_else(|_| root.path.clone());
         root_canonical.push(canon_root);
-        out.claim(&root.path, EditPolicy::Editable);
         let (files, plugin_roots) = discover(cx, root);
         for file in files {
             let canonical = cx.fs.real_path(&file).unwrap_or_else(|_| file.clone());
@@ -563,10 +608,7 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             }
         })
         .collect();
-    let context_window = setup
-        .merged
-        .get("model_context_window")
-        .and_then(toml::Value::as_integer);
+    let context_window = context_window(cx, setup);
     let max_tokens = get_u64(&setup.merged, &["skills", "max_context_tokens"]).map(|n| n as usize);
     let budget = Budget::resolve(context_window, max_tokens);
     let rendered =
@@ -700,10 +742,10 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             status: body_status,
             delivered: Some(body_delivered),
         });
-        out.claim(&skill.file, EditPolicy::Editable);
+        out.claim(&skill.file, skill_policy(skill.scope, &skill.shown));
         let policy_file = skill.file.parent().map(|d| d.join("agents/openai.yaml"));
         if let Some(p) = policy_file {
-            out.claim(&p, EditPolicy::Editable);
+            out.claim(&p, skill_policy(skill.scope, &skill.shown));
         }
         out.extensions.push(Extension {
             id,

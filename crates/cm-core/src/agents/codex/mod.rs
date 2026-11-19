@@ -14,6 +14,8 @@ mod plugins;
 mod setup;
 mod skills;
 mod subagents;
+#[cfg(test)]
+mod tests;
 
 use std::sync::OnceLock;
 
@@ -61,7 +63,7 @@ fn compute(cx: &ScanCx) -> Computed {
     memory::run(cx, &setup, &mut out);
     hooks::run(cx, &setup, &plugins, &mut out);
     extras::slots(&setup, &mut out);
-    assumptions(&setup, &mut out);
+    assumptions(cx, &setup, &mut out);
 
     let home = HomeDir {
         role: RuleRef::new("codex.home"),
@@ -156,7 +158,7 @@ fn context_block(block: &Block) -> ContextBlock {
 }
 
 /// What a static scan had to assume (design section 3, `Assumption`).
-fn assumptions(setup: &Setup, out: &mut Out) {
+fn assumptions(cx: &ScanCx, setup: &Setup, out: &mut Out) {
     for (name, on) in [
         ("hooks", setup.features.hooks),
         ("memories", setup.features.memories),
@@ -192,17 +194,15 @@ fn assumptions(setup: &Setup, out: &mut Out) {
         value: setup.markers.join(","),
         set_in: None,
     });
-    if let Some(window) = setup
-        .merged
-        .get("model_context_window")
-        .and_then(toml::Value::as_integer)
-        && window > 0
-    {
+    let pinned = setup.merged.contains_key("model_context_window");
+    if let Some(window) = skills::context_window(cx, setup).filter(|w| *w > 0) {
         out.assumptions.push(Assumption::ContextWindow {
             tokens: u32::try_from(window).unwrap_or(u32::MAX),
         });
-    } else {
-        // The skill catalog budget follows the model's window, which a scan cannot read.
+    }
+    if !pinned {
+        // The skill catalog budget follows the model's window, which a scan reads only from the
+        // model cache, when it has one.
         out.assumptions.push(Assumption::Unknown {
             what: RuleRef::new("codex.assumption.context_window"),
         });
