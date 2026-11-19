@@ -88,8 +88,13 @@ fn missing_links(input: &Input, out: &mut Vec<Diagnostic>) {
             {
                 continue;
             }
+            // The operator cannot fix a reference in a file the tool may not write.
+            let severity = match input.files.get(file).map(|entry| &entry.policy) {
+                Some(EditPolicy::ReadOnly { .. }) => Severity::Info,
+                _ => Severity::Warning,
+            };
             out.push(Diagnostic {
-                severity: Severity::Warning,
+                severity,
                 agent: match agents.as_slice() {
                     [only] => Some((*only).clone()),
                     _ => None,
@@ -126,10 +131,16 @@ fn import_lines(input: &Input, file: &AbsPath) -> BTreeSet<u32> {
 }
 
 /// Where a link target would be: beside the file, then from the project root. `None` for a
-/// target that is not a local path.
+/// target that does not look like a file path: it has whitespace, or has no `/` and no markdown
+/// extension (`[roster](its link)` is prose), or is not local at all.
 fn link_candidates(target: &str, dir: &AbsPath, root: &AbsPath) -> Option<Vec<AbsPath>> {
     let path = target.split(['#', '?']).next().unwrap_or("");
+    let markdown_name = [".md", ".markdown", ".mdx"]
+        .iter()
+        .any(|ext| path.to_ascii_lowercase().ends_with(ext));
     if path.is_empty()
+        || path.contains(char::is_whitespace)
+        || !(path.contains('/') || markdown_name)
         || path.contains("://")
         || path.contains(['{', '}', '$', '*', '<', '>', '|'])
         || path
