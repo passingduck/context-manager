@@ -12,7 +12,7 @@ use crate::md::frontmatter;
 use crate::md::imports::{ImportNode, ImportOutcome, ImportRules, expand_with_seen};
 use crate::md::strip::strip;
 use crate::model::*;
-use crate::probe_fs::EntryKind;
+use crate::probe_fs::{EntryKind, ProbeErrorKind};
 use crate::tokens;
 
 /// Spec 1.8: a file over 4 MiB is skipped whole.
@@ -436,11 +436,6 @@ impl<'a> Collector<'a> {
                 });
             }
         }
-        if stat.kind != EntryKind::File {
-            return Verdict::Skip(Skip::Invalid {
-                detail: "not_regular_file".into(),
-            });
-        }
         if let Some(detail) = refused_location(path, real.as_ref()) {
             return Verdict::Skip(Skip::Invalid {
                 detail: detail.into(),
@@ -455,10 +450,17 @@ impl<'a> Collector<'a> {
                 },
             });
         }
-        let Ok(bytes) = self.cx.fs.read(path) else {
-            return Verdict::Skip(Skip::Invalid {
-                detail: "unreadable".into(),
-            });
+        let bytes = match self.cx.fs.read(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let detail = match err.kind {
+                    ProbeErrorKind::NotRegular => "not_regular_file",
+                    _ => "unreadable",
+                };
+                return Verdict::Skip(Skip::Invalid {
+                    detail: detail.into(),
+                });
+            }
         };
         let raw = String::from_utf8_lossy(&bytes);
         let stripped = strip(&raw);

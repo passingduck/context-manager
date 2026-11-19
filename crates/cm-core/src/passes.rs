@@ -7,7 +7,8 @@ use std::ops::Range;
 use crate::agents::ScanCx;
 use crate::md::refs::{self, RefNode};
 use crate::model::*;
-use crate::scan::{MAX_READ_BYTES, format_of};
+use crate::probe_fs::{MAX_READ_BYTES, ProbeError, ProbeErrorKind};
+use crate::scan::format_of;
 
 /// At most this many reference nodes per scan, over all agents.
 pub const MAX_REFERENCE_NODES: usize = refs::MAX_NODES;
@@ -138,7 +139,7 @@ impl Graph<'_, '_> {
 
     fn load(&self, id: LoadId, node: &RefNode, host: &LoadId) -> Load {
         let (status, delivered) = match self.cx.fs.read(&node.path) {
-            Ok(bytes) if bytes.len() as u64 <= MAX_READ_BYTES => (
+            Ok(bytes) => (
                 LoadStatus::Loaded,
                 Some(Delivered {
                     bytes: bytes.len() as u64,
@@ -146,7 +147,10 @@ impl Graph<'_, '_> {
                     transformed: false,
                 }),
             ),
-            Ok(_) => (
+            Err(ProbeError {
+                kind: ProbeErrorKind::TooLarge { .. },
+                ..
+            }) => (
                 LoadStatus::Skipped {
                     skip: Skip::TooLarge {
                         limit: Limit {

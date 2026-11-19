@@ -1,12 +1,14 @@
 //! `ProbeFs`: the only way an adapter reads the disk.
 //!
-//! It caches bytes for the length of one scan, so two agents that read `AGENTS.md` see one
-//! revision. It records every path read, listed, checked or resolved, misses included. The
-//! fingerprint hashes the stat of exactly those paths.
+//! `read` returns the bytes of a regular file of at most [`MAX_READ_BYTES`] and a refusal for
+//! anything else, so no caller checks the kind or the size itself (design section 5). It caches
+//! bytes for the length of one scan, so two agents that read `AGENTS.md` see one revision. It
+//! records every path read, listed, checked or resolved, misses included. The fingerprint hashes
+//! the stat of exactly those paths.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::sync::{Arc, Mutex};
 use std::time::UNIX_EPOCH;
 
@@ -37,22 +39,50 @@ pub struct DirEntry {
     pub kind: EntryKind,
 }
 
+/// `read` refuses a larger file. A file is listed with its size and never read.
+pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeErrorKind {
+    Io(io::ErrorKind),
+    /// `read` met a directory, a device, a named pipe or a socket, and did not open it.
+    NotRegular,
+    /// `read` met a regular file over [`MAX_READ_BYTES`].
+    TooLarge {
+        bytes: u64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProbeError {
-    pub kind: io::ErrorKind,
+    pub kind: ProbeErrorKind,
     pub detail: String,
 }
 
 impl ProbeError {
     pub fn is_not_found(&self) -> bool {
-        self.kind == io::ErrorKind::NotFound
+        self.kind == ProbeErrorKind::Io(io::ErrorKind::NotFound)
+    }
+
+    fn not_regular() -> ProbeError {
+        ProbeError {
+            kind: ProbeErrorKind::NotRegular,
+            detail: "not a regular file".to_owned(),
+        }
+    }
+
+    fn too_large(bytes: u64) -> ProbeError {
+        ProbeError {
+            kind: ProbeErrorKind::TooLarge { bytes },
+            detail: "file is too big".to_owned(),
+        }
     }
 }
 
 impl From<io::Error> for ProbeError {
     fn from(err: io::Error) -> ProbeError {
         ProbeError {
-            kind: err.kind(),
+            kind: ProbeErrorKind::Io(err.kind()),
             detail: err.to_string(),
         }
     }
@@ -91,9 +121,7 @@ impl ProbeFs {
         if let Some(cached) = state.reads.get(path) {
             return cached.clone();
         }
-        let result = fs::read(path.as_path())
-            .map(Arc::new)
-            .map_err(ProbeError::from);
+        let result = read_regular(path).map(Arc::new);
         state.probes.insert(path.clone(), result.is_ok());
         state.reads.insert(path.clone(), result.clone());
         result
@@ -132,11 +160,11 @@ impl ProbeFs {
             .map_err(ProbeError::from)
             .and_then(|real| {
                 let raw = real.to_str().ok_or_else(|| ProbeError {
-                    kind: io::ErrorKind::InvalidData,
+                    kind: ProbeErrorKind::Io(io::ErrorKind::InvalidData),
                     detail: "path is not UTF-8".to_owned(),
                 })?;
                 AbsPath::parse(raw).map_err(|e| ProbeError {
-                    kind: io::ErrorKind::InvalidData,
+                    kind: ProbeErrorKind::Io(io::ErrorKind::InvalidData),
                     detail: e.to_string(),
                 })
             });
@@ -193,6 +221,27 @@ fn is_executable(meta: &fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn is_executable(_: &fs::Metadata) -> bool {
     true
+}
+
+/// Checks the kind and the size before it opens the file: opening a named pipe blocks until a
+/// writer comes, and a device can stream without end. It reads one byte past the limit at most,
+/// whatever the stat said, because a file can grow after the stat.
+fn read_regular(path: &AbsPath) -> Cached<Vec<u8>> {
+    let meta = fs::metadata(path.as_path())?;
+    if !meta.is_file() {
+        return Err(ProbeError::not_regular());
+    }
+    if meta.len() > MAX_READ_BYTES {
+        return Err(ProbeError::too_large(meta.len()));
+    }
+    let mut bytes = Vec::with_capacity(meta.len() as usize);
+    fs::File::open(path.as_path())?
+        .take(MAX_READ_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_READ_BYTES {
+        return Err(ProbeError::too_large(bytes.len() as u64));
+    }
+    Ok(bytes)
 }
 
 fn stat_path(path: &AbsPath) -> Cached<Stat> {

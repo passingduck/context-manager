@@ -6,11 +6,9 @@ use std::collections::BTreeMap;
 use crate::agents::{Agent, FileClaim, ScanCx, registry};
 use crate::env::ScanEnv;
 use crate::model::*;
-use crate::probe_fs::{EntryKind, ProbeFs};
+pub use crate::probe_fs::MAX_READ_BYTES;
+use crate::probe_fs::{ProbeErrorKind, ProbeFs};
 use crate::{doctor, passes, walk};
-
-/// Files over this size are listed and never read.
-pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 
 /// A snapshot plus what the host needs to answer follow-up calls about the same scan.
 pub struct Scanned {
@@ -187,12 +185,11 @@ fn read_entry(cx: &ScanCx, path: &AbsPath, claimed: EditPolicy) -> FileEntry {
     let state = match stat {
         Err(err) if err.is_not_found() => FileState::Absent,
         Err(err) => FileState::Unreadable { error: err.detail },
-        Ok(stat) if stat.kind != EntryKind::File => FileState::Unreadable {
-            error: "not a regular file".to_owned(),
-        },
-        Ok(stat) if stat.len > MAX_READ_BYTES => FileState::TooBig { bytes: stat.len },
         Ok(stat) => match cx.fs.read(path) {
-            Err(err) => FileState::Unreadable { error: err.detail },
+            Err(err) => match err.kind {
+                ProbeErrorKind::TooLarge { bytes } => FileState::TooBig { bytes },
+                _ => FileState::Unreadable { error: err.detail },
+            },
             Ok(bytes) => {
                 if std::str::from_utf8(&bytes).is_err() {
                     format = Format::Binary;
