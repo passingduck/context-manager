@@ -286,6 +286,10 @@ const claudeRules: RuleSpec[] = [
   rule("claude.hooks.plugin_toggle", "A plugin owns this hook. Turn the plugin off to stop the hook.", "이 훅은 플러그인이 소유합니다. 훅을 멈추려면 플러그인을 꺼야 합니다."),
   rule("claude.hooks.managed", "A managed policy owns this hook, so nobody can switch it here.", "관리 정책이 이 훅을 소유하므로 여기서는 아무도 켜고 끌 수 없습니다."),
   rule("claude.home.config", "The configuration directory of the agent.", "에이전트의 설정 디렉터리입니다."),
+  rule("host.read_only", "The host runs with --read-only, so it refuses every change.", "호스트가 --read-only로 실행 중이므로 모든 변경을 거부합니다."),
+  rule("host.read_only_file", "The agent or a plugin owns this file, so this tool does not change it.", "에이전트나 플러그인이 이 파일을 소유하므로 이 도구는 파일을 바꾸지 않습니다."),
+  rule("host.invalid_hook", "The hook entry has the wrong shape for this agent's settings file.", "이 훅 항목은 에이전트 설정 파일에 맞는 모양이 아닙니다."),
+  rule("claude.effect.next_session", "A new session reads this file again. A running session keeps the old text until you run /memory reload.", "새 세션을 시작하면 이 파일을 다시 읽습니다. 이미 실행 중인 세션은 /memory reload를 실행할 때까지 이전 내용을 씁니다."),
   rule("claude.rules.glob_fires", "A path rule fires because this path matches its pattern.", "이 경로가 패턴에 맞기 때문에 경로 규칙이 발동합니다."),
 ];
 const codexRules: RuleSpec[] = [
@@ -297,10 +301,12 @@ const codexRules: RuleSpec[] = [
   rule("codex.memories.store", "Codex keeps generated memories in its home directory.", "Codex는 자동으로 만든 메모리를 홈 디렉터리에 보관합니다."),
   rule("codex.memories.generated", "Codex generates these memories, so edits would be overwritten.", "Codex가 이 메모리를 자동으로 만들기 때문에 고쳐도 덮어써집니다."),
   rule("codex.skills.listing_budget", "The skill catalog has a character budget. Skills that do not fit are hidden from the model.", "스킬 목록에는 글자 수 예산이 있습니다. 예산에 맞지 않는 스킬은 모델에게 보이지 않습니다."),
+  rule("codex.effect.next_session", "A new session reads this file again.", "새 세션을 시작하면 이 파일을 다시 읽습니다."),
   rule("codex.home.config", "The configuration directory of the agent.", "에이전트의 설정 디렉터리입니다."),
 ];
 const geminiRules: RuleSpec[] = [
   rule("gemini.memory.private", "Saved memories are appended to GEMINI.md in the Gemini home directory.", "저장한 메모리는 Gemini 홈 디렉터리의 GEMINI.md 끝에 덧붙입니다."),
+  rule("gemini.effect.next_session", "A new session reads this file again, and so does /memory refresh in a running session.", "새 세션을 시작하면 이 파일을 다시 읽고, 실행 중인 세션에서는 /memory refresh를 실행하면 다시 읽습니다."),
   rule("gemini.home.config", "The configuration directory of the agent.", "에이전트의 설정 디렉터리입니다."),
   rule("gemini.context.project", "GEMINI.md in the project root loads at the start of every session.", "프로젝트 루트의 GEMINI.md는 세션을 시작할 때마다 불러옵니다."),
 ];

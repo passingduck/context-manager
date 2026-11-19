@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useAgents, useScan, useSession, useWatch } from "./api/queries";
 import { ProjectProvider } from "./app/project";
 import { Rail } from "./app/Rail";
@@ -16,6 +16,8 @@ import { HistoryView } from "./views/HistoryView";
 import { HooksView } from "./views/HooksView";
 import { MemoryView } from "./views/MemoryView";
 import { SearchPanel } from "./views/SearchPanel";
+import { dirtyPaths } from "./write/buffers";
+import { WriteProvider } from "./write/flow";
 
 /** With nothing selected, each view shows its first item so the detail pane is never blank. */
 function defaultSelection(view: Route["view"], snapshot: Snapshot): Partial<Route> {
@@ -71,6 +73,17 @@ export function App() {
   // With nothing selected, the context view shows its first file so the detail pane is never blank.
   const shown = value && !route.sel ? { ...route, ...defaultSelection(route.view, value.snapshot) } : route;
 
+  // Leaving the page with unsaved text asks first.
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (dirtyPaths().length === 0) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, []);
+
   const failure = session.error ?? agents.error ?? scan.error;
   return (
     <div className="grid h-full grid-rows-[auto_1fr]">
@@ -81,8 +94,11 @@ export function App() {
         <Loading />
       ) : (
         <ProjectProvider value={value}>
-          <div className="grid min-h-0 grid-cols-[13rem_minmax(0,5fr)_minmax(0,6fr)]">
-            <Rail route={route} go={go} snapshot={value.snapshot} readOnly={value.readOnly} pending={session.data?.pending.length ?? 0} />
+          <WriteProvider>
+          <div className="flex min-h-0 flex-col">
+          {value.readOnly && <p role="status" className="border-b border-warn bg-warn-bg px-3 py-1 text-warn">{t.write.readOnlyHost}</p>}
+          <div className="grid min-h-0 flex-1 grid-cols-[13rem_minmax(0,5fr)_minmax(0,6fr)]">
+            <Rail route={route} go={go} snapshot={value.snapshot} pending={session.data?.pending.length ?? 0} />
             <main className="flex min-h-0 min-w-0 flex-col border-r border-line" aria-label={t.title}>
               {route.q.trim() ? (
                 <SearchPanel route={route} go={go} />
@@ -102,6 +118,8 @@ export function App() {
               <Detail route={shown} go={go} />
             </aside>
           </div>
+          </div>
+          </WriteProvider>
         </ProjectProvider>
       )}
     </div>

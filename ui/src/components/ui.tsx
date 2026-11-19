@@ -88,3 +88,55 @@ export function Loading() {
   const { t } = useI18n();
   return <p className="p-3 text-muted">{t.loading}</p>;
 }
+
+/** Class names shared by every text input in the write dialogs. */
+export const inputClass = "w-full rounded border border-line bg-bg px-2 py-1 text-[13px] placeholder:text-faint disabled:opacity-60";
+
+export function FormRow({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-0.5 block text-[12px] font-semibold">{label}</span>
+      {children}
+      {hint && <span className="mt-0.5 block text-[11px] text-muted">{hint}</span>}
+    </label>
+  );
+}
+
+/** A dialog over the page. `layer` raises it above another dialog that stays open underneath. */
+export function Modal({ title, label, onClose, footer, children, layer = 0, wide = false }: { title: ReactNode; label: string; onClose: () => void; footer?: ReactNode; children: ReactNode; layer?: number; wide?: boolean }) {
+  return (
+    <div
+      className="fixed inset-0 grid place-items-center bg-black/45 p-4"
+      style={{ zIndex: 40 + layer }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        ref={(node) => node?.focus({ preventScroll: true })}
+        className={`flex max-h-[90vh] w-full flex-col rounded-lg border border-line bg-bg shadow-2xl outline-none ${wide ? "max-w-5xl" : "max-w-2xl"}`}
+      >
+        <header className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2.5">
+          <h2 className="min-w-0 flex-1 text-[14px] font-semibold">{title}</h2>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{children}</div>
+        {footer && <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-subtle px-4 py-2.5">{footer}</footer>}
+      </div>
+    </div>
+  );
+}
+
+export function PrimaryButton({ children, ...rest }: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <Button {...rest} className={`border-accent bg-accent text-bg hover:bg-accent ${rest.className ?? ""}`}>
+      {children}
+    </Button>
+  );
+}

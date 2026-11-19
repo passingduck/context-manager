@@ -1,14 +1,14 @@
 // Answers every operation from the mock snapshot. Loaded only when the URL has `?mock=1`.
 import type { AbsPath } from "../gen/AbsPath";
-import type { ApiError } from "../gen/ApiError";
-import type { ChangeDetail } from "../gen/ChangeDetail";
-import type { ChangeRecord } from "../gen/ChangeRecord";
+import type { HookRun } from "../gen/HookRun";
 import type { Load } from "../gen/Load";
 import type { RenderedBlock } from "../gen/RenderedBlock";
 import type { Request } from "../gen/Request";
 import type { SearchHit } from "../gen/SearchHit";
 import type { Simulation } from "../gen/Simulation";
-import { agentInfos, CWD, files, FINGERPRINT, HOME, snapshot, texts } from "./snapshot";
+import { agentOfHook, controls, history, initDisk, installControls, mockState, pendingIds, reject, waitForBump } from "./disk";
+import { apply, plan } from "./plan";
+import { agentInfos, CWD, files, HOME, snapshot, texts } from "./snapshot";
 
 const globToRegExp = (glob: string) =>
   new RegExp(
@@ -79,23 +79,46 @@ function search(query: string, caseSensitive: boolean, regex: boolean): { hits: 
   return { hits, capped: hits.length >= 500 };
 }
 
-const memIndex = Object.keys(files).find((path) => path.endsWith("/memory/MEMORY.md")) ?? "";
-const history: ChangeDetail[] = [
-  { id: "01JD0000000000000000000004", at: "2026-11-19T09:12:00Z", cwd: CWD, summary: { edit: { kind: "setHookEnabled" }, agent: "claude", targets: [`${CWD}/.claude/settings.local.json`] }, ops: [], state: "pending", before: '{\n  "hooks": {\n    "PostToolUse": [{ "hooks": [{ "type": "command", "command": "./scripts/format-on-save.sh" }] }]\n  }\n}\n', after: '{\n  "hooks": {}\n}\n', path: `${CWD}/.claude/settings.local.json` },
-  { id: "01JD0000000000000000000003", at: "2026-11-18T16:40:00Z", cwd: CWD, summary: { edit: { kind: "save" }, agent: "claude", targets: [`${CWD}/CLAUDE.md`] }, ops: [], state: "sealed", before: "# acme-app\n\nA Tauri desktop app.\n", after: (texts[`${CWD}/CLAUDE.md`] ?? "").split("\n").slice(0, 8).join("\n"), path: `${CWD}/CLAUDE.md` },
-  { id: "01JD0000000000000000000002", at: "2026-11-17T11:03:00Z", cwd: CWD, summary: { edit: { kind: "addMemory" }, agent: "claude", targets: [memIndex, memIndex.replace("MEMORY.md", "debugging.md")] }, ops: [], state: "sealed", before: null, after: texts[memIndex.replace("MEMORY.md", "debugging.md")] ?? "", path: memIndex.replace("MEMORY.md", "debugging.md") },
-  { id: "01JD0000000000000000000001", at: "2026-11-15T08:21:00Z", cwd: CWD, summary: { edit: { kind: "trash" }, agent: "codex", targets: [`${CWD}/docs/old-notes.md`] }, ops: [], state: "needsAttention", before: "# Old notes\n\nThese are stale.\n", after: null, path: `${CWD}/docs/old-notes.md` },
-].map(({ before, after, path, ...record }) => ({ record: record as ChangeRecord, files: [{ path, before, after }] }));
+const readOnlyHost = () => new URLSearchParams(window.location.search).get("readonly") === "1";
 
-function reject(error: ApiError): never {
-  throw error;
+const SAMPLES: Record<string, unknown> = {
+  PreToolUse: { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "ls -la" } },
+  PostToolUse: { hook_event_name: "PostToolUse", tool_name: "Edit", tool_input: { file_path: "src/main.ts" }, tool_response: { success: true } },
+  SessionStart: { hook_event_name: "SessionStart", source: "startup" },
+  UserPromptSubmit: { hook_event_name: "UserPromptSubmit", prompt: "Explain this file" },
+};
+
+function runHook(hookId: string, input: unknown): HookRun {
+  const found = agentOfHook(hookId);
+  if (!found) return reject({ kind: "notFound" });
+  const command = String((found.hook.handler.raw as Record<string, unknown>).command ?? found.hook.handler.summary);
+  const stdin = JSON.stringify(input);
+  const blocked = stdin.includes("rm -rf");
+  const slow = stdin.includes("sleep");
+  return {
+    spec: { argv: ["/bin/sh", "-c", command], cwd: CWD, env: [["CLAUDE_PROJECT_DIR", CWD], ["HOOK_EVENT", found.hook.event]], stdin },
+    exitCode: slow ? null : blocked ? 2 : 0,
+    stdout: slow || blocked ? "" : '{"decision":"approve","reason":"checked by the mock"}\n',
+    stderr: blocked ? "blocked: the command deletes recursively\n" : "",
+    ms: slow ? 10_000 : 42,
+    timedOut: slow,
+  };
+}
+
+let started = false;
+function start(): void {
+  if (started) return;
+  started = true;
+  initDisk();
+  installControls();
 }
 
 /** Same signature as the real transport's answer. */
 export async function handle(request: Request): Promise<unknown> {
+  start();
   switch (request.op) {
     case "session":
-      return { version: "0.1.0-mock", shell: "serve", readOnly: false, launchCwd: CWD, home: HOME, os: "macos", pending: ["01JD0000000000000000000004"] };
+      return { version: "0.1.0-mock", shell: "serve", readOnly: readOnlyHost(), launchCwd: CWD, home: HOME, os: "macos", pending: pendingIds() };
     case "agents":
       return agentInfos;
     case "projects":
@@ -105,7 +128,7 @@ export async function handle(request: Request): Promise<unknown> {
         { path: `${HOME}/old-api`, exists: false, agents: [] },
       ];
     case "scan":
-      return snapshot;
+      return structuredClone(snapshot);
     case "read_file": {
       const entry = files[request.args.path];
       if (!entry) return reject({ kind: "notFound" });
@@ -118,15 +141,23 @@ export async function handle(request: Request): Promise<unknown> {
     case "search":
       return search(request.args.query, request.args.caseSensitive, request.args.regex);
     case "watch":
-      await new Promise((resolve) => setTimeout(resolve, 20_000));
-      return FINGERPRINT;
+      if (request.args.since === mockState.fingerprint) await waitForBump(20_000);
+      return mockState.fingerprint;
     case "history":
-      return history.map((detail) => detail.record);
+      return history.map((detail) => structuredClone(detail.record));
     case "change": {
       const found = history.find((detail) => detail.record.id === request.args.id);
-      return found ?? reject({ kind: "notFound" });
+      return found ? structuredClone(found) : reject({ kind: "notFound" });
     }
-    default:
-      return reject({ kind: "io", detail: `${request.op} is not part of the mock` });
+    case "plan":
+      if (readOnlyHost()) return reject({ kind: "readOnly", why: "host.read_only" });
+      return plan(request.args.edit).preview;
+    case "apply":
+      if (readOnlyHost()) return reject({ kind: "readOnly", why: "host.read_only" });
+      return apply(request.args.edit, request.args.digest);
+    case "hook_sample":
+      return SAMPLES[request.args.event] ?? { hook_event_name: request.args.event };
+    case "run_hook":
+      return runHook(request.args.hook, request.args.input);
   }
 }

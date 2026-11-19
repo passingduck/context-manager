@@ -12,7 +12,7 @@ const ICONS: Record<View, string> = {
   history: "M3 8a5 5 0 1 0 1.5-3.5M3 2v3h3M8 5v3l2 1",
 };
 
-export function Rail({ route, go, snapshot, readOnly, pending }: { route: Route; go: (patch: Partial<Route>) => void; snapshot: Snapshot; readOnly: boolean; pending: number }) {
+export function Rail({ route, go, snapshot, pending }: { route: Route; go: (patch: Partial<Route>) => void; snapshot: Snapshot; pending: number }) {
   const { t } = useI18n();
   const always = snapshot.agents.reduce((n, view) => n + view.budget.sessionStart, 0);
   const counts: Record<View, number | null> = {
@@ -48,7 +48,6 @@ export function Rail({ route, go, snapshot, readOnly, pending }: { route: Route;
       </ul>
       <div className="mt-auto space-y-1 px-2 text-[11px] text-muted">
         <p>{t.rail.totalAlways(fmt.tokens(always))}</p>
-        {readOnly && <p>{t.rail.readOnlyHost}</p>}
       </div>
     </nav>
   );

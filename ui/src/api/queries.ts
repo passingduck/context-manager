@@ -108,3 +108,7 @@ export function useWatch(cwd: AbsPath | null, fingerprint: string | undefined): 
     };
   }, [cwd, ready, client]);
 }
+
+/** What a revert of this change would find: files edited since the change show up as conflicts. Nothing is written. */
+export const useRevertCheck = (cwd: AbsPath, id: string, fingerprint: string) =>
+  useQuery({ queryKey: ["revert-check", cwd, id, fingerprint], queryFn: () => call("plan", { cwd, edit: { kind: "revert", change: id } }) });

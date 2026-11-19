@@ -6,6 +6,7 @@ import { MergeView } from "@codemirror/merge";
 import { EditorState, RangeSetBuilder, type Extension } from "@codemirror/state";
 import { Decoration, EditorView, GutterMarker, gutter, lineNumbers } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { minimalSetup } from "codemirror";
 import { useEffect, useRef } from "react";
 import type { Format } from "../gen/Format";
 
@@ -126,4 +127,53 @@ export function DiffView({ before, after, format }: { before: string; after: str
     return () => view.destroy();
   }, [before, after, format]);
   return <div ref={host} className="max-h-[60vh] overflow-auto rounded border border-line" />;
+}
+
+interface EditableProps {
+  text: string;
+  format: Format;
+  onChange: (text: string) => void;
+  label: string;
+}
+
+/** Editable CodeMirror 6. `text` is the value: a change that did not come from typing replaces the document. */
+export function EditableEditor({ text, format, onChange, label }: EditableProps) {
+  const host = useRef<HTMLDivElement>(null);
+  const view = useRef<EditorView | null>(null);
+  const latest = useRef(onChange);
+  latest.current = onChange;
+  const initial = useRef(text);
+
+  useEffect(() => {
+    if (!host.current) return;
+    const created = new EditorView({
+      parent: host.current,
+      state: EditorState.create({
+        doc: initial.current,
+        extensions: [
+          minimalSetup,
+          lineNumbers(),
+          syntaxHighlighting(highlight),
+          EditorView.lineWrapping,
+          EditorView.contentAttributes.of({ "aria-label": label }),
+          ...language(format),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged) latest.current(update.state.doc.toString());
+          }),
+        ],
+      }),
+    });
+    view.current = created;
+    return () => {
+      created.destroy();
+      view.current = null;
+    };
+  }, [format, label]);
+
+  useEffect(() => {
+    const current = view.current;
+    if (current && current.state.doc.toString() !== text) current.dispatch({ changes: { from: 0, to: current.state.doc.length, insert: text } });
+  }, [text]);
+
+  return <div ref={host} className="h-full min-h-0 overflow-hidden" data-editor="editable" />;
 }

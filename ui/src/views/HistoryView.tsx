@@ -6,6 +6,7 @@ import type { ChangeRecord } from "../gen/ChangeRecord";
 import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
 import type { Route } from "../lib/route";
+import { Attention } from "./Detail";
 
 type Go = (patch: Partial<Route>, replace?: boolean) => void;
 
@@ -64,6 +65,7 @@ function Row({ record, selected, go }: { record: ChangeRecord; selected: boolean
         </span>
         <span className="shrink-0 text-[11px] text-muted">{fmt.when(record.at, lang)}</span>
       </button>
+      {record.state !== "sealed" && <Attention id={record.id} state={record.state} />}
     </li>
   );
 }
