@@ -578,6 +578,7 @@ export const en = {
     importMissing: (v) => `The import ${v.raw} points to a file that does not exist.`,
     importOutsideRoot: (v) => `The import ${v.raw} points outside the allowed root.`,
     importTooDeep: (v) => `Imports nest deeper than the limit of ${v.max} levels.`,
+    importBudgetExhausted: (v) => `The scan read only the first ${v.max.toLocaleString("en-US")} imports of this file, so the size shown for it can be smaller than what the agent loads.`,
     importCycle: (v, d) => `Imports loop back to ${d(v.path)}.`,
     importNeedsApproval: (v) => `The import ${v.raw} needs your approval before the agent loads it.`,
     accidentalImport: (v) => `The text ${v.raw} looks like an import, but it is probably not meant to be one.`,

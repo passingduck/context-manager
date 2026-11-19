@@ -551,6 +551,7 @@ export const ko: typeof en = {
     importMissing: (v) => `없는 파일을 가리키는 가져오기가 있습니다. 대상은 ${v.raw}입니다.`,
     importOutsideRoot: (v) => `허용된 범위 밖을 가리키는 가져오기가 있습니다. 대상은 ${v.raw}입니다.`,
     importTooDeep: (v) => `가져오기가 한도인 ${v.max}단계보다 깊게 이어집니다.`,
+    importBudgetExhausted: (v) => `스캔이 이 파일의 가져오기를 처음 ${v.max.toLocaleString("ko-KR")}개까지만 읽었습니다. 그래서 이 파일에 표시된 크기는 에이전트가 실제로 불러오는 양보다 작을 수 있습니다.`,
     importCycle: (v, d) => `가져오기가 ${d(v.path)}에서 순환합니다.`,
     importNeedsApproval: (v) => `에이전트가 이 가져오기를 불러오려면 사용자의 승인이 필요합니다. 대상은 ${v.raw}입니다.`,
     accidentalImport: (v) => `가져오기처럼 보이지만 의도한 것이 아닐 가능성이 큰 텍스트가 있습니다. 해당 텍스트는 ${v.raw}입니다.`,

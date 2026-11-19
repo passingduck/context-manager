@@ -717,6 +717,9 @@ variants! {
         ImportMissing { raw: String },
         ImportOutsideRoot { raw: String },
         ImportTooDeep { max: u8 },
+        /// The scan stopped expanding the imports of this root file after `max` import nodes,
+        /// so what it shows for the file is less than the agent loads.
+        ImportBudgetExhausted { max: u32 },
         ImportCycle { path: AbsPath },
         ImportNeedsApproval { raw: String },
         AccidentalImport { raw: String },

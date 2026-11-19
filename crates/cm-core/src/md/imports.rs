@@ -37,11 +37,27 @@ pub enum Protect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CyclePolicy {
-    /// One seen-set for the whole load. A file loaded anywhere is not loaded again.
+    /// One seen-set for the whole load. A file loaded anywhere is not loaded again, so the nodes
+    /// grow with the files, not with the paths between them.
     OneSeenSet,
-    /// One seen-set per chain of imports. Siblings may load the same file.
-    PerChain,
+    /// One seen-set per chain of imports. Siblings may load the same file, so a file expands once
+    /// per path that reaches it. Expansion stops after `max_nodes` nodes per root file (design
+    /// section 5).
+    PerChain { max_nodes: u32 },
 }
+
+impl CyclePolicy {
+    fn max_nodes(self) -> Option<u32> {
+        match self {
+            CyclePolicy::OneSeenSet => None,
+            CyclePolicy::PerChain { max_nodes } => Some(max_nodes),
+        }
+    }
+}
+
+/// Import nodes per root file under [`CyclePolicy::PerChain`]. A real context file tree has tens.
+/// Five files of ten lines that each import the next file reach 111,110.
+const PER_CHAIN_MAX_NODES: u32 = 1_000;
 
 /// What happens to an import that resolves outside the allowed root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +180,9 @@ impl ImportRules {
             max_depth: 5,
             report_too_deep: false,
             protect: Protect::BacktickRuns,
-            cycles: CyclePolicy::PerChain,
+            cycles: CyclePolicy::PerChain {
+                max_nodes: PER_CHAIN_MAX_NODES,
+            },
             file_types: FileTypes::Any,
         }
     }
@@ -232,6 +250,9 @@ pub struct ImportNode {
 pub struct ImportTree {
     pub root: AbsPath,
     pub nodes: Vec<ImportNode>,
+    /// The node budget, when expansion stopped at it. `nodes` then holds the first nodes in
+    /// document order and leaves the rest out.
+    pub capped: Option<u32>,
 }
 
 impl ImportTree {
@@ -266,18 +287,27 @@ pub fn expand_with_seen(
     fs: &ProbeFs,
     seen: &mut HashSet<AbsPath>,
 ) -> ImportTree {
-    let nodes = match fs.read(root) {
+    let (nodes, capped) = match fs.read(root) {
         Ok(bytes) if rules.syntax != TokenSyntax::None => {
             seen.insert(root.clone());
             let text = String::from_utf8_lossy(&bytes);
-            let mut chain = Vec::new();
-            Expander { rules, fs, seen }.nodes(root, &text, 0, &mut chain)
+            let mut expander = Expander {
+                rules,
+                fs,
+                seen,
+                nodes_left: rules.cycles.max_nodes(),
+                capped: false,
+            };
+            let nodes = expander.nodes(root, &text, 0, &mut Vec::new());
+            let capped = rules.cycles.max_nodes().filter(|_| expander.capped);
+            (nodes, capped)
         }
-        _ => Vec::new(),
+        _ => (Vec::new(), None),
     };
     ImportTree {
         root: root.clone(),
         nodes,
+        capped,
     }
 }
 
@@ -285,6 +315,9 @@ struct Expander<'a> {
     rules: &'a ImportRules,
     fs: &'a ProbeFs,
     seen: &'a mut HashSet<AbsPath>,
+    /// `None` when the cycle policy has no budget.
+    nodes_left: Option<u32>,
+    capped: bool,
 }
 
 impl Expander<'_> {
@@ -310,6 +343,13 @@ impl Expander<'_> {
             let Some(path_text) = self.import_path(&token.text) else {
                 continue;
             };
+            let too_deep = depth + 1 > self.rules.max_depth;
+            if too_deep && !self.rules.report_too_deep {
+                continue;
+            }
+            if !self.take_node() {
+                break;
+            }
             let raw = format!("@{}", token.text);
             let mut node = ImportNode {
                 token: raw,
@@ -323,11 +363,9 @@ impl Expander<'_> {
             };
             let path = self.resolve(&dir, &path_text);
             node.path = Some(path.clone());
-            if depth + 1 > self.rules.max_depth {
-                if self.rules.report_too_deep {
-                    node.outcome = ImportOutcome::TooDeep;
-                    out.push(node);
-                }
+            if too_deep {
+                node.outcome = ImportOutcome::TooDeep;
+                out.push(node);
                 continue;
             }
             if self.rules.syntax == TokenSyntax::Gemini && has_url_scheme(&path_text) {
@@ -359,7 +397,7 @@ impl Expander<'_> {
             CyclePolicy::OneSeenSet if self.seen.contains(path) => {
                 return ImportOutcome::AlreadyLoaded;
             }
-            CyclePolicy::PerChain if chain.contains(path) => return ImportOutcome::Cycle,
+            CyclePolicy::PerChain { .. } if chain.contains(path) => return ImportOutcome::Cycle,
             _ => {}
         }
         let bytes = match self.fs.read(path) {
@@ -375,6 +413,22 @@ impl Expander<'_> {
         *children = self.nodes(path, text, depth, chain);
         chain.pop();
         ImportOutcome::Imported
+    }
+
+    /// Takes one node from the budget of the root file. False once it is spent, which ends the
+    /// expansion at every level.
+    fn take_node(&mut self) -> bool {
+        match &mut self.nodes_left {
+            None => true,
+            Some(0) => {
+                self.capped = true;
+                false
+            }
+            Some(left) => {
+                *left -= 1;
+                true
+            }
+        }
     }
 
     fn protected(&self, text: &str) -> Vec<Range<usize>> {
@@ -769,6 +823,33 @@ mod tests {
             [
                 row("@https://x.dev/a", Unreadable, 1),
                 row("@pic.png", Imported, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn gemini_expansion_stops_at_the_node_budget() {
+        let c = Case::new(&[
+            ("A.md", "@B.md @B.md\n"),
+            ("B.md", "@C.md @C.md\n"),
+            ("C.md", ""),
+        ]);
+        let budget = |max_nodes| ImportRules {
+            cycles: CyclePolicy::PerChain { max_nodes },
+            ..c.gemini()
+        };
+        let whole = c.run(&budget(6), "A.md");
+        assert_eq!((flat(&whole).len(), whole.capped), (6, None));
+
+        let cut = c.run(&budget(4), "A.md");
+        assert_eq!(cut.capped, Some(4));
+        assert_eq!(
+            flat(&cut),
+            [
+                row("@B.md", Imported, 1),
+                row("@C.md", Imported, 2),
+                row("@C.md", Imported, 2),
+                row("@B.md", Imported, 1),
             ]
         );
     }

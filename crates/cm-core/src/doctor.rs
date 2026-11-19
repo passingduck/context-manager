@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::agents::{Agent, ScanCx};
 use crate::md::spans;
 use crate::model::*;
-use crate::probe_fs::EntryKind;
 use crate::program::{self, Program};
 use crate::walk;
 
@@ -223,14 +222,6 @@ fn parse_errors(input: &Input, out: &mut Vec<Diagnostic>) {
         };
         if bytes > MAX_PARSE_BYTES
             || !matches!(entry.format, Format::Json | Format::Jsonc | Format::Toml)
-        {
-            continue;
-        }
-        if input
-            .cx
-            .fs
-            .stat(path)
-            .is_ok_and(|stat| stat.kind != EntryKind::File)
         {
             continue;
         }

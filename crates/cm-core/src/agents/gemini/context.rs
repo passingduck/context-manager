@@ -113,6 +113,15 @@ impl<'w, 'a> Builder<'w, 'a> {
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let dir = path.parent().unwrap_or_else(AbsPath::root);
         let tree = expand(path, &ImportRules::gemini(self.w.import_root(&dir)), cx.fs);
+        if let Some(max) = tree.capped {
+            self.diagnose(
+                Subject::File {
+                    path: path.clone(),
+                    line: None,
+                },
+                Problem::ImportBudgetExhausted { max },
+            );
+        }
         let inlined = inline(&text, &tree.nodes, &|p| read_lossy(cx, p));
         let trimmed = js_trim(&inlined);
         if trimmed.is_empty() {
