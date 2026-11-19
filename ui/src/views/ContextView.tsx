@@ -310,7 +310,7 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
           {load.status.kind === "skipped" ? say(t.skipShort, load.status.skip, d) : load.status.kind === "truncated" ? `${say(t.status.badge, load.status, d)} ${load.status.kept}/${load.status.total}` : ""}
         </Badge>
       )}
-      <Badge tone={activationTone(load.when)} title={say(t.activation.detail, load.when, d)}>
+      <Badge tone={load.status.kind === "skipped" ? "neutral" : activationTone(load.when)} title={say(t.activation.detail, load.when, d)}>
         {say(t.activation.badge, load.when, d)}
       </Badge>
       <span className={`w-11 shrink-0 text-right tabular-nums ${load.delivered ? "" : "text-faint"}`}>{tokensValue === null ? "–" : fmt.tokens(tokensValue)}</span>
