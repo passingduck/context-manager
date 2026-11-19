@@ -89,3 +89,111 @@ id = "claude.hook.user_config_needs_exec_form"
 en = "The command uses a user_config placeholder. Claude Code substitutes it only in the exec form of a plugin hook, where args is set, and this tool does not hold the user's plugin options, so it cannot run the hook."
 ko = "이 command는 user_config 자리표시자를 사용합니다. Claude Code는 플러그인 훅의 실행 형식, 즉 args를 지정한 경우에만 이 값을 치환하고, 이 도구는 사용자의 플러그인 옵션을 가지고 있지 않으므로 훅을 실행할 수 없습니다."
 evidence = "docs/agents/claude-code.md section 3, Path placeholders and hook environment (CONFIRMED)."
+
+[[rule]]
+id = "claude.takes_effect.settings_live"
+en = "Claude Code watches the user, project and local settings files. A change to the hooks in them reaches a running session without a restart."
+ko = "Claude Code는 사용자, 프로젝트, 로컬 설정 파일을 감시합니다. 이 파일의 훅을 바꾸면 실행 중인 세션에도 다시 시작하지 않고 반영됩니다."
+evidence = "docs/agents/claude-code.md sections 3 (Reload behavior) and 6.3 (CONFIRMED)."
+
+[[rule]]
+id = "claude.takes_effect.reload_plugins"
+en = "Claude Code reads a plugin hooks file when the session starts. A running session picks up the change after /reload-plugins or a restart."
+ko = "Claude Code는 세션을 시작할 때 플러그인 훅 파일을 읽습니다. 실행 중인 세션에는 /reload-plugins를 실행하거나 다시 시작해야 반영됩니다."
+evidence = "docs/agents/claude-code.md sections 3 (Reload behavior) and 6.3 (CONFIRMED)."
+
+[[rule]]
+id = "claude.takes_effect.next_session"
+en = "Claude Code reads this file once, when a session starts. A running session keeps the old text, and the next session uses the new one."
+ko = "Claude Code는 세션을 시작할 때 이 파일을 한 번 읽습니다. 실행 중인 세션은 예전 내용을 그대로 쓰고 다음 세션부터 새 내용을 씁니다."
+evidence = "docs/agents/claude-code.md sections 1.2, 2.4 and 6.3 (CONFIRMED)."
+
+[[rule]]
+id = "claude.takes_effect.live_reload"
+en = "Claude Code watches the skills, commands and agents folders that existed when the session started, so a new item appears in a running session. A folder that did not exist then needs a restart."
+ko = "Claude Code는 세션을 시작할 때 이미 있던 스킬, 명령, 에이전트 폴더를 감시하므로 새 항목이 실행 중인 세션에도 나타납니다. 그때 없던 폴더는 다시 시작해야 합니다."
+evidence = "docs/agents/claude-code.md sections 4 (Live reload, Subagents) and 6.3 (CONFIRMED)."
+
+[[rule]]
+id = "claude.takes_effect.memory_topic"
+en = "Claude Code does not preload a topic memory file. It reads the file when it decides to, so the text reaches the model the next time Claude reads it."
+ko = "Claude Code는 주제 메모리 파일을 미리 불러오지 않습니다. Claude가 필요하다고 판단해 읽을 때 그 내용이 모델에 전달됩니다."
+evidence = "docs/agents/claude-code.md sections 2.1 and 6.3 (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.unknown_event"
+en = "Claude Code does not know this hook event, so it would ignore the hook. Pick one of the events this tool lists."
+ko = "Claude Code가 모르는 훅 이벤트라서 이 훅은 무시됩니다. 이 도구가 보여 주는 이벤트 가운데 하나를 고르세요."
+evidence = "docs/agents/claude-code.md section 3, Events (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.invalid_handler"
+en = "Claude Code would not run this handler. Its type must be one the event supports, and it needs the fields of that type, such as a command for a command hook."
+ko = "Claude Code가 이 핸들러를 실행하지 않습니다. 핸들러 종류는 이벤트가 지원하는 것이어야 하고, command 훅의 command처럼 그 종류에 필요한 항목이 있어야 합니다."
+evidence = "docs/agents/claude-code.md section 3, Handler types and fields. A broken entry under PreToolUse or PermissionRequest can stop the whole file from applying (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.invalid_matcher"
+en = "This matcher is not a valid regular expression, so Claude Code would never match it. Fix the pattern before saving."
+ko = "이 매처는 올바른 정규식이 아니라서 Claude Code가 어떤 도구와도 맞추지 못합니다. 저장하기 전에 패턴을 고치세요."
+evidence = "docs/agents/claude-code.md section 3, Matcher semantics (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.hook_file"
+en = "Hooks can be added only to the user, project and local settings files that this tool lists for Claude Code."
+ko = "훅은 이 도구가 Claude Code용으로 보여 주는 사용자, 프로젝트, 로컬 설정 파일에만 추가할 수 있습니다."
+evidence = "docs/agents/claude-code.md section 3, Notes for the editor (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.hooks_shape"
+en = "The hooks key of this file does not have the shape Claude Code expects: an object of events, each with a list of groups, each with a list of handlers. This tool does not guess how to repair it. Edit the file as text."
+ko = "이 파일의 hooks 항목이 Claude Code가 기대하는 모양이 아닙니다. 이벤트별 객체 안에 그룹 목록이 있고 그 안에 핸들러 목록이 있어야 합니다. 이 도구는 고치는 방법을 추측하지 않으므로 파일을 텍스트로 직접 고치세요."
+evidence = "docs/agents/claude-code.md section 3, Schema (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.hook_not_in_json"
+en = "This hook is defined in the frontmatter of a skill, command or subagent file. This tool does not rewrite YAML frontmatter, so edit the file as text."
+ko = "이 훅은 스킬, 명령 또는 서브에이전트 파일의 프런트매터에 정의되어 있습니다. 이 도구는 YAML 프런트매터를 고쳐 쓰지 않으므로 파일을 텍스트로 직접 고치세요."
+evidence = "docs/agents/claude-code.md section 3, Notes for the editor (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.slot_unknown"
+en = "Claude Code has no such place for a new item in this folder."
+ko = "이 폴더에는 새 항목을 만들 수 있는 위치가 없습니다."
+evidence = "docs/agents/claude-code.md sections 1.1, 1.4, 2.1 and 4 (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.name_required"
+en = "A new item in this place needs a name, which becomes its file or folder name."
+ko = "이 위치에 새 항목을 만들려면 이름이 필요합니다. 이름이 파일 이름이나 폴더 이름이 됩니다."
+evidence = "docs/agents/claude-code.md section 4 (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.name_invalid"
+en = "The name must be one path segment of letters, digits, dots, hyphens and underscores. It may not start with a hyphen or a dot, and it may not contain a colon or an angle bracket, because Claude Code skips such files."
+ko = "이름은 영문자, 숫자, 점, 하이픈, 밑줄로 된 경로 한 칸이어야 합니다. 하이픈이나 점으로 시작할 수 없고 콜론이나 꺾쇠 괄호도 넣을 수 없습니다. Claude Code가 그런 파일을 건너뛰기 때문입니다."
+evidence = "docs/agents/claude-code.md section 4, Skills (Locations), Subagents (files Claude Code skips) (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.name_exists"
+en = "A file or folder with this name already exists, and this tool does not overwrite it. Pick another name or edit the existing file."
+ko = "같은 이름의 파일이나 폴더가 이미 있고 이 도구는 덮어쓰지 않습니다. 다른 이름을 고르거나 기존 파일을 고치세요."
+evidence = "docs/agents/claude-code.md section 4, Name collisions (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.store_unknown"
+en = "This tool found no memory store with that id for the project."
+ko = "이 프로젝트에는 그 id의 메모리 저장소가 없습니다."
+evidence = "docs/agents/claude-code.md section 2.1 (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.store_agent_written"
+en = "A subagent writes its own memory folder, and its MEMORY.md is an index the subagent keeps. This tool adds memories only to the project's auto memory."
+ko = "서브에이전트의 메모리 폴더는 서브에이전트가 직접 씁니다. 이 도구는 프로젝트의 자동 메모리에만 메모리를 추가합니다."
+evidence = "docs/agents/claude-code.md section 2.5 (CONFIRMED)."
+
+[[rule]]
+id = "claude.plan.title_invalid"
+en = "A memory needs a title, which names its file and its line in MEMORY.md."
+ko = "메모리에는 제목이 필요합니다. 제목이 파일 이름과 MEMORY.md의 한 줄이 됩니다."
+evidence = "docs/agents/claude-code.md section 2.6 (CONFIRMED)."

@@ -694,6 +694,7 @@ fn parked_hooks_are_listed_disabled_in_their_old_place() {
         matcher: Some("Bash".into()),
         handler: cmd(command),
         index,
+        restore: None,
     };
     // b was between a and c, d came last. Indexes count the event with every parked hook in.
     fx.write(

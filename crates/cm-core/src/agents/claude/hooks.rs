@@ -24,6 +24,28 @@ pub(super) struct HooksOut {
     pub files: Vec<FileClaim>,
 }
 
+/// Why a draft is refused before it is written (spec 3, Schema, Handler types, Matcher).
+pub(super) enum DraftProblem {
+    UnknownEvent,
+    Handler,
+    Matcher,
+}
+
+/// A hook a user adds or changes must be one Claude Code would run: a known event, a handler it
+/// accepts there, and a matcher that is not an invalid regular expression. A broken entry under
+/// `PreToolUse` or `PermissionRequest` can stop the whole file from applying.
+pub(super) fn check_draft(draft: &HookDraft) -> Result<(), DraftProblem> {
+    let info = schema::event(&draft.event).ok_or(DraftProblem::UnknownEvent)?;
+    if check_handler(Some(info), &draft.event, &draft.handler).is_some() {
+        return Err(DraftProblem::Handler);
+    }
+    let matcher = draft.matcher.as_deref().filter(|m| !m.is_empty());
+    if matches!(matcher_eval(info, matcher).0, MatcherEval::Invalid { .. }) {
+        return Err(DraftProblem::Matcher);
+    }
+    Ok(())
+}
+
 pub(super) fn schema() -> &'static HookSchema {
     schema::schema()
 }
