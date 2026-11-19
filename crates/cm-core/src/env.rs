@@ -6,7 +6,26 @@ use crate::model::Os;
 pub use crate::model::{AbsPath, PathError};
 
 /// The environment variables that move things. `ScanEnv::from_process` copies exactly these.
-pub const MOVING_VARS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "PATH"];
+pub const MOVING_VARS: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "GEMINI_CLI_HOME",
+    "PATH",
+    // Claude Code (docs/agents/claude-code.md sections 1.7, 2.7, 5.1).
+    "CLAUDE_CODE_DISABLE_CLAUDE_MDS",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_SAFE_MODE",
+    "CLAUDE_CODE_SIMPLE",
+    "CLAUDE_CODE_REMOTE",
+    "CLAUDE_CODE_REMOTE_MEMORY_DIR",
+    "CLAUDE_COWORK_MEMORY_PATH_OVERRIDE",
+    "CLAUDE_CODE_PROJECT_DIR_NAME",
+    "CLAUDE_CODE_PLUGIN_CACHE_DIR",
+    "CLAUDE_CODE_PLUGIN_DIRS",
+    "CLAUDE_CODE_AUTOMOUNT_ROOTS",
+    "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD",
+    "CLAUDE_CODE_TMPDIR",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScanEnv {
