@@ -10,6 +10,7 @@ use super::{
 use crate::model::*;
 use crate::walk;
 
+mod catalog;
 mod extensions;
 mod hooks;
 mod instructions;
@@ -93,7 +94,7 @@ impl Agent for Claude {
         };
         let hook_out = hooks::scan(cx, &setup, &ext);
 
-        let blocks = render::build(cx, &loads);
+        let blocks = render::session(cx, &setup, &loads, &ext.extensions);
         let budget = render::budget(&blocks, &loads);
 
         let mut stores = mem.stores;
@@ -163,7 +164,8 @@ impl Agent for Claude {
     }
 
     fn render(&self, cx: &ScanCx, view: &AgentView) -> Vec<RenderedBlock> {
-        render::build(cx, &view.loads)
+        let setup = Setup::load(cx);
+        render::session(cx, &setup, &view.loads, &view.extensions)
             .into_iter()
             .map(|b| b.rendered)
             .collect()

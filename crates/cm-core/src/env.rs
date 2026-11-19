@@ -34,6 +34,7 @@ pub const MOVING_VARS: &[&str] = &[
     "CLAUDE_CODE_AUTOMOUNT_ROOTS",
     "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD",
     "CLAUDE_CODE_TMPDIR",
+    "SLASH_COMMAND_TOOL_CHAR_BUDGET",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
