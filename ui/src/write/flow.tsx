@@ -14,6 +14,7 @@ import type { Preview } from "../gen/Preview";
 import type { Warning } from "../gen/Warning";
 import { useI18n } from "../i18n";
 import { say, sayWarning } from "../i18n/types";
+import { useRoute } from "../lib/route";
 import { guessFormat } from "./format";
 
 type Conflicted = Extract<ApiError, { kind: "conflict" }>;
@@ -112,6 +113,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
   const { t } = useI18n();
   const project = useProject();
   const client = useQueryClient();
+  const [, go] = useRoute();
   const [edit, setEdit] = useState<Edit>(proposal.edit);
   const [overwrite, setOverwrite] = useState(false);
   const [acks, setAcks] = useState<ReadonlySet<string>>(new Set());
@@ -201,19 +203,22 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
     case "review": {
       const { preview } = phase;
       const warnings = preview.warnings.map((warning, index) => ({ warning, key: `w${index}`, tick: NEEDS_TICK.includes(warning.kind) }));
-      const ticks = [...warnings.filter((w) => w.tick).map((w) => w.key), ...(preview.conflicts.length > 0 ? ["c"] : [])];
+      const ticks = warnings.filter((w) => w.tick).map((w) => w.key);
       const ready = ticks.every((key) => acks.has(key));
       const empty = preview.changeSet.ops.length === 0;
+      const refused = preview.conflicts.length > 0;
       body = (
-        <ReviewBody preview={preview} stale={phase.stale} overwrite={overwrite} notice={proposal.notice} acks={acks} setAcks={setAcks} warnings={warnings} />
+        <ReviewBody preview={preview} stale={phase.stale} overwrite={overwrite} notice={proposal.notice} acks={acks} setAcks={setAcks} warnings={warnings} onOpenFile={(path) => { onClose(); go({ sel: `file:${path}`, ag: "", ln: 0 }); }} />
       );
       footer = (
         <>
-          {!ready && !empty && <span className="mr-auto text-warn">{t.write.tickFirst}</span>}
+          {!refused && !ready && !empty && <span className="mr-auto text-warn">{t.write.tickFirst}</span>}
           <Button onClick={cancel}>{t.write.cancel}</Button>
-          <PrimaryButton disabled={!ready || empty} onClick={() => void confirm(preview)}>
-            {t.write.confirmBy[preview.changeSet.summary.edit.kind]}
-          </PrimaryButton>
+          {!refused && (
+            <PrimaryButton disabled={!ready || empty} onClick={() => void confirm(preview)}>
+              {t.write.confirmBy[preview.changeSet.summary.edit.kind]}
+            </PrimaryButton>
+          )}
         </>
       );
       break;
@@ -293,9 +298,10 @@ interface ReviewProps {
   acks: ReadonlySet<string>;
   setAcks: (next: ReadonlySet<string>) => void;
   warnings: { warning: Warning; key: string; tick: boolean }[];
+  onOpenFile: (path: AbsPath) => void;
 }
 
-function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings }: ReviewProps) {
+function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings, onOpenFile }: ReviewProps) {
   const { t, d } = useI18n();
   const project = useProject();
   const toggle = (key: string) => {
@@ -306,6 +312,7 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
   };
   const ctx = { name: project.name, rule: project.rule, d };
   const empty = preview.changeSet.ops.length === 0;
+  const refused = preview.conflicts.length > 0;
   return (
     <div className="space-y-3">
       {stale && (
@@ -325,10 +332,14 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
         <section aria-label={t.write.conflictsTitle} className="rounded border border-bad bg-bad-bg p-2.5">
           <h3 className="font-semibold text-bad">{t.write.conflictsTitle}</h3>
           <p className="mt-0.5">{t.write.conflictsBody}</p>
+          <p className="mt-1 font-semibold">{t.write.conflictsRefused}</p>
           <ul className="mt-1.5 space-y-1">
             {preview.conflicts.map((conflict) => (
               <li key={conflict.path}>
-                <Mono className="break-all font-semibold">{project.display(conflict.path)}</Mono>
+                <div className="flex items-center gap-2">
+                  <Mono className="min-w-0 flex-1 break-all font-semibold">{project.display(conflict.path)}</Mono>
+                  {conflict.current !== null && <Button onClick={() => onOpenFile(conflict.path)}>{t.write.conflictOpen}</Button>}
+                </div>
                 <details className="mt-0.5">
                   <summary className="cursor-pointer text-[12px]">{conflict.current === null ? t.write.conflictAbsent : t.write.conflictShow}</summary>
                   {conflict.current !== null && (
@@ -340,11 +351,10 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
               </li>
             ))}
           </ul>
-          <Tick checked={acks.has("c")} onChange={() => toggle("c")} label={t.write.conflictsTick} />
         </section>
       )}
 
-      {warnings.length > 0 && (
+      {!refused && warnings.length > 0 && (
         <section aria-label={t.write.warningsTitle}>
           <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.write.warningsTitle}</h3>
           <ul className="space-y-1.5">
@@ -361,10 +371,12 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
         </section>
       )}
 
-      <section aria-label={t.write.diffTitle}>
-        <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.write.diffTitle}</h3>
-        <Diffs preview={preview} />
-      </section>
+      {!refused && (
+        <section aria-label={t.write.diffTitle}>
+          <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.write.diffTitle}</h3>
+          <Diffs preview={preview} />
+        </section>
+      )}
     </div>
   );
 }

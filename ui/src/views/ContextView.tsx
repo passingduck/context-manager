@@ -4,12 +4,14 @@ import { useProject } from "../app/project";
 import { Badge, Chip, ErrorNote, Mono, PaneTitle } from "../components/ui";
 import type { AgentView } from "../gen/AgentView";
 import type { BlockLabel } from "../gen/BlockLabel";
+import type { DocKind } from "../gen/DocKind";
 import type { Load } from "../gen/Load";
 import type { Simulation } from "../gen/Simulation";
 import { useI18n } from "../i18n";
+import type { BundledKind } from "../i18n/en";
 import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
-import { activationTone, buildGroups, GROUPS, statusTone, type Node } from "../lib/loads";
+import { activationTone, buildGroups, GROUPS, type GroupKey, statusTone, type Node } from "../lib/loads";
 import type { Route } from "../lib/route";
 import { NewMenu } from "../write/create";
 import { useDirtyPaths } from "../write/buffers";
@@ -32,6 +34,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
   const byAgent = new Map<string, Simulation>((route.sim ? (sims.data ?? []) : []).map((sim) => [sim.agent, sim]));
   const [focused, setFocused] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const snapshot = project.snapshot;
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -49,7 +52,16 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
     else if (event.key === "ArrowUp") move(index - 1);
     else if (event.key === "Home") move(0);
     else if (event.key === "End") move(rows.length - 1);
-    else if (event.key === "ArrowRight" && key && collapsed.has(key)) {
+    else if (key.startsWith(BUNDLE) && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+      event.preventDefault();
+      const open = event.key === "ArrowRight";
+      setExpanded((old) => {
+        const next = new Set(old);
+        if (open) next.add(key);
+        else next.delete(key);
+        return next;
+      });
+    } else if (event.key === "ArrowRight" && key && collapsed.has(key)) {
       event.preventDefault();
       setCollapsed((old) => new Set([...old].filter((k) => k !== key)));
     } else if (event.key === "ArrowLeft" && key) {
@@ -99,7 +111,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
           <section key={view.agent} className="border-b border-line pb-2" aria-label={project.name(view.agent)}>
             <AgentHeader view={view} sim={byAgent.get(view.agent)} />
             {route.mode === "tree" ? (
-              <AgentTree view={view} route={route} go={go} sim={byAgent.get(view.agent)} focused={focused} setFocused={setFocused} collapsed={collapsed} setCollapsed={setCollapsed} />
+              <AgentTree view={view} route={route} go={go} sim={byAgent.get(view.agent)} focused={focused} setFocused={setFocused} collapsed={collapsed} setCollapsed={setCollapsed} expanded={expanded} setExpanded={setExpanded} />
             ) : (
               <OrderBlocks view={view} route={route} go={go} />
             )}
@@ -170,7 +182,16 @@ interface TreeProps {
   setFocused: (key: string) => void;
   collapsed: Set<string>;
   setCollapsed: (next: Set<string>) => void;
+  /** Keys of the listing bundles the operator opened. A bundle is closed until it is in here. */
+  expanded: Set<string>;
+  setExpanded: (next: Set<string>) => void;
 }
+
+const BUNDLE = "bundle:";
+
+/** Catalog lines and the bodies behind them are many and alike, so each kind collapses into one row. */
+const BUNDLED_KINDS: BundledKind[] = ["listing", "skillBody", "commandBody", "subagentPrompt", "reference"];
+const BUNDLE_MIN = 2;
 
 function AgentTree(props: TreeProps) {
   const { view, sim } = props;
@@ -211,9 +232,13 @@ function AgentTree(props: TreeProps) {
             <h4 className="px-3 pb-0.5 pt-2.5 text-[11px] font-semibold uppercase tracking-wide text-faint" title={t.context.groupHint[group]}>
               {t.context.groups[group]}
             </h4>
-            {nodes.map((node) => (
+            {nodes.filter((node) => !isBundled(node, nodes)).map((node) => (
               <RowTree key={node.load.id} node={node} depth={1} {...props} />
             ))}
+            {BUNDLED_KINDS.map((kind) => {
+              const members = nodes.filter((node) => isBundled(node, nodes) && node.load.kind === kind);
+              return members.length === 0 ? null : <BundleRows key={kind} kind={kind} group={group} members={members} {...props} />;
+            })}
           </div>
         );
       })}
@@ -234,6 +259,50 @@ function AgentTree(props: TreeProps) {
         </p>
       )}
     </div>
+  );
+}
+
+const isBundled = (node: Node, siblings: Node[]) =>
+  (BUNDLED_KINDS as DocKind[]).includes(node.load.kind) && siblings.filter((n) => n.load.kind === node.load.kind).length >= BUNDLE_MIN;
+
+function BundleRows(props: TreeProps & { kind: BundledKind; group: GroupKey; members: Node[] }) {
+  const { kind, group, members, view, expanded, setExpanded, focused, setFocused } = props;
+  const { t } = useI18n();
+  const key = `${BUNDLE}${view.agent}:${group}:${kind}`;
+  const open = expanded.has(key);
+  const total = members.reduce((n, node) => n + (node.load.delivered?.tokens ?? 0), 0);
+  const toggle = () => {
+    const next = new Set(expanded);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setExpanded(next);
+  };
+  return (
+    <>
+      <div
+        data-row
+        data-key={key}
+        role="treeitem"
+        aria-level={1}
+        aria-selected={false}
+        aria-expanded={open}
+        tabIndex={focused === key ? 0 : -1}
+        onFocus={() => setFocused(key)}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            toggle();
+          }
+        }}
+        className="flex min-h-7 cursor-default items-center gap-2 border-l-2 border-transparent py-0.5 pl-2 pr-3 hover:bg-subtle"
+      >
+        <span className="flex w-4 shrink-0 justify-center text-faint" aria-hidden>{open ? "▾" : "▸"}</span>
+        <span className="min-w-0 flex-1 truncate font-medium">{t.context.bundle[kind](members.length)}</span>
+        <span className="w-11 shrink-0 text-right tabular-nums">{fmt.tokens(total)}</span>
+      </div>
+      {open && members.map((node) => <RowTree key={node.load.id} {...props} node={node} depth={2} />)}
+    </>
   );
 }
 
@@ -356,13 +425,30 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
                     ],
               )}
             </ul>
-            <pre aria-label={t.context.literalText} className="max-h-40 overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[12px] leading-5">
-              {text ?? (render.isPending ? t.loading : t.context.renderFailed)}
-            </pre>
+            <LiteralText text={text ?? (render.isPending ? t.loading : t.context.renderFailed)} />
           </li>
         );
       })}
     </ol>
+  );
+}
+
+/** The text the agent receives. Short by default; one click shows all of it in a box that scrolls. */
+function LiteralText({ text }: { text: string }) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const long = text.split("\n").length > 6 || text.length > 600;
+  return (
+    <div>
+      <pre aria-label={t.context.literalText} className={`${open ? "max-h-[70vh]" : "max-h-32"} overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[12px] leading-5`}>
+        {text}
+      </pre>
+      {long && (
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="w-full border-t border-line px-2 py-1 text-left text-[12px] text-accent hover:bg-subtle">
+          {open ? t.context.showLess : t.context.showAll}
+        </button>
+      )}
+    </div>
   );
 }
 

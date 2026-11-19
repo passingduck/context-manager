@@ -32,8 +32,8 @@ export function HooksView({ route, go }: { route: Route; go: Go }) {
               {events.map((event) => (
                 <div key={event} role="group" aria-label={event}>
                   <h4 className="px-3 pb-0.5 pt-2 font-mono text-[11px] font-semibold text-faint">{event}</h4>
-                  {view.hooks.filter((hook) => hook.event === event).map((hook) => (
-                    <HookRow key={hook.id} hook={hook} agent={view.agent} selected={route.sel === `hook:${hook.id}`} go={go} />
+                  {view.hooks.filter((hook) => hook.event === event).map((hook, index, inEvent) => (
+                    <HookRow key={hook.id} hook={hook} agent={view.agent} selected={route.sel === `hook:${hook.id}`} go={go} previous={inEvent[index - 1]} />
                   ))}
                 </div>
               ))}
@@ -53,9 +53,14 @@ export function HooksView({ route, go }: { route: Route; go: Go }) {
   );
 }
 
-function HookRow({ hook, agent, selected, go }: { hook: Hook; agent: string; selected: boolean; go: Go }) {
+/** Rows that share this key are one run: the scope and the switch kind are written once, on the first row. */
+const sourceKey = (hook: Hook) => `${JSON.stringify(hook.source.scope)}\n${hook.toggle.kind}`;
+
+function HookRow({ hook, agent, selected, go, previous }: { hook: Hook; agent: string; selected: boolean; go: Go; previous: Hook | undefined }) {
   const { t, d } = useI18n();
   const project = useProject();
+  const showScope = previous === undefined || sourceKey(previous) !== sourceKey(hook);
+  const showFile = previous === undefined || previous.source.file !== hook.source.file;
   return (
     <div
       role="button"
@@ -76,12 +81,18 @@ function HookRow({ hook, agent, selected, go }: { hook: Hook; agent: string; sel
         <HookStateBadge hook={hook} />
         <HookSwitch hook={hook} />
       </div>
-      <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
-        <Mono className="text-[11px]">{project.display(hook.source.file)}</Mono>
-        <Badge tone="neutral">{say(t.scope, hook.source.scope, d)}</Badge>
-        <span>{hook.toggle.kind === "unavailable" ? `${t.toggle.unavailable()}: ${project.rule(hook.toggle.why)}` : t.toggle[hook.toggle.kind]()}</span>
-        {hook.state.kind !== "active" && <span className="min-w-0 truncate">{say(t.hookState, hook.state, d)}</span>}
-      </div>
+      {(showScope || showFile || hook.state.kind !== "active") && (
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
+          {showFile && <Mono className="text-[11px]">{project.display(hook.source.file)}</Mono>}
+          {showScope && (
+            <>
+              <Badge tone="neutral">{say(t.scope, hook.source.scope, d)}</Badge>
+              <span>{hook.toggle.kind === "unavailable" ? `${t.toggle.unavailable()}: ${project.rule(hook.toggle.why)}` : t.toggle[hook.toggle.kind]()}</span>
+            </>
+          )}
+          {hook.state.kind !== "active" && <span className="min-w-0 truncate">{say(t.hookState, hook.state, d)}</span>}
+        </div>
+      )}
     </div>
   );
 }
