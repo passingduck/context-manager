@@ -17,10 +17,10 @@ ts-rs = { version = "12", features = ["serde-json-impl"] }
 sha2 = "0.11"
 toml = "1"
 tempfile = "3"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal", "io-util"] }
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
-rust-embed = { version = "8", features = ["debug-embed"] }
+rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 subtle = "2"
 getrandom = "0.4"
 tauri = { version = "2", features = ["custom-protocol"] }
