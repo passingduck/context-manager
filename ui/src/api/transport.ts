@@ -29,7 +29,12 @@ export function initTransport(): void {
     // Storage can be blocked. The token then lives only until the page reloads.
     memoryToken = decodeURIComponent(match[1]);
   }
-  history.replaceState(null, "", window.location.pathname + window.location.search);
+  const rest = window.location.hash
+    .replace(/^#/, "")
+    .split("&")
+    .filter((part) => part !== "" && !part.startsWith("token="))
+    .join("&");
+  history.replaceState(null, "", window.location.pathname + window.location.search + (rest ? `#${rest}` : ""));
 }
 
 let memoryToken: string | null = null;
