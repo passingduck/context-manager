@@ -25,6 +25,12 @@ subtle = "2"
 getrandom = "0.4"
 tauri = { version = "2", features = ["custom-protocol"] }
 tauri-build = "2"
+tiktoken-rs = "0.12"
+serde_yaml_ng = "0.10"
+jsonc-parser = { version = "0.34", features = ["cst", "serde_json", "preserve_order"] }
+toml_edit = "0.25"
+ignore = "0.4"
+globset = "0.4"
 
 [profile.release]
 lto = "thin"
