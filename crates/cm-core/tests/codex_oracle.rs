@@ -895,3 +895,178 @@ fn oracle_plugin_hooks_carry_the_content_hash_and_the_two_part_approval() {
     assert_eq!(modified[key].trust, "modified");
     assert_eq!(our_rows(&case, &cwd), modified);
 }
+
+// --- planners against hooks/list ----------------------------------------------------------
+
+struct NoHistory;
+
+impl cm_core::edit::ChangeSource for NoHistory {
+    fn detail(&self, _: &ChangeId) -> Result<ChangeDetail, ApiError> {
+        Err(ApiError::NotFound)
+    }
+}
+
+/// Plans `edit` against the case as the host would, then writes the operations.
+fn plan_and_apply(case: &Case, cwd: &AbsPath, edit: &Edit) -> Preview {
+    let env = case.env(cwd);
+    let scanned = cm_core::scan::scan_with(&[&Codex as &dyn Agent], &env);
+    let parked = case.fx.root().join("data/parked");
+    let preview = cm_core::edit::Planner {
+        agents: &[&Codex as &dyn Agent],
+        scanned: &scanned,
+        env: &env,
+        parked_dir: &parked,
+        changes: &NoHistory,
+    }
+    .plan(edit)
+    .unwrap_or_else(|err| panic!("plan failed: {err}"));
+    for op in &preview.change_set.ops {
+        match &op.action {
+            Action::Write { text } => case.write(&op.path, text),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    preview
+}
+
+fn hook_by_command(case: &Case, cwd: &AbsPath, command: &str) -> Hook {
+    let env = case.env(cwd);
+    let fs = ProbeFs::new();
+    Codex
+        .scan(&ScanCx { env: &env, fs: &fs })
+        .view
+        .hooks
+        .into_iter()
+        .find(|h| h.handler.summary == command)
+        .unwrap_or_else(|| panic!("no hook {command}"))
+}
+
+/// Approves every hook the oracle lists, the way `/hooks` would, so trust is `trusted`.
+fn trust_all(case: &Case, cwd: &AbsPath) -> BTreeMap<String, Row> {
+    let rows = oracle_rows(&hooks_list(case, cwd));
+    let mut state = String::new();
+    for (key, row) in &rows {
+        state.push_str(&format!(
+            "\n[hooks.state.\"{key}\"]\ntrusted_hash = \"{}\"\n",
+            row.hash
+        ));
+    }
+    case.append_user_config(&state);
+    oracle_rows(&hooks_list(case, cwd))
+}
+
+#[test]
+fn oracle_a_switch_changes_enabled_and_leaves_trust_and_hash_alone() {
+    if !codex_installed() {
+        return;
+    }
+    let (case, _project, cwd) = hooks_case();
+    let trusted = trust_all(&case, &cwd);
+    let hook = hook_by_command(&case, &cwd, "echo user-json-pre");
+    let key = trusted
+        .iter()
+        .find(|(k, _)| {
+            k.ends_with("hooks.json:pre_tool_use:0:0")
+                && k.contains(".codex/hooks.json")
+                && !k.contains("/project/")
+        })
+        .map(|(k, _)| k.clone())
+        .expect("the user hook is listed");
+    assert!(trusted[&key].enabled && trusted[&key].trust == "trusted");
+
+    let before_config =
+        std::fs::read_to_string(case.fx.codex_home().join("config.toml").as_path()).unwrap();
+    plan_and_apply(
+        &case,
+        &cwd,
+        &Edit::SetHookEnabled {
+            hook: hook.id.clone(),
+            enabled: false,
+        },
+    );
+    let off = oracle_rows(&hooks_list(&case, &cwd));
+    assert!(!off[&key].enabled, "hooks/list reports the hook disabled");
+    assert_eq!(
+        off[&key].trust, trusted[&key].trust,
+        "trust status unchanged"
+    );
+    assert_eq!(off[&key].hash, trusted[&key].hash, "current hash unchanged");
+    for (other, row) in &off {
+        if *other != key {
+            assert_eq!(row, &trusted[other], "no other hook moves");
+        }
+    }
+    assert_eq!(our_rows(&case, &cwd), off);
+
+    plan_and_apply(
+        &case,
+        &cwd,
+        &Edit::SetHookEnabled {
+            hook: hook.id,
+            enabled: true,
+        },
+    );
+    assert_eq!(oracle_rows(&hooks_list(&case, &cwd)), trusted);
+    let after_config =
+        std::fs::read_to_string(case.fx.codex_home().join("config.toml").as_path()).unwrap();
+    assert_eq!(
+        after_config, before_config,
+        "off then on restores config.toml"
+    );
+}
+
+#[test]
+fn oracle_an_update_makes_the_hook_modified_and_an_add_makes_it_untrusted() {
+    if !codex_installed() {
+        return;
+    }
+    let (case, _project, cwd) = hooks_case();
+    let trusted = trust_all(&case, &cwd);
+    let hook = hook_by_command(&case, &cwd, "echo user-json-pre");
+    let preview = plan_and_apply(
+        &case,
+        &cwd,
+        &Edit::UpdateHook {
+            hook: hook.id,
+            draft: HookDraft {
+                event: "PreToolUse".into(),
+                matcher: Some("Bash".into()),
+                handler: serde_json::json!({"type": "command", "command": "echo updated", "timeout": 30}),
+            },
+        },
+    );
+    assert!(preview.warnings.contains(&Warning::HookTrustReset));
+    let updated = oracle_rows(&hooks_list(&case, &cwd));
+    assert_eq!(updated.len(), trusted.len());
+    let changed: Vec<_> = updated.iter().filter(|(k, r)| trusted[*k] != **r).collect();
+    assert_eq!(
+        changed.len(),
+        1,
+        "only the updated hook differs: {changed:#?}"
+    );
+    assert_eq!(changed[0].1.trust, "modified");
+    assert_eq!(our_rows(&case, &cwd), updated);
+
+    // A new hook has no approval at all.
+    plan_and_apply(
+        &case,
+        &cwd,
+        &Edit::AddHook {
+            agent: AgentId::parse("codex").unwrap(),
+            file: case.fx.codex_home().join("config.toml"),
+            draft: HookDraft {
+                event: "Stop".into(),
+                matcher: None,
+                handler: serde_json::json!({"type": "command", "command": "echo added"}),
+            },
+        },
+    );
+    let added = oracle_rows(&hooks_list(&case, &cwd));
+    assert_eq!(added.len(), updated.len() + 1);
+    let new = added
+        .iter()
+        .find(|(k, _)| !updated.contains_key(*k))
+        .unwrap();
+    assert_eq!(new.1.trust, "untrusted");
+    assert_eq!(our_rows(&case, &cwd), added);
+}

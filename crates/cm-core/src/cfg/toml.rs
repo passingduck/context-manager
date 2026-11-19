@@ -6,6 +6,8 @@
 use std::fmt;
 
 use serde_json::Value;
+
+use crate::model::TomlSeg;
 use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, TableLike};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +140,153 @@ pub fn aot_remove(text: &str, path: &[&str], index: usize) -> Result<String, Tom
         table.remove(last);
     }
     Ok(doc.to_string())
+}
+
+/// Removes the key at `path`, then removes each parent table the removal left empty and that is
+/// implicit (made only to hold others), so a key `set` made from nothing leaves no header
+/// behind. The table that held the key goes when it is empty, written or not.
+pub fn remove_pruned(text: &str, path: &[&str]) -> Result<String, TomlError> {
+    let mut doc = parse(text)?;
+    let Some((last, parents)) = path.split_last() else {
+        return Err(TomlError::Shape("the path is empty".to_owned()));
+    };
+    prune(doc.as_table_mut(), parents, last);
+    Ok(doc.to_string())
+}
+
+fn prune(table: &mut dyn TableLike, parents: &[&str], last: &str) {
+    let Some((first, rest)) = parents.split_first() else {
+        table.remove(last);
+        return;
+    };
+    let Some(item) = table.get_mut(first) else {
+        return;
+    };
+    let Some(child) = item.as_table_like_mut() else {
+        return;
+    };
+    prune(child, rest, last);
+    let empty = child.is_empty();
+    let implicit = item.as_table().is_some_and(|t| t.is_implicit());
+    // The innermost parent goes when empty. Higher ones go only when implicit.
+    if empty && (rest.is_empty() || implicit) {
+        table.remove(first);
+    }
+}
+
+fn element<'a>(
+    doc: &'a mut DocumentMut,
+    path: &[TomlSeg],
+) -> Result<&'a mut dyn TableLike, TomlError> {
+    let mut table: &mut dyn TableLike = doc.as_table_mut();
+    let mut at = 0;
+    while at < path.len() {
+        let TomlSeg::Key { name } = &path[at] else {
+            return Err(TomlError::Shape("an index must follow a key".to_owned()));
+        };
+        let item = table
+            .get_mut(name)
+            .ok_or_else(|| TomlError::Shape(format!("{name} is missing")))?;
+        if let Some(TomlSeg::Index { index }) = path.get(at + 1) {
+            let aot = item
+                .as_array_of_tables_mut()
+                .ok_or_else(|| TomlError::Shape(format!("{name} is not an array of tables")))?;
+            table = aot
+                .get_mut(*index as usize)
+                .ok_or_else(|| TomlError::Shape(format!("{name}[{index}] is missing")))?;
+            at += 2;
+        } else {
+            table = item
+                .as_table_like_mut()
+                .ok_or_else(|| TomlError::Shape(format!("{name} is not a table")))?;
+            at += 1;
+        }
+    }
+    Ok(table)
+}
+
+/// Sets `key` of the table at `path` (keys and array-of-tables indices), or removes it when
+/// `value` is `None`. The rest of the table, its comments included, stays.
+pub fn table_set_key(
+    text: &str,
+    path: &[TomlSeg],
+    key: &str,
+    value: Option<&Value>,
+) -> Result<String, TomlError> {
+    let mut doc = parse(text)?;
+    let table = element(&mut doc, path)?;
+    match value {
+        None => {
+            table.remove(key);
+        }
+        Some(value) => put(table, key, to_item(value)?),
+    }
+    Ok(doc.to_string())
+}
+
+/// Makes the table at `path` hold exactly the keys of `value`. A key whose value is the same
+/// keeps its line and its comments. A key `value` lacks is removed.
+pub fn table_merge(text: &str, path: &[TomlSeg], value: &Value) -> Result<String, TomlError> {
+    let Value::Object(map) = value else {
+        return Err(TomlError::Shape("a table needs an object".to_owned()));
+    };
+    let mut doc = parse(text)?;
+    let table = element(&mut doc, path)?;
+    let stale: Vec<String> = table
+        .iter()
+        .map(|(k, _)| k.to_owned())
+        .filter(|k| !map.contains_key(k))
+        .collect();
+    for key in stale {
+        table.remove(&key);
+    }
+    for (key, v) in map {
+        if table.get(key).map(to_json).as_ref() != Some(v) {
+            put(table, key, to_item(v)?);
+        }
+    }
+    Ok(doc.to_string())
+}
+
+/// Removes the array-of-tables element that `path` ends on (`[..., Key, Index]`). An array left
+/// empty is removed. A missing element leaves the text as it was.
+pub fn element_remove(text: &str, path: &[TomlSeg]) -> Result<String, TomlError> {
+    let (Some(TomlSeg::Index { index }), Some(TomlSeg::Key { name })) =
+        (path.last(), path.len().checked_sub(2).map(|i| &path[i]))
+    else {
+        return Err(TomlError::Shape("the path must end on an index".to_owned()));
+    };
+    let mut doc = parse(text)?;
+    let table = match element(&mut doc, &path[..path.len() - 2]) {
+        Ok(table) => table,
+        Err(_) => return Ok(text.to_owned()),
+    };
+    let Some(aot) = table.get_mut(name).and_then(Item::as_array_of_tables_mut) else {
+        return Ok(text.to_owned());
+    };
+    if *index as usize >= aot.len() {
+        return Ok(text.to_owned());
+    }
+    aot.remove(*index as usize);
+    if aot.is_empty() {
+        table.remove(name);
+    }
+    Ok(doc.to_string())
+}
+
+/// Replaces a value in place, keeping the comments on its line.
+fn put(table: &mut dyn TableLike, key: &str, mut item: Item) {
+    match (table.get(key), &mut item) {
+        (Some(Item::Value(old)), Item::Value(new)) => *new.decor_mut() = old.decor().clone(),
+        (Some(Item::Table(old)), Item::Table(new)) => *new.decor_mut() = old.decor().clone(),
+        _ => {}
+    }
+    match table.get_mut(key) {
+        Some(slot) => *slot = item,
+        None => {
+            table.insert(key, item);
+        }
+    }
 }
 
 /// The table at `path`, created as a standard table where missing. Tables made only to hold
@@ -375,6 +524,42 @@ x = 1
         );
         assert_eq!(get(FILE, &["nope", "x"]).unwrap(), None);
         assert!(matches!(get("a = ", &["a"]), Err(TomlError::Parse(_))));
+    }
+
+    #[test]
+    fn removing_a_key_that_set_created_leaves_no_header() {
+        let made = set(
+            "a = 1\n",
+            &["hooks", "state", "k"],
+            &json!({"enabled": false}),
+        )
+        .unwrap();
+        assert_eq!(
+            remove_pruned(&made, &["hooks", "state", "k", "enabled"]).unwrap(),
+            "a = 1\n"
+        );
+        let kept = "[hooks.state.k]\ntrusted_hash = \"h\"   # keep\nenabled = false\n";
+        assert_eq!(
+            remove_pruned(kept, &["hooks", "state", "k", "enabled"]).unwrap(),
+            "[hooks.state.k]\ntrusted_hash = \"h\"   # keep\n"
+        );
+    }
+
+    #[test]
+    fn an_element_of_a_nested_array_of_tables_is_merged_and_removed_by_path() {
+        let text = "[[hooks.E]]\nmatcher = \"m\"\n[[hooks.E.hooks]]\ncommand = \"a\"  # c\ntimeout = 1\n[[hooks.E.hooks]]\ncommand = \"b\"\n";
+        let k = |n: &str| TomlSeg::Key { name: n.into() };
+        let i = |index: u32| TomlSeg::Index { index };
+        let handler = vec![k("hooks"), k("E"), i(0), k("hooks"), i(0)];
+        let merged = table_merge(text, &handler, &json!({"command": "a", "timeout": 2})).unwrap();
+        assert!(merged.contains("command = \"a\"  # c") && merged.contains("timeout = 2"));
+        let second = vec![k("hooks"), k("E"), i(0), k("hooks"), i(1)];
+        let removed = element_remove(text, &second).unwrap();
+        assert!(!removed.contains("\"b\"") && removed.contains("# c"));
+        let group = vec![k("hooks"), k("E"), i(0)];
+        assert_eq!(element_remove(text, &group).unwrap(), "");
+        let set_matcher = table_set_key(text, &group, "matcher", None).unwrap();
+        assert!(!set_matcher.contains("matcher"));
     }
 
     #[test]
