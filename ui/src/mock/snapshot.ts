@@ -213,7 +213,7 @@ function blocksOf(loads: Load[], exts: Extension[]): ContextBlock[] {
       parts.push({ kind: "load", load: load.id, tokens: load.delivered.tokens });
     }
     if (!parts.length) continue;
-    result.push({ delivery: deliveryOf[label], label, parts, tokens: parts.reduce((n, part) => n + part.tokens, 0), fidelity: label === "instructions" ? "exact" : "approximate" });
+    result.push({ delivery: deliveryOf[label], label, parts, tokens: parts.reduce((n, part) => n + part.tokens, 0), fidelity: label === "instructions" ? "exact" : "approximate", precededBy: result.length === 0 ? "builtIn" : null });
   }
   return result;
 }

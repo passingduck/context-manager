@@ -6,7 +6,7 @@ import type { Load } from "../gen/Load";
 import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
 import { LABEL_COLOR } from "../lib/loads";
-import { buildPrefix, buildRows, exact, ticks, type Prefix, type Seg } from "../lib/prefix";
+import { buildPrefix, buildRows, exact, stubsBefore, ticks, unsizedAfter, type Prefix, type Seg } from "../lib/prefix";
 import type { Route } from "../lib/route";
 
 type Go = (patch: Partial<Route>) => void;
@@ -16,6 +16,16 @@ const STRIP_H = 34;
 const STUB_W = 88;
 
 const pct = (n: number, total: number) => `${(n / total) * 100}%`;
+
+/** Token positions as CSS lengths. Each stub takes a fixed width, and the tokens share the rest of the bar. */
+function scale(prefix: Prefix) {
+  const room = `(100% - ${prefix.stubs.length * STUB_W}px)`;
+  return {
+    /** The left edge of a token position. A stub at that position lies before it on side "after", after it on side "before". */
+    at: (tokens: number, side: "before" | "after") => `calc(${room} * ${tokens / prefix.total} + ${stubsBefore(prefix, tokens, side) * STUB_W}px)`,
+    width: (tokens: number) => `calc(${room} * ${tokens / prefix.total})`,
+  };
+}
 const hatch = "repeating-linear-gradient(135deg, color-mix(in srgb, var(--bg) 38%, transparent) 0 2px, transparent 2px 7px)";
 
 /** Name of a file as the tree shows it: the extension name for a catalog line, else the display path. */
@@ -52,6 +62,7 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
   const [rowsOpen, setRowsOpen] = useState(false);
   const stripRef = useRef<HTMLDivElement>(null);
   const { segs, total } = prefix;
+  const place = scale(prefix);
   const files = segs.filter((seg) => seg.load);
   const selectedFile = route.sel.startsWith("file:") ? route.sel.slice(5) : "";
   const isSelected = (seg: Seg) => seg.load !== null && seg.load.file === selectedFile && (route.ag === "" || route.ag === view.agent);
@@ -79,18 +90,19 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
       <p className="mb-1.5 max-w-3xl text-[12px] text-muted">
         <b className="text-fg">{t.prefix.title}.</b> {intro && t.prefix.intro}
       </p>
-      <div className="relative grid" style={{ gridTemplateColumns: `${STUB_W}px 1fr`, columnGap: 4 }}>
-        <div className="relative border-b border-transparent" style={{ height: CAPTION_H + STRIP_H }} title={t.prefix.stubTitle}>
-          <p className="break-keep text-[10px] leading-3 text-faint" style={{ height: CAPTION_H }}>{t.prefix.stubCaption}</p>
-          <div aria-hidden className="absolute inset-x-0 bottom-0 border-y-2 border-dashed border-faint bg-sunken" style={{ height: STRIP_H, clipPath: "polygon(0 0, 100% 0, 92% 25%, 100% 50%, 92% 75%, 100% 100%, 0 100%)" }} />
-        </div>
-
+      <div className="relative">
         <div className="relative" style={{ height: CAPTION_H + STRIP_H }}>
+          {prefix.stubs.map((stub) => (
+            <div key={stub.block} data-stub={stub.kind} className="absolute top-0" style={{ left: place.at(stub.at, "before"), width: STUB_W, height: CAPTION_H + STRIP_H }} title={t.prefix.stub[stub.kind].title}>
+              <p className="break-keep pr-1 text-[10px] leading-3 text-faint" style={{ height: CAPTION_H }}>{t.prefix.stub[stub.kind].caption}</p>
+              <div aria-hidden className="absolute inset-x-0 bottom-0 border-y-2 border-dashed border-faint bg-sunken" style={{ height: STRIP_H, clipPath: "polygon(0 0, 100% 0, 92% 25%, 100% 50%, 92% 75%, 100% 100%, 0 100%)" }} />
+            </div>
+          ))}
           {prefix.blocks.map((pb) => (
             <div
               key={pb.index}
               className="pointer-events-none absolute inset-y-0 min-w-0 overflow-hidden border-l-2 border-fg-faint pl-1"
-              style={{ left: pct(pb.start, total), width: pct(pb.end - pb.start, total), height: CAPTION_H }}
+              style={{ left: place.at(pb.start, "after"), width: place.width(pb.end - pb.start), height: CAPTION_H }}
               title={`${t.blockLabel[pb.block.label]}, ${t.delivery[pb.block.delivery]}, ${t.fidelity[pb.block.fidelity]}, ${t.prefix.blockRange(exact(pb.start), exact(pb.end))}`}
             >
               <p className="truncate text-[11px] font-semibold leading-4">{t.blockLabel[pb.block.label]}</p>
@@ -113,8 +125,8 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
               const color = load ? LABEL_COLOR[block.label] : "var(--fg-faint)";
               const alt = load ? files.filter((f) => f.block === seg.block && f.index < seg.index).length % 2 === 1 : false;
               const style: CSSProperties = {
-                left: pct(seg.start, total),
-                width: pct(seg.tokens, total),
+                left: place.at(seg.start, "after"),
+                width: place.width(seg.tokens),
                 minWidth: load ? 6 : 2,
               };
               const fill = load ? `color-mix(in srgb, ${color} ${alt ? 68 : 100}%, var(--bg))` : "var(--line)";
@@ -155,23 +167,22 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
             })}
             {activeSeg && activeSeg.end < total && (
               <>
-                <div aria-hidden data-tail className="pointer-events-none absolute inset-y-0 z-[3]" style={{ left: pct(activeSeg.end, total), right: 0, background: `${hatch}, color-mix(in srgb, var(--bg) 35%, transparent)`, backdropFilter: "grayscale(1)" }} />
-                <div aria-hidden className="pointer-events-none absolute z-[3] h-1.5 border-b-2 border-l-2 border-r-2 border-warn" style={{ left: pct(activeSeg.end, total), right: 0, bottom: -8 }} />
+                <div aria-hidden data-tail className="pointer-events-none absolute inset-y-0 z-[3]" style={{ left: place.at(activeSeg.end, "before"), right: 0, background: `${hatch}, color-mix(in srgb, var(--bg) 35%, transparent)`, backdropFilter: "grayscale(1)" }} />
+                <div aria-hidden className="pointer-events-none absolute z-[3] h-1.5 border-b-2 border-l-2 border-r-2 border-warn" style={{ left: place.at(activeSeg.end, "before"), right: 0, bottom: -8 }} />
               </>
             )}
           </div>
         </div>
 
-        <span />
         <div className="relative h-6">
-          <Axis total={total} />
+          <Axis total={total} at={(v) => place.at(v, v === 0 ? "after" : "before")} />
         </div>
 
         {tooltip && (
           <div
             role="tooltip"
             className="pointer-events-none absolute z-10 w-[22rem] rounded border border-line bg-bg p-2 text-[12px] shadow-lg"
-            style={{ top: "100%", left: `clamp(0px, calc(${STUB_W + 4}px + (100% - ${STUB_W + 4}px) * ${(activeSeg!.start + activeSeg!.end) / 2 / total} - 11rem), calc(100% - 22rem))` }}
+            style={{ top: "100%", left: `clamp(0px, calc(${place.at((activeSeg!.start + activeSeg!.end) / 2, "after")} - 11rem), calc(100% - 22rem))` }}
           >
             {tooltip}
           </div>
@@ -217,6 +228,7 @@ function Tooltip({ seg, view, total, prefix }: { seg: Seg; view: AgentView; tota
   const load = seg.load!;
   const block = prefix.blocks[seg.block]!.block;
   const after = total - seg.end;
+  const unsized = unsizedAfter(prefix, seg.end);
   return (
     <>
       <p className="mb-1 break-all font-mono font-semibold">{load.kind === "listing" ? `${name(load)} (${project.display(load.file)})` : project.display(load.file)}</p>
@@ -232,20 +244,22 @@ function Tooltip({ seg, view, total, prefix }: { seg: Seg; view: AgentView; tota
           {t.blockLabel[block.label]}, {t.delivery[block.delivery]}, {t.fidelity[block.fidelity]}
         </dd>
         <dt className="text-muted">{t.prefix.after}</dt>
-        <dd className="tabular-nums">{t.prefix.afterText(exact(after))}</dd>
+        <dd className="tabular-nums">{unsized.length > 0 ? t.prefix.afterAtLeast(exact(after)) : t.prefix.afterText(exact(after))}</dd>
       </dl>
-      <p className="mt-1.5 border-t border-line pt-1.5 text-muted">{after > 0 ? t.prefix.tail(exact(after)) : t.prefix.tailNone}</p>
+      <p className="mt-1.5 border-t border-line pt-1.5 text-muted">
+        {unsized.length > 0 ? t.prefix.tailAtLeast(exact(after), unsized.map((kind) => t.prefix.unsizedName[kind]).join(", ")) : after > 0 ? t.prefix.tail(exact(after)) : t.prefix.tailNone}
+      </p>
     </>
   );
 }
 
-function Axis({ total, narrow = false }: { total: number; narrow?: boolean }) {
+function Axis({ total, narrow = false, at }: { total: number; narrow?: boolean; at?: (tokens: number) => string }) {
   const marks = ticks(total).filter((v) => v === 0 || v / total < (narrow ? 0.8 : 0.93));
   return (
     <div aria-hidden className="relative h-full text-[10px] tabular-nums text-faint">
       <div className="absolute inset-x-0 top-0 h-px bg-line" />
       {marks.map((v) => (
-        <span key={v} className="absolute top-0" style={{ left: pct(v, total) }}>
+        <span key={v} className="absolute top-0" style={{ left: at ? at(v) : pct(v, total) }}>
           <span className="block h-1.5 w-px bg-fg-faint" />
           <span className="block" style={{ transform: v === 0 ? undefined : "translateX(-50%)" }}>{fmt.tokens(v)}</span>
         </span>

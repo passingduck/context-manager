@@ -6,6 +6,7 @@ import type { BlockLabel } from "../gen/BlockLabel";
 import type { ChangeEdit } from "../gen/ChangeEdit";
 import type { ChangeState } from "../gen/ChangeState";
 import type { Delivery } from "../gen/Delivery";
+import type { Unsized } from "../gen/Unsized";
 import type { DisabledBy } from "../gen/DisabledBy";
 import type { DocKind } from "../gen/DocKind";
 import type { ExtKind } from "../gen/ExtKind";
@@ -313,8 +314,20 @@ export const en = {
     title: "Prefix map",
     intro: "A provider can reuse a saved copy of the start of a prompt only while that start stays exactly the same. That start is the prefix. This bar lays out what the agent sends at session start, in the order it sends it.",
     groupLabel: (name: string) => `Prefix map of ${name}`,
-    stubCaption: "Built-in, size unknown",
-    stubTitle: "Before these blocks the agent sends its built-in prompt and its tool definitions. A scan cannot measure them, so this stub is not to scale.",
+    stub: {
+      builtIn: {
+        caption: "Built-in, size unknown",
+        title: "Before these blocks the agent sends its built-in prompt and its tool definitions. A scan cannot measure them, so this stub is not to scale.",
+      },
+      firstPrompt: {
+        caption: "First prompt, size unknown",
+        title: "Before this block the agent sends your first prompt and the context it adds around it, such as the git status. A scan cannot measure them, so this stub is not to scale.",
+      },
+    } satisfies Record<Unsized, { caption: string; title: string }>,
+    unsizedName: {
+      builtIn: "the built-in prompt and tool definitions",
+      firstPrompt: "the first prompt and the context around it",
+    } satisfies Record<Unsized, string>,
     blockRange: (from: string, to: string) => `tokens ${from} to ${to}`,
     axis: "Tokens counted from the start of the first block the scan knows",
     legendExact: "Solid: exact text",
@@ -330,7 +343,9 @@ export const en = {
     after: "Comes after it",
     positionText: (from: string, to: string, total: string) => `${from} to ${to} of ${total}`,
     afterText: (n: string) => `${n} tokens`,
+    afterAtLeast: (n: string) => `at least ${n} tokens`,
     tail: (n: string) => `If this file changes, the prefix differs from here on. A cache that matches by exact prefix cannot reuse the ${n} tokens after it. This follows from the order. It is not a measurement of any cache.`,
+    tailAtLeast: (n: string, what: string) => `If this file changes, the prefix differs from here on. A cache that matches by exact prefix cannot reuse the text after it. That is ${n} tokens that a scan counted, plus ${what}, which a scan cannot measure. So ${n} is a lower bound. This follows from the order. It is not a measurement of any cache.`,
     tailNone: "Nothing comes after this file, so a change to it affects no later text.",
     glueTitle: (n: number) => `Glue between files, ${n} tokens`,
     segLabel: (name: string, tokens: string, from: string, to: string) => `${name}, ${tokens} tokens, from ${from} to ${to}`,
@@ -680,6 +695,7 @@ export const en = {
   } satisfies Record<BlockLabel, string>,
   delivery: {
     systemPrompt: "System prompt",
+    systemMessage: "System message",
     userMessage: "User message",
     developerMessage: "Developer message",
     toolSpec: "Tool description",
