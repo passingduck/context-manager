@@ -9,6 +9,7 @@ import type { Load } from "../gen/Load";
 import { useI18n } from "../i18n";
 import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
+import { exact, positionOf } from "../lib/prefix";
 import { activationTone, statusTone, truncationLine } from "../lib/loads";
 import type { Route } from "../lib/route";
 import { isDirty, setBuffer, useBuffer } from "../write/buffers";
@@ -60,6 +61,13 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
   }, [project.snapshot, path, route.ag]);
   const rev = entry?.state.kind === "present" ? entry.state.rev : "none";
   const file = useFile(project.cwd, entry?.state.kind === "present" ? path : null, rev);
+  const places = useMemo(
+    () => project.snapshot.agents.flatMap((view) => {
+      const pos = positionOf(view, path);
+      return pos ? [{ agent: view.agent, pos }] : [];
+    }),
+    [project.snapshot, path],
+  );
   const lead = uses[0];
   const cutLine = lead && file.data?.text ? truncationLine(file.data.text, lead.load.status) : null;
   const write = useWrite();
@@ -142,6 +150,21 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
         {entry.realPath && <p className="mt-1 text-muted">{t.detail.symlink(d(entry.realPath))}</p>}
         {entry.policy.kind === "readOnly" && <p className="mt-1 text-muted">{t.detail.readOnlyFile} {say(t.readOnlyWhy, entry.policy.why, d)}</p>}
       </header>
+
+      {places.length > 0 && (
+        <section className="border-b border-line px-4 py-2" aria-label={t.prefix.detailTitle}>
+          <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.prefix.detailTitle}</h3>
+          <ul className="space-y-0.5">
+            {places.map(({ agent, pos }) => (
+              <li key={agent} data-prefix-position={agent} className="flex items-baseline gap-2">
+                <span className="size-2 shrink-0 rounded-full" style={{ background: project.color(agent) }} aria-hidden />
+                <b>{project.name(agent)}</b>
+                <span className="tabular-nums">{t.prefix.detailLine(t.prefix.positionText(exact(pos.seg.start), exact(pos.seg.end), exact(pos.total)), t.prefix.afterText(exact(pos.after)))}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="px-4 py-3" aria-label={t.detail.why}>
         <h3 className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.detail.why}</h3>
