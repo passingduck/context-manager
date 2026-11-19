@@ -20,6 +20,11 @@ pub struct Scanned {
 }
 
 impl Scanned {
+    /// The cache this scan read through. A plan reads the same bytes the snapshot describes.
+    pub fn fs(&self) -> &ProbeFs {
+        &self.fs
+    }
+
     /// The text of a file in the snapshot, as the scan saw it. `None` when the path is not in it.
     pub fn file_content(&self, path: &AbsPath) -> Option<FileContent> {
         let entry = self.snapshot.files.get(path)?;

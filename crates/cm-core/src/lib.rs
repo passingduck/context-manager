@@ -4,11 +4,13 @@
 pub mod agents;
 pub mod api;
 pub mod cfg;
+pub mod edit;
 pub mod env;
 pub mod glob;
 pub mod limits;
 pub mod md;
 pub mod model;
+pub mod parked;
 pub mod probe_fs;
 pub mod scan;
 #[cfg(any(test, feature = "testing"))]

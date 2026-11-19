@@ -9,6 +9,11 @@ publish.workspace = true
 cm-core.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+serde.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+trash.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 cm-core = { workspace = true, features = ["testing"] }
