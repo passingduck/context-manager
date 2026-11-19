@@ -293,13 +293,14 @@ fn collect(cx: &ScanCx, setup: &Setup, plugins: &[Plugin]) -> Vec<Cand> {
         for (name, file) in skill_dirs(cx, &synced.join(&bucket)) {
             cands.push(Cand {
                 kind: ExtKind::Skill,
-                name: format!("anthropic-skills:{name}"),
+                name,
                 file,
                 scope: Scope::User,
                 source: Source::Synced,
                 prio: 90,
                 plugin: None,
-                plugin_prefix: None,
+                // The full name is `anthropic-skills:<name>`.
+                plugin_prefix: Some("anthropic-skills".to_owned()),
                 nested_dir: None,
             });
         }
