@@ -146,3 +146,93 @@ fn a_settings_file_over_8_mib_is_listed_and_not_read() {
         "the hook inside a 9 MiB settings file shows that the adapter read it"
     );
 }
+
+/// The reviewer's fan-out: `<root>.md` and `a.md` to `d.md` each hold `k` lines that import the
+/// next file, and `e.md` is a leaf.
+fn fan_out(fx: &Fixture, root: &str, k: usize) {
+    let names = [root, "a", "b", "c", "d", "e"];
+    for pair in names.windows(2) {
+        let text: String = (0..k)
+            .map(|line| format!("line {line} @./{}.md\n", pair[1]))
+            .collect();
+        fx.write(&fx.project_path(&format!("{}.md", pair[0])), &text);
+    }
+    fx.write(&fx.project_path("e.md"), "leaf\n");
+}
+
+fn view<'a>(scanned: &'a Scanned, agent: &str) -> &'a AgentView {
+    scanned
+        .snapshot
+        .agents
+        .iter()
+        .find(|view| view.agent.as_str() == agent)
+        .unwrap()
+}
+
+#[test]
+fn gemini_imports_that_multiply_stop_at_the_node_budget() {
+    let fx = project(&[]);
+    fan_out(&fx, "GEMINI", 10);
+    let scanned = scan_within_a_second(fx.env(), "Gemini imports that multiply, k = 10");
+
+    let root = fx.project_path("GEMINI.md");
+    let budget: Vec<_> = scanned
+        .snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.problem, Problem::ImportBudgetExhausted { .. }))
+        .map(|d| (&d.at, &d.problem))
+        .collect();
+    assert_eq!(
+        budget,
+        [(
+            &Subject::File {
+                path: root.clone(),
+                line: None
+            },
+            &Problem::ImportBudgetExhausted { max: 1_000 }
+        )],
+        "one diagnostic names GEMINI.md and the budget of 1,000 imports"
+    );
+    let gemini = view(&scanned, "gemini");
+    let host = gemini
+        .loads
+        .iter()
+        .find(|load| load.file == root && matches!(load.via, Via::Discovery { .. }))
+        .unwrap();
+    let block = gemini
+        .session
+        .iter()
+        .find(|block| {
+            block
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::Load { load, .. } if *load == host.id))
+        })
+        .unwrap();
+    assert_eq!(
+        block.fidelity,
+        Fidelity::Approximate,
+        "the block that carries GEMINI.md is marked as not exact"
+    );
+}
+
+#[test]
+fn claude_imports_of_the_same_shape_stay_linear() {
+    for k in [10, 40] {
+        let fx = project(&[]);
+        fan_out(&fx, "CLAUDE", k);
+        let scanned = scan_within_a_second(
+            fx.env(),
+            &format!("Claude imports of the fan-out shape, k = {k}"),
+        );
+        let imports = view(&scanned, "claude")
+            .loads
+            .iter()
+            .filter(|load| matches!(load.via, Via::Import { .. }))
+            .count();
+        // Claude loads a file once per session, so every token is one load: k in each of the
+        // four files that load, and k too deep in the fifth.
+        assert_eq!(imports, 5 * k, "Claude import loads for k = {k}");
+    }
+}
