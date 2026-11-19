@@ -302,7 +302,8 @@ pub enum Warning {
     AgentAlsoWrites { agent: AgentId },   // Codex config.toml, Gemini settings.json, Claude settings.local.json
     SessionMayOverwrite { agent: AgentId }, // Gemini rewrites settings.json from its startup snapshot
     SharedFile { agents: Vec<AgentId> },  // the file is read by more than one agent
-    ThroughSymlink { target: AbsPath },
+    ThroughSymlink { target: AbsPath },   // the path, or a directory above it below the slot's root, is a symlink: the write lands at `target`
+    HardLinked { links: u32 },       // the file has other names: the write goes in place and changes all of them
     TakesEffect { agent: AgentId, when: RuleRef },   // next session, /reload-plugins, /memory reload
     NewImportToken { raw: String },  // Gemini: a new "@word" becomes an import attempt
     ParkedOnThisMachine,             // a parked Claude hook exists only in this tool's data directory
@@ -327,16 +328,16 @@ Higher-level edits compile to whole-file operations inside `plan`. Deleting a Cl
 
 `plan(edit)` returns a `Preview`. `apply(edit, digest)` takes the same edit and the digest of the preview the user saw. The client never sends file operations, so no mutation can skip the planner, and the tool's own parked-hook files cannot be written directly.
 
-A plan fails in three ways that `plan` and `apply` share. A base that no longer matches the disk is a `Conflict`. A path that is not an `Editable` file of a fresh snapshot, a slot, or the tool's parked-hook directory is `OutsideBoundary`. A change that an agent's guard refuses is `Forbidden`: the Codex guard refuses any change to `hooks.state.*.trusted_hash` or `trusted_content_hash`, so this tool cannot approve a hook on the user's behalf.
+A plan fails in three ways that `plan` and `apply` share. A base that no longer matches the disk is a `Conflict`. A path that is not an `Editable` file of a fresh snapshot, a slot, or the tool's parked-hook directory is `OutsideBoundary`. A path that is a symlink to nothing is an `InvalidEdit`: the tool does not create a file through a link. A change that an agent's guard refuses is `Forbidden`: the Codex guard refuses any change to `hooks.state.*.trusted_hash` or `trusted_content_hash`, so this tool cannot approve a hook on the user's behalf.
 
 ### The apply pipeline
 
-One mutex per process serializes `apply`.
+One mutex per process serializes `apply`, and a lock on a file in the data directory serializes it across processes. `apply` holds the lock from step 2 to step 5. Recovery takes the same lock without waiting. When another process holds it, that process is applying a change, so recovery leaves the pending records and the temp files alone in this round.
 
 1. **Policy.** Refuse when the host runs with `--read-only`.
 2. **Plan again.** Run a fresh scan of `cwd` and plan the edit against it. If the plan is empty, return `AlreadyApplied`. If its digest differs from the one the client sent, the disk changed after the preview: return `Stale` with the new preview and write nothing.
 3. **Journal.** Store the before and after content of each file as blobs named by their hash. Then write `changes/<id>.pending.json`. Each write is a temp file, a sync and a rename.
-4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
+4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). A file that has more than one hard link is written in place instead, because a rename would leave the other names on the old content. `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
 5. **Seal.** Write `changes/<id>.json` and remove the pending file.
 
 | crash point | left on disk | what recovery does |
@@ -388,10 +389,10 @@ pub fn registry() -> &'static [&'static dyn Agent];
 
 `ScanCx` hands every adapter the same shared parts:
 
-- **`ProbeFs`.** The only way an adapter reads the disk. It caches bytes for the length of one scan, so two agents that read `AGENTS.md` see one revision. It records every path read, listed or checked, misses included. That record is the input of the fingerprint (section 8).
+- **`ProbeFs`.** The only way an adapter reads the disk. `read` returns the bytes of a regular file of at most 8 MiB and a typed refusal for anything else, so no caller needs its own check. It caches bytes for the length of one scan, so two agents that read `AGENTS.md` see one revision. It records every path read, listed or checked, misses included. That record is the input of the fingerprint (section 8).
 - **`ScanEnv`.** `cwd`, `home`, the OS, and the environment variables that move things (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `GEMINI_CLI_HOME` and the others the specs list). Built once at the boundary. Adapters never read the process environment.
 - **The project walk.** One bounded walk of the project tree for all agents (20,000 entries, gitignore-aware, hidden directories skipped except `.claude`, `.codex`, `.gemini`, `.agents`).
-- **Markdown engines.** Frontmatter parsing. Token spans for links, backticks and `@`, with code regions marked. The import expander, which takes an `ImportRules` value: token syntax, resolution base, allowed root, maximum depth, cycle policy, which code regions to skip.
+- **Markdown engines.** Frontmatter parsing. Token spans for links, backticks and `@`, with code regions marked. The import expander, which takes an `ImportRules` value: token syntax, resolution base, allowed root, maximum depth, cycle policy, which code regions to skip. It also takes a budget of import nodes per root file, because a per-chain cycle policy lets the same file expand once per path that reaches it.
 - **The tokenizer.** `o200k_base`, with counts cached by revision.
 
 `on_access` is the one implementation of an agent's conditional rules. `scan` builds its `OnAccess` loads by calling it for each directory the walk visits. `simulate` evaluates those loads for a target path, and calls `on_access` again only for directories between `cwd` and the target that the walk skipped, such as ignored ones.
@@ -493,7 +494,8 @@ Hooks are commands, so write access to this tool is command execution on the hos
 | a stolen token writes arbitrary files | the client sends edits, never file operations, and a plan refuses any path outside a fresh snapshot (section 4). `run_hook` runs only a hook in the current snapshot |
 | hostile repository content | file text renders as text. The markdown preview has raw HTML off. CSP `default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'` |
 | the operator only wants to look | `--read-only` rejects `apply` and `run_hook` in one place |
-| resource exhaustion | request body limit 8 MiB, files over 8 MiB are not read, the walk stops at 20,000 entries, search returns at most 500 hits |
+| resource exhaustion by a client | request body limit 8 MiB, search returns at most 500 hits |
+| resource exhaustion by repository content | `ProbeFs::read` reads regular files only and at most 8 MiB, so a link to a device or a named pipe is refused before it is opened. The walk stops at 20,000 entries. Brace expansion, frontmatter nesting and import expansion each have a budget that is enforced while the work runs, never after it. An exceeded budget is a diagnostic or a skip reason on that file, and the scan goes on |
 
 There is no TLS in the first version. The documented path to a remote host is an SSH tunnel to a loopback bind.
 
@@ -605,6 +607,8 @@ Three candidates wrote this design independently against one grounding file: one
 
 **Changed after the security review.** The first version of this section had recovery finish a pending change on its own ("roll forward"). A reviewer showed two ways that goes wrong: a save that failed with a permission error was applied silently on a later history read, and a file that returned to its old content (a `git checkout`) was overwritten at the next start. Recovery now only classifies, a failed apply undoes itself, and the user decides about anything in between.
 
+**Added after the security review (second batch).** The reviewer reproduced six more defects, and each one became a rule above: a trash of a nested Gemini context file took its whole directory, because a slot shape meant for directory items was reused for "a file in any subdirectory" (the rule on directory items now reads from the snapshot, not from the path); a link to `/dev/zero` at a settings path made a scan run without end (the one reader now checks kind and size); Gemini imports multiplied with every sibling (the expander has a node budget); a save through a dangling link created a file outside the project (refused); a save split hard links (written in place); and a second instance finished or broke the first instance's change (the data directory lock).
+
 ## Deviations
 
 - Contract unit: `Preview` gains `conflicts: Vec<Conflict>`, because section 4 says a revert reports a file at neither state "as a conflict in the preview" and the listing has no field for it.
@@ -612,7 +616,7 @@ Three candidates wrote this design independently against one grounding file: one
 - Contract unit: `ApiError::ReadOnly`, `InvalidEdit` and `Forbidden` carry `why: RuleRef` instead of prose. `ExtStatus::Shadowed { by }` holds an `ExtId`.
 - Write pipeline unit: `parked.rs` (the record type, its path rule and the scan's read) lives in `cm-core`, not `cm-host`, because the Claude planner in `cm-core` must build the record. It still writes nothing: the planner emits the record as an ordinary `Write` operation, and `apply` writes it.
 - Write pipeline unit: `HostConfig` gains `data_dir`, and `PlanCx` gains `snapshot` and `parked_dir`. Neither is in `model.rs` or the `api!` table.
-- Write pipeline unit: `Edit::Trash` on the entry file of a `NamedDir` slot (`skills/<name>/SKILL.md`) plans `TrashDir` over the directory with `Base::Tree`. The client sends no tree hash; the plan computes it, so a file added to the directory between `plan` and `apply` yields `Stale`. A `Save` carries its own base, so an outside write between `plan` and `apply` yields `Conflict`, not `Stale`.
+- Write pipeline unit: `Edit::Trash` on the entry file of a directory item plans `TrashDir` over the directory with `Base::Tree`. A file is such an entry only when the snapshot lists it as the entry of an extension whose slot is a directory item (`skills/<name>/SKILL.md`). Any other file goes to the trash alone, whatever slot its path matches. The client sends no tree hash; the plan computes it, so a file added to the directory between `plan` and `apply` yields `Stale`. A `Save` carries its own base, so an outside write between `plan` and `apply` yields `Conflict`, not `Stale`.
 - Write pipeline unit: a directory that goes to the trash is journaled as one operation per UTF-8 file plus a last operation with neither blob, which stands for the directory. A directory over 16 MiB, or holding a file that is not UTF-8, warns `NotRevertible` and journals only what it can restore as text.
 - Write pipeline unit: `Revert` accepts paths outside the snapshot (a trashed file is no longer in it). It still refuses a path the snapshot marks read only, and the guards still run. Reverting a record that never finished seals that record, so recovery does not roll it forward again.
 - Write pipeline unit: recovery marks a pending record with an edited file as `NeedsAttention` in its `.pending.json`. The files it names are in the `Report` that `recover` returns, not in `ChangeRecord`.
