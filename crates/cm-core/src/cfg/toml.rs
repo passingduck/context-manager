@@ -528,8 +528,16 @@ x = 1
 
     #[test]
     fn removing_a_key_that_set_created_leaves_no_header() {
-        let made = set("a = 1\n", &["hooks", "state", "k"], &json!({"enabled": false})).unwrap();
-        assert_eq!(remove_pruned(&made, &["hooks", "state", "k", "enabled"]).unwrap(), "a = 1\n");
+        let made = set(
+            "a = 1\n",
+            &["hooks", "state", "k"],
+            &json!({"enabled": false}),
+        )
+        .unwrap();
+        assert_eq!(
+            remove_pruned(&made, &["hooks", "state", "k", "enabled"]).unwrap(),
+            "a = 1\n"
+        );
         let kept = "[hooks.state.k]\ntrusted_hash = \"h\"   # keep\nenabled = false\n";
         assert_eq!(
             remove_pruned(kept, &["hooks", "state", "k", "enabled"]).unwrap(),

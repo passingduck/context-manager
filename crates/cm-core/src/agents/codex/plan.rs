@@ -46,7 +46,9 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
             body,
         } if *agent == me() => Some(add_memory(cx, store, title, description, body)),
         Edit::AddHook { agent, file, draft } if *agent == me() => Some(add_hook(cx, file, draft)),
-        Edit::UpdateHook { hook, draft } => on_hook(cx, hook, |cx, hook| update_hook(cx, hook, draft)),
+        Edit::UpdateHook { hook, draft } => {
+            on_hook(cx, hook, |cx, hook| update_hook(cx, hook, draft))
+        }
         Edit::RemoveHook { hook } => on_hook(cx, hook, remove_hook),
         Edit::SetHookEnabled { hook, enabled } => {
             on_hook(cx, hook, |cx, hook| set_enabled(cx, hook, *enabled))
@@ -196,9 +198,7 @@ fn new_item(cx: &PlanCx, slot: &SlotId, name: Option<&str>) -> Result<Preview, A
                 .ok_or_else(|| invalid("name", RULE_NAME))?;
             (
                 dir.join(&format!("{name}.{}", ext.trim_start_matches('.'))),
-                format!(
-                    "name = \"{name}\"\ndescription = \"Describe what this subagent does.\"\n"
-                ),
+                format!("name = \"{name}\"\ndescription = \"Describe what this subagent does.\"\n"),
             )
         }
         (NewItemKind::Rule, Place::NamedFile { dir, ext }) => {
@@ -238,7 +238,11 @@ fn slug(title: &str) -> String {
         }
     }
     let out: String = out.trim_end_matches('-').chars().take(60).collect();
-    if out.is_empty() { "note".to_owned() } else { out }
+    if out.is_empty() {
+        "note".to_owned()
+    } else {
+        out
+    }
 }
 
 fn add_memory(
@@ -436,8 +440,9 @@ fn add_hook(cx: &PlanCx, file: &AbsPath, draft: &HookDraft) -> Result<Preview, A
 /// The group the hook sits in, read from the file, with the handler checked against the scan.
 fn group_in(text: &str, hook: &Hook, at: &At) -> Result<Json, ApiError> {
     let group = match &at.toml {
-        None => jsonc::get(text, &format!("/hooks/{}/{}", at.event, at.group))
-            .map_err(unreadable)?,
+        None => {
+            jsonc::get(text, &format!("/hooks/{}/{}", at.event, at.group)).map_err(unreadable)?
+        }
         Some(_) => toml::get(text, &["hooks", &at.event])
             .map_err(unreadable)?
             .and_then(|groups| groups.get(at.group).cloned()),
@@ -447,7 +452,11 @@ fn group_in(text: &str, hook: &Hook, at: &At) -> Result<Json, ApiError> {
         .get("hooks")
         .and_then(|h| h.get(at.handler))
         .is_some_and(|h| *h == hook.handler.raw);
-    if same { Ok(group) } else { Err(ApiError::NotFound) }
+    if same {
+        Ok(group)
+    } else {
+        Err(ApiError::NotFound)
+    }
 }
 
 fn handlers_in(group: &Json) -> usize {
@@ -458,7 +467,10 @@ fn handlers_in(group: &Json) -> usize {
 }
 
 fn group_path(at: &At) -> Vec<TomlSeg> {
-    at.toml.as_ref().map(|p| p[..3].to_vec()).unwrap_or_default()
+    at.toml
+        .as_ref()
+        .map(|p| p[..3].to_vec())
+        .unwrap_or_default()
 }
 
 fn remove_entry(text: &str, at: &At, group: &Json) -> Result<String, ApiError> {

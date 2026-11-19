@@ -186,7 +186,10 @@ fn json_update_changes_only_the_entry() {
     assert!(now.contains("echo changed"));
     let mut hooks = parsed_hooks(&home);
     hooks.sort();
-    assert_eq!(hooks, ["echo changed", "echo one", "echo stop", "echo three"]);
+    assert_eq!(
+        hooks,
+        ["echo changed", "echo one", "echo stop", "echo three"]
+    );
     // An update to the same entry plans to nothing.
     let same = home.hook("echo changed");
     let again = home
@@ -277,7 +280,9 @@ fn toml_add_and_remove_round_trip_and_keep_comments_and_state() {
     let (gone, added) = changed(TOML_FILE, &after);
     assert!(gone.is_empty(), "an add removes no byte: {gone:?}");
     assert!(added.contains("echo new"));
-    assert!(after.contains("# first group") && after.contains("# five") && after.contains("# approved"));
+    assert!(
+        after.contains("# first group") && after.contains("# five") && after.contains("# approved")
+    );
     let new = home.hook("echo new");
     assert_eq!(new.handler.raw["x-unknown"], json!([1, 2]));
     assert_eq!(new.matcher.raw.as_deref(), Some("Write"));
@@ -299,8 +304,15 @@ fn toml_update_changes_only_the_entry_and_keeps_the_neighbours_comments() {
     });
     let after = home.state();
     let (was, now) = changed(TOML_FILE, &after);
-    assert_eq!((was.as_str(), now.as_str()), ("one", "uno"), "only that word changed");
-    assert!(after.contains("# five"), "an unchanged field keeps its comment");
+    assert_eq!(
+        (was.as_str(), now.as_str()),
+        ("one", "uno"),
+        "only that word changed"
+    );
+    assert!(
+        after.contains("# five"),
+        "an unchanged field keeps its comment"
+    );
     assert!(parsed_hooks(&home).contains(&"echo uno".to_owned()));
     assert!(!parsed_hooks(&home).contains(&"echo one".to_owned()));
 }
@@ -314,7 +326,11 @@ fn toml_removing_the_last_handler_of_a_group_and_event_leaves_no_shell() {
     let after = home.state();
     assert!(!after.contains("Stop"), "{after}");
     assert!(after.contains("[hooks.state.\"some:other:key\"]"));
-    assert!(toml::get(&after, &["hooks", "PreToolUse"]).unwrap().is_some());
+    assert!(
+        toml::get(&after, &["hooks", "PreToolUse"])
+            .unwrap()
+            .is_some()
+    );
     home.run(&Edit::RemoveHook {
         hook: home.hook("echo one").id,
     });
@@ -348,7 +364,11 @@ fn toml_hook_with_a_nested_input_table_reads_back_as_written() {
 
 #[test]
 fn switching_off_and_on_restores_the_file_and_a_second_switch_plans_nothing() {
-    for (start, name) in [(TOML_FILE, "with state"), ("", "empty"), ("model = \"x\"\n", "short")] {
+    for (start, name) in [
+        (TOML_FILE, "with state"),
+        ("", "empty"),
+        ("model = \"x\"\n", "short"),
+    ] {
         let home = Home::new();
         home.write("hooks.json", JSON_FILE);
         if !start.is_empty() {
@@ -362,7 +382,10 @@ fn switching_off_and_on_restores_the_file_and_a_second_switch_plans_nothing() {
         assert!(!off.warnings.contains(&Warning::HookTrustReset));
         let state = home.state();
         assert!(state.contains("enabled = false"), "{name}: {state}");
-        assert!(state.contains("hooks.json:pre_tool_use:0:1"), "{name}: {state}");
+        assert!(
+            state.contains("hooks.json:pre_tool_use:0:1"),
+            "{name}: {state}"
+        );
         assert!(
             !state.contains("trusted_hash") || state.contains("sha256:abc"),
             "no hash is written"
@@ -380,7 +403,10 @@ fn switching_off_and_on_restores_the_file_and_a_second_switch_plans_nothing() {
                 enabled: false,
             })
             .unwrap();
-        assert!(again.change_set.ops.is_empty(), "{name}: a second off is a no-op");
+        assert!(
+            again.change_set.ops.is_empty(),
+            "{name}: a second off is a no-op"
+        );
 
         home.run(&Edit::SetHookEnabled {
             hook: hook.id.clone(),
@@ -389,14 +415,21 @@ fn switching_off_and_on_restores_the_file_and_a_second_switch_plans_nothing() {
         let back = std::fs::read_to_string(home.codex("config.toml").as_path()).ok();
         let expected = (!start.is_empty()).then(|| start.to_owned());
         // A file this plan created is left empty, not deleted. Compare by content.
-        assert_eq!(back.unwrap_or_default(), expected.unwrap_or_default(), "{name}");
+        assert_eq!(
+            back.unwrap_or_default(),
+            expected.unwrap_or_default(),
+            "{name}"
+        );
         let on_again = home
             .plan(&Edit::SetHookEnabled {
                 hook: hook.id,
                 enabled: true,
             })
             .unwrap();
-        assert!(on_again.change_set.ops.is_empty(), "{name}: a second on is a no-op");
+        assert!(
+            on_again.change_set.ops.is_empty(),
+            "{name}: a second on is a no-op"
+        );
     }
 }
 
@@ -480,7 +513,9 @@ fn an_unknown_event_or_a_broken_handler_is_invalid() {
         file: file.clone(),
         draft: draft("BeforeTool", None, "x"),
     });
-    assert!(matches!(bad_event, Err(ApiError::InvalidEdit { field, .. }) if field == "draft.event"));
+    assert!(
+        matches!(bad_event, Err(ApiError::InvalidEdit { field, .. }) if field == "draft.event")
+    );
     let bad_handler = home.plan(&Edit::AddHook {
         agent: me(),
         file,
@@ -490,7 +525,9 @@ fn an_unknown_event_or_a_broken_handler_is_invalid() {
             handler: json!({"type": "command"}),
         },
     });
-    assert!(matches!(bad_handler, Err(ApiError::InvalidEdit { field, .. }) if field == "draft.handler"));
+    assert!(
+        matches!(bad_handler, Err(ApiError::InvalidEdit { field, .. }) if field == "draft.handler")
+    );
     let outside = home.plan(&Edit::AddHook {
         agent: me(),
         file: home.fx.project_path("elsewhere.json"),
@@ -520,12 +557,18 @@ fn new_items_start_from_a_valid_skeleton_in_the_slot() {
     };
     let skill = home.plan(&new("codex.user.skill", Some("deploy"))).unwrap();
     assert_eq!(skill.change_set.ops.len(), 1);
-    assert_eq!(skill.change_set.ops[0].path, home.codex("skills/deploy/SKILL.md"));
+    assert_eq!(
+        skill.change_set.ops[0].path,
+        home.codex("skills/deploy/SKILL.md")
+    );
     assert_eq!(skill.change_set.ops[0].expect, Base::Absent);
     let Action::Write { text } = &skill.change_set.ops[0].action else {
         panic!("write")
     };
-    assert!(text.starts_with("---\nname: deploy\ndescription: "), "{text}");
+    assert!(
+        text.starts_with("---\nname: deploy\ndescription: "),
+        "{text}"
+    );
     home.apply(&skill);
     assert_eq!(
         home.view()
@@ -537,19 +580,27 @@ fn new_items_start_from_a_valid_skeleton_in_the_slot() {
         "the new skill is listed"
     );
 
-    let agent = home.plan(&new("codex.user.subagent", Some("reviewer"))).unwrap();
+    let agent = home
+        .plan(&new("codex.user.subagent", Some("reviewer")))
+        .unwrap();
     let Action::Write { text } = &agent.change_set.ops[0].action else {
         panic!("write")
     };
     let table: ::toml::Table = ::toml::from_str(text).unwrap();
     assert_eq!(table["name"].as_str(), Some("reviewer"));
     assert!(table.contains_key("description"));
-    assert_eq!(agent.change_set.ops[0].path, home.codex("agents/reviewer.toml"));
+    assert_eq!(
+        agent.change_set.ops[0].path,
+        home.codex("agents/reviewer.toml")
+    );
     home.apply(&agent);
     assert!(home.view().extensions.iter().any(|e| e.name == "reviewer"));
 
     let rule = home.plan(&new("codex.user.rule", Some("policy"))).unwrap();
-    assert_eq!(rule.change_set.ops[0].path, home.codex("rules/policy.rules"));
+    assert_eq!(
+        rule.change_set.ops[0].path,
+        home.codex("rules/policy.rules")
+    );
 
     let instructions = home.plan(&new("codex.user.instructions", None)).unwrap();
     assert_eq!(instructions.change_set.ops[0].path, home.codex("AGENTS.md"));
@@ -559,7 +610,12 @@ fn new_items_start_from_a_valid_skeleton_in_the_slot() {
             text: String::new()
         }
     );
-    assert!(skill.warnings.iter().any(|w| matches!(w, Warning::TakesEffect { .. })));
+    assert!(
+        skill
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Warning::TakesEffect { .. }))
+    );
 }
 
 #[test]
@@ -584,7 +640,14 @@ fn a_colliding_or_malformed_name_is_invalid() {
             "{err:?}"
         );
     }
-    for name in [None, Some(""), Some("../x"), Some(".hidden"), Some("a/b"), Some(&"n".repeat(65)[..])] {
+    for name in [
+        None,
+        Some(""),
+        Some("../x"),
+        Some(".hidden"),
+        Some("a/b"),
+        Some(&"n".repeat(65)[..]),
+    ] {
         let err = home.plan(&new("codex.user.skill", name)).unwrap_err();
         assert!(
             matches!(&err, ApiError::InvalidEdit { field, .. } if field == "name"),
@@ -619,10 +682,16 @@ fn a_memory_note_is_one_file_in_the_notes_folder_and_a_scan_lists_it() {
     let Action::Write { text } = &preview.change_set.ops[0].action else {
         panic!("write")
     };
-    assert_eq!(text, "# Tabs vs spaces\n\nPrefers tabs\n\nUse tabs in Go files.\n");
-    assert!(preview.warnings.iter().any(
-        |w| matches!(w, Warning::TakesEffect { when, .. } if when.0 == RULE_NOTE)
-    ));
+    assert_eq!(
+        text,
+        "# Tabs vs spaces\n\nPrefers tabs\n\nUse tabs in Go files.\n"
+    );
+    assert!(
+        preview
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Warning::TakesEffect { when, .. } if when.0 == RULE_NOTE))
+    );
     home.apply(&preview);
     let store = &home.view().memory[0];
     let entry = store
@@ -653,10 +722,18 @@ fn a_note_with_the_memory_feature_off_is_planned_with_a_warning() {
         })
         .unwrap();
     assert_eq!(preview.change_set.ops.len(), 1);
-    assert!(preview.change_set.ops[0].path.as_str().ends_with("/한국어-제목.md"));
-    assert!(preview.warnings.iter().any(
-        |w| matches!(w, Warning::TakesEffect { when, .. } if when.0 == RULE_MEMORY_OFF)
-    ));
+    assert!(
+        preview.change_set.ops[0]
+            .path
+            .as_str()
+            .ends_with("/한국어-제목.md")
+    );
+    assert!(
+        preview
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Warning::TakesEffect { when, .. } if when.0 == RULE_MEMORY_OFF))
+    );
     let missing = home.plan(&Edit::AddMemory {
         agent: me(),
         store: "nope".into(),
