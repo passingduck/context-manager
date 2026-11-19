@@ -164,7 +164,7 @@ fn hook_programs(input: &Input, out: &mut Vec<Diagnostic>) {
             };
             let command = match spec.argv.as_slice() {
                 [shell, flag, text, ..] if shell == "sh" && flag == "-c" => {
-                    program::first_word(text, &input.cx.env, &spec.env)
+                    program::first_word(text, input.cx.env, &spec.env)
                 }
                 [first, ..] => Some(first.clone()),
                 [] => None,

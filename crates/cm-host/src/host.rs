@@ -1,16 +1,18 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cm_core::agents::{Agent, registry};
+use cm_core::agents::{Agent, ScanCx, registry};
 use cm_core::env::ScanEnv;
-use cm_core::probe_fs::fingerprint_of;
+use cm_core::probe_fs::{EntryKind, ProbeFs, fingerprint_of};
 use cm_core::scan::{Scanned, scan_with};
 use cm_core::*;
+use cm_core::{search, simulate};
 
 use crate::apply::{Ctx, OsTrash, Trasher};
 use crate::history::History;
 use crate::recovery;
+use crate::runner;
 
 /// How long `watch` waits before it answers with the unchanged fingerprint (design section 8).
 pub const WATCH_TIMEOUT: Duration = Duration::from_secs(25);
@@ -70,12 +72,6 @@ pub struct Host {
     /// A test stops the apply pipeline after this step, as a crash would.
     #[cfg(test)]
     pub(crate) fail_after: Arc<Mutex<Option<crate::apply::Step>>>,
-}
-
-fn not_implemented() -> ApiError {
-    ApiError::Io {
-        detail: "not implemented".to_owned(),
-    }
 }
 
 fn join_error(err: tokio::task::JoinError) -> ApiError {
@@ -141,20 +137,21 @@ impl Host {
         Ok(scanned)
     }
 
+    fn agent(&self, id: &AgentId) -> Result<&'static dyn Agent, ApiError> {
+        self.ctx
+            .agents
+            .iter()
+            .copied()
+            .find(|agent| agent.id() == *id)
+            .ok_or(ApiError::NotFound)
+    }
+
     async fn probed_paths(&self, cwd: &AbsPath) -> Result<Vec<AbsPath>, ApiError> {
         if let Some(paths) = self.probes.lock().expect("probe table").get(cwd) {
             return Ok(paths.clone());
         }
         Ok(self.scanned(cwd.clone()).await?.probed)
     }
-}
-
-macro_rules! not_implemented {
-    ($($method:ident($args:ty) -> $ret:ty;)*) => {$(
-        async fn $method(&self, _: $args) -> Result<$ret, ApiError> {
-            Err(not_implemented())
-        }
-    )*};
 }
 
 impl Api for Host {
@@ -289,13 +286,123 @@ impl Api for Host {
         .map_err(join_error)?
     }
 
-    not_implemented! {
-        projects(()) -> Vec<KnownProject>;
-        render(RenderReq) -> Vec<RenderedBlock>;
-        simulate(SimReq) -> Vec<Simulation>;
-        search(SearchReq) -> SearchResult;
-        hook_sample(SampleReq) -> serde_json::Value;
-        run_hook(RunReq) -> HookRun;
+    async fn projects(&self, _: ()) -> Result<Vec<KnownProject>, ApiError> {
+        let env = self.config.env.clone();
+        let agents = self.ctx.agents;
+        tokio::task::spawn_blocking(move || {
+            let fs = ProbeFs::new();
+            let cx = ScanCx { env: &env, fs: &fs };
+            let mut known: BTreeMap<AbsPath, Vec<AgentId>> = BTreeMap::new();
+            for agent in agents {
+                for path in agent.known_projects(&cx) {
+                    let who = known.entry(path).or_default();
+                    if !who.contains(&agent.id()) {
+                        who.push(agent.id());
+                    }
+                }
+            }
+            known
+                .into_iter()
+                .map(|(path, agents)| KnownProject {
+                    exists: fs.stat(&path).is_ok_and(|stat| stat.kind == EntryKind::Dir),
+                    path,
+                    agents,
+                })
+                .collect()
+        })
+        .await
+        .map_err(join_error)
+    }
+
+    async fn render(&self, req: RenderReq) -> Result<Vec<RenderedBlock>, ApiError> {
+        let agent = self.agent(&req.agent)?;
+        let scanned = self.scanned(req.cwd.clone()).await?;
+        let env = self.config.env.with_cwd(req.cwd);
+        tokio::task::spawn_blocking(move || {
+            let view = scanned
+                .snapshot
+                .agents
+                .iter()
+                .find(|view| view.agent == agent.id())
+                .ok_or(ApiError::NotFound)?;
+            let cx = ScanCx {
+                env: &env,
+                fs: scanned.fs(),
+            };
+            Ok(agent.render(&cx, view))
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    async fn simulate(&self, req: SimReq) -> Result<Vec<Simulation>, ApiError> {
+        let scanned = self.scanned(req.cwd.clone()).await?;
+        let env = self.config.env.with_cwd(req.cwd);
+        let agents = self.ctx.agents;
+        tokio::task::spawn_blocking(move || {
+            let cx = ScanCx {
+                env: &env,
+                fs: scanned.fs(),
+            };
+            simulate::simulate(agents, &cx, &scanned.snapshot, &req.path)
+        })
+        .await
+        .map_err(join_error)
+    }
+
+    async fn search(&self, req: SearchReq) -> Result<SearchResult, ApiError> {
+        let scanned = self.scanned(req.cwd.clone()).await?;
+        tokio::task::spawn_blocking(move || search::search(&scanned, &req))
+            .await
+            .map_err(join_error)?
+    }
+
+    async fn hook_sample(&self, req: SampleReq) -> Result<serde_json::Value, ApiError> {
+        let agent = self.agent(&req.agent)?;
+        let env = self.config.env.with_cwd(req.cwd);
+        tokio::task::spawn_blocking(move || {
+            let fs = ProbeFs::new();
+            agent.sample_input(&req.event, &ScanCx { env: &env, fs: &fs })
+        })
+        .await
+        .map_err(join_error)
+    }
+
+    /// Runs a hook of the current snapshot with the invocation its agent would use. A read-only
+    /// host refuses, because a hook can do anything.
+    async fn run_hook(&self, req: RunReq) -> Result<HookRun, ApiError> {
+        if self.config.read_only {
+            return Err(ApiError::ReadOnly {
+                why: RuleRef::new("host.read_only"),
+            });
+        }
+        let scanned = self.scanned(req.cwd.clone()).await?;
+        let env = self.config.env.with_cwd(req.cwd);
+        let agents = self.ctx.agents;
+        tokio::task::spawn_blocking(move || {
+            let (agent, hook) = agents
+                .iter()
+                .zip(&scanned.snapshot.agents)
+                .find_map(|(agent, view)| {
+                    let hook = view.hooks.iter().find(|hook| hook.id == req.hook)?;
+                    Some((*agent, hook))
+                })
+                .ok_or(ApiError::NotFound)?;
+            let cx = ScanCx {
+                env: &env,
+                fs: scanned.fs(),
+            };
+            let spec = agent
+                .exec_spec(hook, &req.input, &cx)
+                .map_err(|why| ApiError::Forbidden { why })?;
+            runner::run(
+                spec,
+                &env,
+                hook.handler.timeout_ms.map(Duration::from_millis),
+            )
+        })
+        .await
+        .map_err(join_error)?
     }
 }
 
@@ -361,21 +468,276 @@ mod tests {
         assert!(matches!(err, ApiError::OutsideBoundary { .. }));
     }
 
-    #[tokio::test]
-    async fn an_operation_without_an_implementation_says_so() {
+    /// A fixture with a Claude project: instructions, a nested file, and two command hooks.
+    fn hooked_fixture() -> Fixture {
         let fx = Fixture::new();
-        let err = call(
-            &host(&fx, WATCH_TIMEOUT),
-            r#"{"op":"projects","args":null}"#,
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            err,
-            ApiError::Io {
-                detail: "not implemented".to_owned()
-            }
+        fx.write(
+            &fx.project_path("CLAUDE.md"),
+            "# Rules\nSee [a](docs/a.md)\n",
         );
+        fx.write(&fx.project_path("docs/a.md"), "about a\n");
+        fx.write(&fx.project_path("sub/CLAUDE.md"), "nested rules\n");
+        let hook = |command: &str, timeout: Option<u64>| {
+            let mut handler = serde_json::json!({"type": "command", "command": command});
+            if let Some(seconds) = timeout {
+                handler["timeout"] = seconds.into();
+            }
+            serde_json::json!({"hooks": [handler]})
+        };
+        let settings = serde_json::json!({"hooks": {"Stop": [
+            hook("cat; echo failed >&2; exit 2", None),
+            hook("sleep 30 & echo $! > child.pid; wait", Some(1)),
+        ]}});
+        fx.write(
+            &fx.project_path(".claude/settings.json"),
+            &settings.to_string(),
+        );
+        fx
+    }
+
+    fn host_with_path(fx: &Fixture, read_only: bool) -> Host {
+        Host::new(HostConfig {
+            shell: Shell::Serve,
+            read_only,
+            env: fx.env().with_var("PATH", "/usr/bin:/bin"),
+            watch_timeout: Duration::from_millis(100),
+            data_dir: fx.root().join("data"),
+        })
+    }
+
+    #[tokio::test]
+    async fn no_operation_answers_not_implemented() {
+        let fx = hooked_fixture();
+        let host = host_with_path(&fx, false);
+        let (cwd, nested) = (fx.project(), fx.project_path("sub/CLAUDE.md"));
+        let snapshot = host.scan(ScanReq { cwd: cwd.clone() }).await.unwrap();
+        let hook = snapshot.agents[0].hooks[0].id.clone();
+        let claude = AgentId::parse("claude").unwrap();
+        let requests = vec![
+            Request::Session(()),
+            Request::Agents(()),
+            Request::Projects(()),
+            Request::Scan(ScanReq { cwd: cwd.clone() }),
+            Request::ReadFile(ReadReq {
+                cwd: cwd.clone(),
+                path: nested.clone(),
+            }),
+            Request::Render(RenderReq {
+                cwd: cwd.clone(),
+                agent: claude.clone(),
+            }),
+            Request::Simulate(SimReq {
+                cwd: cwd.clone(),
+                path: nested.clone(),
+            }),
+            Request::Search(SearchReq {
+                cwd: cwd.clone(),
+                query: "rules".into(),
+                regex: false,
+                case_sensitive: false,
+            }),
+            Request::Watch(WatchReq {
+                cwd: cwd.clone(),
+                since: snapshot.fingerprint.clone(),
+            }),
+            Request::Plan(PlanReq {
+                cwd: cwd.clone(),
+                edit: Edit::Save {
+                    path: nested.clone(),
+                    base: Base::Absent,
+                    text: String::new(),
+                },
+            }),
+            Request::Apply(ApplyReq {
+                cwd: cwd.clone(),
+                edit: Edit::Revert {
+                    change: ChangeId("none".into()),
+                },
+                digest: String::new(),
+            }),
+            Request::History(HistoryReq {
+                cwd: None,
+                before: None,
+                limit: 1,
+            }),
+            Request::Change(ChangeReq {
+                id: ChangeId("none".into()),
+            }),
+            Request::HookSample(SampleReq {
+                cwd: cwd.clone(),
+                agent: claude,
+                event: "Stop".into(),
+            }),
+            Request::RunHook(RunReq {
+                cwd,
+                hook,
+                input: serde_json::json!({}),
+            }),
+        ];
+        assert_eq!(
+            requests.len(),
+            cm_core::api::operations().len(),
+            "one request per operation"
+        );
+        for request in requests {
+            let name = serde_json::to_value(&request).unwrap()["op"].clone();
+            let outcome = dispatch(&host, request).await;
+            assert_ne!(
+                outcome,
+                Err(ApiError::Io {
+                    detail: "not implemented".to_owned()
+                }),
+                "{name} is not implemented"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn render_search_projects_and_sample_answer_from_a_fixture() {
+        let fx = hooked_fixture();
+        fx.write(
+            &fx.home_path(".claude.json"),
+            &serde_json::json!({"projects": {fx.project().as_str(): {}, "/no/such/dir": {}}})
+                .to_string(),
+        );
+        let host = host_with_path(&fx, false);
+        let cwd = fx.project();
+
+        let blocks = host
+            .render(RenderReq {
+                cwd: cwd.clone(),
+                agent: AgentId::parse("claude").unwrap(),
+            })
+            .await
+            .unwrap();
+        assert!(blocks.iter().any(|b| b.text.contains("# Rules")));
+
+        let found = host
+            .search(SearchReq {
+                cwd: cwd.clone(),
+                query: "NESTED".into(),
+                regex: false,
+                case_sensitive: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(found.hits.len(), 1);
+        assert_eq!(found.hits[0].file, fx.project_path("sub/CLAUDE.md"));
+
+        let projects = host.projects(()).await.unwrap();
+        let known: Vec<_> = projects
+            .iter()
+            .map(|p| (p.path.as_str().to_owned(), p.exists))
+            .collect();
+        assert_eq!(
+            known,
+            [
+                ("/no/such/dir".to_owned(), false),
+                (fx.project().as_str().to_owned(), true)
+            ]
+        );
+        assert_eq!(projects[1].agents[0].as_str(), "claude");
+
+        let sample = host
+            .hook_sample(SampleReq {
+                cwd,
+                agent: AgentId::parse("claude").unwrap(),
+                event: "Stop".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(sample["hook_event_name"], "Stop");
+
+        let all = host
+            .simulate(SimReq {
+                cwd: fx.project(),
+                path: fx.project_path("sub/x.rs"),
+            })
+            .await
+            .unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all[0].added_tokens > 0, "the nested CLAUDE.md fires");
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_echoes_stdin_and_exits_2_reports_both() {
+        let fx = hooked_fixture();
+        let host = host_with_path(&fx, false);
+        let snapshot = host.scan(ScanReq { cwd: fx.project() }).await.unwrap();
+        let echo = snapshot.agents[0]
+            .hooks
+            .iter()
+            .find(|h| h.handler.summary.starts_with("cat"))
+            .unwrap();
+        let run = host
+            .run_hook(RunReq {
+                cwd: fx.project(),
+                hook: echo.id.clone(),
+                input: serde_json::json!({"hello": "world"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(run.exit_code, Some(2));
+        assert_eq!(run.stdout, r#"{"hello":"world"}"#);
+        assert_eq!(run.stderr.trim(), "failed");
+        assert!(!run.timed_out);
+    }
+
+    #[tokio::test]
+    async fn a_hook_past_its_timeout_is_killed_with_its_children() {
+        let fx = hooked_fixture();
+        let host = host_with_path(&fx, false);
+        let snapshot = host.scan(ScanReq { cwd: fx.project() }).await.unwrap();
+        let slow = snapshot.agents[0]
+            .hooks
+            .iter()
+            .find(|h| h.handler.summary.starts_with("sleep"))
+            .unwrap();
+        let started = std::time::Instant::now();
+        let run = host
+            .run_hook(RunReq {
+                cwd: fx.project(),
+                hook: slow.id.clone(),
+                input: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        assert!(run.timed_out);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+
+        let pid: i32 = std::fs::read_to_string(fx.project_path("child.pid").as_path())
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let gone = (0..100).any(|_| {
+            // SAFETY: signal 0 only checks whether the process exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if alive {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            !alive
+        });
+        assert!(gone, "the sleeping child {pid} outlived the timeout");
+    }
+
+    #[tokio::test]
+    async fn a_read_only_host_refuses_to_run_a_hook() {
+        let fx = hooked_fixture();
+        let host = host_with_path(&fx, true);
+        let err = host
+            .run_hook(RunReq {
+                cwd: fx.project(),
+                hook: HookId("x".into()),
+                input: serde_json::json!({}),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ApiError::ReadOnly { .. }));
     }
 
     #[tokio::test]

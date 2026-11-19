@@ -7,6 +7,7 @@ mod fsio;
 mod history;
 mod host;
 mod recovery;
+mod runner;
 
 pub use apply::{OsTrash, Trasher};
 pub use history::History;
