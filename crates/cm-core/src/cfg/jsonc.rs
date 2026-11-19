@@ -573,7 +573,7 @@ mod tests {
         assert_eq!(nested, r#"{"a":{"b":1},"l":[1,2],"x":{"y":1}}"#);
         assert_eq!(remove(&nested, "/x").unwrap(), text);
         let pushed = array_append(text, "/l", &json!(3)).unwrap();
-        assert_eq!(pushed, r#"{"a":{"b":1},"l":[1,2,3]}"#.replace("]}", "]}"));
+        assert_eq!(pushed, r#"{"a":{"b":1},"l":[1,2,3]}"#);
         assert_eq!(remove(&pushed, "/l/2").unwrap(), text);
     }
 
