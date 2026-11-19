@@ -711,78 +711,8 @@ impl<'a> Planner<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::{AgentScan, FileClaim, ScanCx, home_only_scan, home_with_env};
     use crate::scan::scan_with;
-    use crate::testing::Fixture;
-
-    /// Claims the files it is given and refuses any text that contains `refuse`.
-    pub struct TestAgent {
-        pub files: Vec<AbsPath>,
-        pub readonly: Vec<AbsPath>,
-        pub slot: Option<Place>,
-        pub refuse: Option<&'static str>,
-    }
-
-    impl Agent for TestAgent {
-        fn id(&self) -> AgentId {
-            AgentId::parse("claude").unwrap()
-        }
-        fn display_name(&self) -> &'static str {
-            "test"
-        }
-        fn rules(&self) -> &'static [RuleSpec] {
-            &[]
-        }
-        fn hook_schema(&self) -> &'static HookSchema {
-            &crate::agents::NO_HOOKS
-        }
-        fn scan(&self, cx: &ScanCx) -> AgentScan {
-            let mut scan = home_only_scan(
-                cx,
-                self.id(),
-                "claude",
-                "claude.home",
-                home_with_env(cx, "CLAUDE_CONFIG_DIR", ".claude", false),
-            );
-            for file in &self.files {
-                scan.files.push(FileClaim {
-                    path: file.clone(),
-                    policy: EditPolicy::Editable,
-                });
-            }
-            for file in &self.readonly {
-                scan.files.push(FileClaim {
-                    path: file.clone(),
-                    policy: EditPolicy::ReadOnly {
-                        why: ReadOnlyWhy::Managed,
-                    },
-                });
-            }
-            if let Some(place) = &self.slot {
-                scan.view.slots.push(Slot {
-                    id: SlotId("s".into()),
-                    place: place.clone(),
-                    new_kind: NewItemKind::Skill,
-                    scope: Scope::User,
-                    rule: RuleRef::new("claude.slot"),
-                });
-            }
-            scan
-        }
-        fn guard(
-            &self,
-            _path: &AbsPath,
-            _before: Option<&str>,
-            after: Option<&str>,
-        ) -> Result<(), ApiError> {
-            match (self.refuse, after) {
-                (Some(word), Some(text)) if text.contains(word) => Err(ApiError::Forbidden {
-                    why: RuleRef::new("test.refused"),
-                }),
-                _ => Ok(()),
-            }
-        }
-    }
+    use crate::testing::{Fixture, TestAgent};
 
     struct NoHistory;
     impl ChangeSource for NoHistory {
@@ -808,9 +738,7 @@ mod tests {
     fn agent(files: &[&AbsPath]) -> TestAgent {
         TestAgent {
             files: files.iter().map(|p| (*p).clone()).collect(),
-            readonly: Vec::new(),
-            slot: None,
-            refuse: None,
+            ..TestAgent::default()
         }
     }
 
