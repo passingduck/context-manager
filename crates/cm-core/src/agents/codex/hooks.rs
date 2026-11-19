@@ -599,6 +599,13 @@ fn eval_matcher(event: &str, raw: Option<&str>) -> MatcherEval {
 
 /// `plugin_content_hash`, over the files of the plugin directory.
 fn plugin_content_hash(cx: &ScanCx, root: &AbsPath, max_entries: usize) -> Option<String> {
+    // Bytes are bounded too, so one huge dependency tree cannot make a scan read gigabytes.
+    let max_bytes: u64 = if max_entries > 5_000 {
+        1 << 30
+    } else {
+        16 << 20
+    };
+    let mut total: u64 = 0;
     let mut hash = Sha256::new();
     hash.update(b"codex-plugin-bundle-v1");
     let mut pending = vec![root.clone()];
@@ -630,6 +637,10 @@ fn plugin_content_hash(cx: &ScanCx, root: &AbsPath, max_entries: usize) -> Optio
                 }
             }
             EntryKind::File => {
+                total = total.saturating_add(stat.len);
+                if total > max_bytes {
+                    return None;
+                }
                 hash.update(b"file");
                 let bytes = cx.fs.read(&path).ok()?;
                 hash.update((bytes.len() as u64).to_le_bytes());
