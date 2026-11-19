@@ -46,6 +46,9 @@ function Row({ record, selected, go }: { record: ChangeRecord; selected: boolean
     <li>
       <button
         type="button"
+        data-testid="history-row"
+        data-change={record.id}
+        data-state={record.state}
         aria-pressed={selected}
         onClick={() => go({ sel: `change:${record.id}`, ag: record.summary.agent ?? "" })}
         className="flex w-full items-start gap-2 border-l-2 border-transparent px-3 py-2 text-left hover:bg-subtle aria-pressed:border-accent aria-pressed:bg-accent-bg"

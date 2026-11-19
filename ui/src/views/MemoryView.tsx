@@ -39,7 +39,7 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
   const project = useProject();
   const write = useWrite();
   return (
-    <article className="mx-3 mt-2 rounded border border-line">
+    <article data-testid="memory-store" data-store={store.id} className="mx-3 mt-2 rounded border border-line">
       <header className="space-y-1 border-b border-line bg-subtle px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <b>{project.name(agent)}</b>
@@ -72,7 +72,7 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
             const state = project.snapshot.files[entry.file];
             const removable = (entry.role === "topic" || entry.role === "note") && state?.policy.kind === "editable" && state.state.kind === "present";
             return (
-              <li key={entry.file} className="flex items-center hover:bg-subtle">
+              <li key={entry.file} data-testid="memory-entry" data-file={entry.file} className="flex items-center hover:bg-subtle">
                 <button
                   type="button"
                   aria-pressed={selected}
@@ -89,6 +89,7 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
                 </button>
                 {removable && state?.state.kind === "present" && (
                   <Button
+                    data-testid="memory-delete"
                     className="mr-3 shrink-0"
                     disabled={write.blocked !== null}
                     title={write.blocked ?? undefined}

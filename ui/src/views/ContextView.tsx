@@ -102,7 +102,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
           <p className="border-b border-line bg-info-bg px-3 py-1.5 text-info">{t.context.simFor(route.sim)}</p>
         )}
         {snapshot.agents.map((view) => (
-          <section key={view.agent} className="border-b border-line pb-2" aria-label={project.name(view.agent)}>
+          <section key={view.agent} data-testid="agent" data-agent={view.agent} className="border-b border-line pb-2" aria-label={project.name(view.agent)}>
             <AgentHeader view={view} sim={byAgent.get(view.agent)} />
             <PrefixMap view={view} route={route} go={go} intro={view.agent === firstWithBlocks} />
             {route.mode === "tree" ? (
@@ -139,7 +139,7 @@ function AgentHeader({ view, sim }: { view: AgentView; sim: Simulation | undefin
         {sim && <Badge tone={sim.addedTokens > 0 ? "warn" : "neutral"}>{sim.addedTokens > 0 ? t.context.simAdds(fmt.tokens(sim.addedTokens)) : t.context.simNothing}</Badge>}
         <span className="ml-auto flex items-baseline gap-1.5 whitespace-nowrap text-muted">
           {t.context.always}
-          <b className="text-[15px] text-fg tabular-nums">{fmt.tokens(view.budget.sessionStart)}</b>
+          <b data-testid="agent-always" data-tokens={view.budget.sessionStart} className="text-[15px] text-fg tabular-nums">{fmt.tokens(view.budget.sessionStart)}</b>
         </span>
       </div>
       {total > 0 && (
@@ -340,6 +340,11 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
   return (
     <div
       data-row
+      data-testid="load-row"
+      data-file={load.file}
+      data-when={load.when.kind}
+      data-status={load.status.kind}
+      data-via={load.via.kind}
       data-key={nodeKey}
       role="treeitem"
       aria-level={depth}
@@ -399,7 +404,7 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
   return (
     <ol className="space-y-2 px-3 pt-2" aria-label={t.context.blocksFor}>
       {view.session.map((block, index) => {
-        const text = render.data?.[index]?.text;
+        const text = render.data?.find((rendered) => rendered.label === block.label && rendered.delivery === block.delivery)?.text;
         return (
           <li key={block.label} className="rounded border border-line">
             <div className="flex flex-wrap items-center gap-2 border-b border-line bg-subtle px-2 py-1">

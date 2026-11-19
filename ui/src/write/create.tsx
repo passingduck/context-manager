@@ -31,7 +31,7 @@ export function NewMenu({ go }: { go: (patch: Partial<Route>) => void }) {
   const withSlots = project.snapshot.agents.filter((view) => view.slots.length > 0);
   return (
     <div className="relative">
-      <Button aria-haspopup="menu" aria-expanded={open} disabled={blocked !== null || withSlots.length === 0} title={blocked ?? undefined} onClick={() => setOpen(!open)}>
+      <Button data-testid="new-item" aria-haspopup="menu" aria-expanded={open} disabled={blocked !== null || withSlots.length === 0} title={blocked ?? undefined} onClick={() => setOpen(!open)}>
         {t.write.newItem}
       </Button>
       {open && (
@@ -136,7 +136,7 @@ export function AddMemory({ agent, store }: { agent: AgentId; store: MemoryStore
   const reason = blocked ?? readOnly;
   return (
     <>
-      <Button disabled={reason !== null} title={reason ?? say(t.memoryWrite, store.write, d)} onClick={() => setOpen(true)}>
+      <Button data-testid="memory-add" disabled={reason !== null} title={reason ?? say(t.memoryWrite, store.write, d)} onClick={() => setOpen(true)}>
         {t.write.addMemory}
       </Button>
       {open && <MemoryForm agent={agent} store={store} onClose={() => setOpen(false)} />}
@@ -160,6 +160,7 @@ function MemoryForm({ agent, store, onClose }: { agent: AgentId; store: MemorySt
         <>
           <Button onClick={onClose}>{t.write.cancel}</Button>
           <PrimaryButton
+            data-testid="form-review"
             disabled={title.trim() === ""}
             onClick={() =>
               propose({
@@ -178,13 +179,13 @@ function MemoryForm({ agent, store, onClose }: { agent: AgentId; store: MemorySt
         <p className="text-muted">{say(t.memoryWrite, store.write, d)}</p>
         <p className="text-muted">{store.index ? t.write.memoryIndexLine(project.display(store.index)) : t.write.memoryNoIndex}</p>
         <FormRow label={t.write.memTitle}>
-          <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
+          <input data-testid="memory-title" className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
         </FormRow>
         <FormRow label={t.write.memDescription} hint={t.write.memDescriptionHint}>
-          <input className={inputClass} value={description} onChange={(e) => setDescription(e.target.value)} />
+          <input data-testid="memory-description" className={inputClass} value={description} onChange={(e) => setDescription(e.target.value)} />
         </FormRow>
         <FormRow label={t.write.memBody}>
-          <textarea className={`${inputClass} font-mono`} rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
+          <textarea data-testid="memory-body" className={`${inputClass} font-mono`} rows={8} value={body} onChange={(e) => setBody(e.target.value)} />
         </FormRow>
       </div>
     </Modal>

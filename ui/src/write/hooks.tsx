@@ -26,6 +26,7 @@ export function HookSwitch({ hook, showReason = false }: { hook: Hook; showReaso
   return (
     <span className="inline-flex items-center gap-2">
       <Button
+        data-testid="hook-switch"
         role="switch"
         aria-checked={!off}
         disabled={reason !== null}
@@ -48,19 +49,22 @@ export function HookSwitch({ hook, showReason = false }: { hook: Hook; showReaso
 
 /** Edit, delete and the switch, for the toolbar of the hook detail. */
 export function HookActions({ agent, hook, onTest }: { agent: AgentId; hook: Hook; onTest: () => void }) {
-  const { t } = useI18n();
+  const { t, d } = useI18n();
   const { propose, blocked } = useWrite();
   const project = useProject();
   const [editing, setEditing] = useState(false);
-  const locked = hook.toggle.kind === "unavailable" ? project.rule(hook.toggle.why) : blocked;
+  // Edit and Delete change the file the hook lives in, so that file's policy decides, not the switch.
+  const policy = project.view(agent)?.hookFiles.find((file) => file.file === hook.source.file)?.policy ?? project.snapshot.files[hook.source.file]?.policy;
+  const locked = blocked ?? (policy?.kind === "readOnly" ? say(t.readOnlyWhy, policy.why, d) : null);
   return (
     <>
-      <Button disabled={blocked !== null} title={blocked ?? undefined} onClick={onTest}>{t.hooks.test}</Button>
+      <Button data-testid="hook-test-open" disabled={blocked !== null} title={blocked ?? undefined} onClick={onTest}>{t.hooks.test}</Button>
       <HookSwitch hook={hook} />
-      <Button disabled={locked !== null} title={locked ?? undefined} onClick={() => setEditing(true)}>
+      <Button data-testid="hook-edit" disabled={locked !== null} title={locked ?? undefined} onClick={() => setEditing(true)}>
         {t.write.edit}
       </Button>
       <Button
+        data-testid="hook-delete"
         disabled={locked !== null}
         title={locked ?? undefined}
         onClick={() => propose({ edit: { kind: "removeHook", hook: hook.id }, title: t.write.removeHookTitle(hook.event) })}
@@ -81,7 +85,7 @@ export function AddHookButton({ agent }: { agent: AgentId }) {
   const reason = blocked ?? (files.length === 0 ? t.write.noHookFile : null);
   return (
     <>
-      <Button disabled={reason !== null} title={reason ?? undefined} onClick={() => setOpen(true)}>
+      <Button data-testid="add-hook" disabled={reason !== null} title={reason ?? undefined} onClick={() => setOpen(true)}>
         {t.write.addHook}
       </Button>
       {open && <HookForm agent={agent} hook={null} onClose={() => setOpen(false)} />}
@@ -105,7 +109,7 @@ function FieldInput({ field, value, onChange }: { field: HandlerField; value: Js
   const [invalid, setInvalid] = useState(false);
   switch (field.ty) {
     case "string":
-      return <input className={inputClass} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)} />;
+      return <input data-testid={`hook-field-${field.key}`} className={inputClass} value={typeof value === "string" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)} />;
     case "number":
       return <input className={inputClass} type="number" min={0} value={typeof value === "number" ? value : ""} onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))} />;
     case "bool":
@@ -219,7 +223,7 @@ export function HookForm({ agent, hook, onClose }: { agent: AgentId; hook: Hook 
         <>
           {problem && <span className="mr-auto text-bad">{problem}</span>}
           <Button onClick={onClose}>{t.write.cancel}</Button>
-          <PrimaryButton disabled={problem !== null} onClick={submit}>
+          <PrimaryButton data-testid="form-review" disabled={problem !== null} onClick={submit}>
             {t.write.review}
           </PrimaryButton>
         </>
@@ -243,7 +247,7 @@ export function HookForm({ agent, hook, onClose }: { agent: AgentId; hook: Hook 
       <div className="space-y-3">
         {!hook && (
           <FormRow label={t.write.hookFile} hint={t.write.hookFileHint}>
-            <select className={inputClass} value={file} onChange={(e) => setFile(e.target.value)}>
+            <select data-testid="hook-file" className={inputClass} value={file} onChange={(e) => setFile(e.target.value)}>
               {files.map((entry) => (
                 <option key={entry.file} value={entry.file}>
                   {project.display(entry.file)} ({say(t.scope, entry.scope, project.display)}){entry.exists ? "" : ` ${t.write.willCreate}`}
@@ -253,7 +257,7 @@ export function HookForm({ agent, hook, onClose }: { agent: AgentId; hook: Hook 
           </FormRow>
         )}
         <FormRow label={t.write.event}>
-          <select className={inputClass} value={event} onChange={(e) => setEvent(e.target.value)}>
+          <select data-testid="hook-event" className={inputClass} value={event} onChange={(e) => setEvent(e.target.value)}>
             {eventNames.map((name) => (
               <option key={name}>{name}</option>
             ))}
@@ -350,7 +354,7 @@ export function HookTest({ agent, hook }: { agent: AgentId; hook: Hook }) {
       </FormRow>
       {parseError && <p className="mt-1 text-bad">{t.write.rawInvalid(parseError)}</p>}
       <div className="mt-2">
-        <PrimaryButton disabled={blocked !== null || parsed === undefined || state.kind === "running"} title={blocked ?? undefined} onClick={() => void run()}>
+        <PrimaryButton data-testid="hook-run" disabled={blocked !== null || parsed === undefined || state.kind === "running"} title={blocked ?? undefined} onClick={() => void run()}>
           {state.kind === "running" ? t.hooks.running : t.hooks.run}
         </PrimaryButton>
       </div>
@@ -364,7 +368,7 @@ function RunResult({ run }: { run: HookRun }) {
   const { t } = useI18n();
   const ok = run.exitCode === 0 && !run.timedOut;
   return (
-    <div className="mt-3 space-y-2" aria-label={t.hooks.result}>
+    <div data-testid="hook-result" data-exit-code={run.exitCode ?? ""} data-timed-out={run.timedOut} className="mt-3 space-y-2" aria-label={t.hooks.result}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={ok ? "ok" : "bad"}>{run.exitCode === null ? t.hooks.noExit : t.hooks.exit(run.exitCode)}</Badge>
         {run.timedOut && <Badge tone="bad">{t.hooks.timedOut}</Badge>}
@@ -382,18 +386,18 @@ function RunResult({ run }: { run: HookRun }) {
           </>
         )}
       </dl>
-      <Output label={t.hooks.stdout} text={run.stdout} />
-      <Output label={t.hooks.stderr} text={run.stderr} />
+      <Output label={t.hooks.stdout} text={run.stdout} stream="stdout" />
+      <Output label={t.hooks.stderr} text={run.stderr} stream="stderr" />
     </div>
   );
 }
 
-function Output({ label, text }: { label: string; text: string }) {
+function Output({ label, text, stream }: { label: string; text: string; stream: "stdout" | "stderr" }) {
   const { t } = useI18n();
   return (
     <div>
       <p className="text-[12px] font-semibold">{label}</p>
-      <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-subtle p-2 font-mono text-[12px]">{text === "" ? t.hooks.empty : text}</pre>
+      <pre data-testid={`hook-${stream}`} className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-subtle p-2 font-mono text-[12px]">{text === "" ? t.hooks.empty : text}</pre>
     </div>
   );
 }

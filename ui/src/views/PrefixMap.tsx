@@ -75,7 +75,7 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
   ) : null;
 
   return (
-    <div className="px-3 pb-1 pt-2" role="group" aria-label={t.prefix.groupLabel(project.name(view.agent))}>
+    <div data-testid="prefix" className="px-3 pb-1 pt-2" role="group" aria-label={t.prefix.groupLabel(project.name(view.agent))}>
       <p className="mb-1.5 max-w-3xl text-[12px] text-muted">
         <b className="text-fg">{t.prefix.title}.</b> {intro && t.prefix.intro}
       </p>
@@ -125,7 +125,7 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
               };
               if (!load) {
                 return (
-                  <span key={seg.index} aria-hidden title={t.prefix.glueTitle(seg.tokens)} className="absolute inset-y-0 flex items-center" style={style}>
+                  <span key={seg.index} aria-hidden data-testid="prefix-glue" data-start={seg.start} data-end={seg.end} title={t.prefix.glueTitle(seg.tokens)} className="absolute inset-y-0 flex items-center" style={style}>
                     <span className="block w-full" style={inner} />
                   </span>
                 );
@@ -136,6 +136,8 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
                   key={seg.index}
                   type="button"
                   data-seg
+                  data-testid="prefix-seg"
+                  data-file={load.file}
                   data-start={seg.start}
                   data-end={seg.end}
                   aria-pressed={selected}

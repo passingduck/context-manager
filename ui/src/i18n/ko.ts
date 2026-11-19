@@ -195,7 +195,7 @@ export const ko: typeof en = {
     reload: "다시 읽기(내 텍스트 버림)",
     saveTitle: (name) => `${name} 저장`,
     trashTitle: (name) => `${name}을(를) 휴지통으로 이동`,
-    skillDirGoes: (skill, dir) => `스킬 ${skill}은(는) 디렉터리입니다. SKILL.md만이 아니라 디렉터리 ${dir} 전체가 휴지통으로 갑니다.`,
+    dirGoes: (dir) => `${dir}은(는) 디렉터리입니다. 선택한 파일 하나만이 아니라 디렉터리 전체가 휴지통으로 갑니다.`,
     notPresent: "파일이 없습니다.",
     rowMenu: "이 파일의 작업",
     revertTitle: (what) => `되돌리기: ${what}`,

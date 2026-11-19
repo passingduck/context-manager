@@ -6,11 +6,6 @@ const TOKEN_KEY = "context-manager.token";
 
 export type TransportName = "invoke" | "http";
 
-/** `?mock=1` answers from the bundled mock snapshot instead of the host. */
-export function mockEnabled(): boolean {
-  return new URLSearchParams(window.location.search).get("mock") === "1";
-}
-
 export function transportName(): TransportName {
   return "__TAURI_INTERNALS__" in window ? "invoke" : "http";
 }
@@ -49,7 +44,8 @@ function token(): string | null {
 
 /** Sends one request. A failure is thrown as the `ApiError` the host returned. */
 export async function send(request: Request): Promise<unknown> {
-  if (mockEnabled()) {
+  // `pnpm dev` only: `?mock=1` answers from a canned snapshot. The branch is dead code in a production build.
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("mock") === "1") {
     const { handle } = await import("../mock/host");
     return handle(request);
   }

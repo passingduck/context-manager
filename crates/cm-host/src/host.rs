@@ -63,6 +63,19 @@ impl HostConfig {
     }
 }
 
+struct RemovingTrash;
+
+impl Trasher for RemovingTrash {
+    fn trash(&self, path: &std::path::Path) -> Result<(), String> {
+        let removed = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+        removed.map_err(|e| e.to_string())
+    }
+}
+
 pub struct Host {
     config: HostConfig,
     /// Per `cwd`, the paths the last scan probed.
@@ -86,7 +99,14 @@ const MAX_HISTORY_LIMIT: usize = 500;
 
 impl Host {
     pub fn new(config: HostConfig) -> Host {
-        Host::with_parts(config, registry(), Box::new(OsTrash))
+        // `tools/e2e` sets this so that its throwaway run never reaches the OS trash.
+        let trasher: Box<dyn Trasher> =
+            if std::env::var_os("CONTEXT_MANAGER_TRASH_REMOVES").is_some() {
+                Box::new(RemovingTrash)
+            } else {
+                Box::new(OsTrash)
+            };
+        Host::with_parts(config, registry(), trasher)
     }
 
     /// The agents and the trash are the two things a test replaces.
