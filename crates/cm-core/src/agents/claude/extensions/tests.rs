@@ -4,7 +4,7 @@ use crate::env::ScanEnv;
 use crate::probe_fs::ProbeFs;
 use crate::testing::Fixture;
 
-fn run_with(fx: &Fixture, env: &ScanEnv) -> ExtOut {
+fn run_with(env: &ScanEnv) -> ExtOut {
     let fs = ProbeFs::new();
     let cx = ScanCx { env, fs: &fs };
     let setup = Setup::load(&cx);
@@ -13,7 +13,7 @@ fn run_with(fx: &Fixture, env: &ScanEnv) -> ExtOut {
 
 fn run(fx: &Fixture) -> ExtOut {
     fx.mkdir(&fx.project_path(".git"));
-    run_with(fx, &fx.env())
+    run_with(&fx.env())
 }
 
 fn find<'a>(out: &'a ExtOut, name: &str) -> Vec<&'a Extension> {
@@ -59,7 +59,7 @@ fn managed_beats_user_beats_project_and_skills_beat_commands() {
         "A command named dup\n",
     );
     fx.mkdir(&fx.project_path(".git"));
-    let out = run_with(&fx, &env);
+    let out = run_with(&env);
 
     let dups = find(&out, "dup");
     assert_eq!(dups.len(), 4);
@@ -435,7 +435,7 @@ fn managed_skills_are_read_only_and_synced_skills_never_win() {
         "---\ndescription: synced\n---\nb\n",
     );
     fx.mkdir(&fx.project_path(".git"));
-    let out = run_with(&fx, &env);
+    let out = run_with(&env);
     let policy = &find(&out, "policy")[0];
     assert!(out.files.iter().any(|c| c.path == policy.file
         && c.policy

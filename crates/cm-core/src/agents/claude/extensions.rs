@@ -553,6 +553,7 @@ impl Builder<'_, '_> {
         LoadId(self.first + self.out.loads.len() as u32)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn push_load(
         &mut self,
         file: &AbsPath,

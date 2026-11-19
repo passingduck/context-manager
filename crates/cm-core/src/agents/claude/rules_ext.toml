@@ -1,1 +1,91 @@
 # Rules of the hooks and extensions half (spec 3 and 4). The instruction and memory half is in rules.toml.
+
+[[rule]]
+id = "claude.skill"
+en = "A skill is a folder with a SKILL.md file. Its name and description are listed to the model at the start of every session, and its body loads only when the skill is invoked."
+ko = "스킬은 SKILL.md 파일이 들어 있는 폴더입니다. 스킬의 이름과 설명은 세션을 시작할 때마다 모델에 목록으로 전달되고, 본문은 스킬을 실행할 때만 불러옵니다."
+evidence = "docs/agents/claude-code.md section 4, Skills (CONFIRMED). Skills with paths: whether they appear in the listing before they activate is UNVERIFIED."
+
+[[rule]]
+id = "claude.command"
+en = "A custom command is a Markdown file in a commands folder. Claude Code treats it like a skill: it is listed with the skills and its body loads when the command runs. A skill with the same name wins."
+ko = "사용자 지정 명령은 commands 폴더에 있는 마크다운 파일입니다. Claude Code는 이 파일을 스킬처럼 다루므로 스킬 목록에 함께 나오고, 본문은 명령을 실행할 때 불러옵니다. 이름이 같은 스킬이 있으면 스킬이 우선합니다."
+evidence = "docs/agents/claude-code.md section 4, Custom commands (CONFIRMED). Live reload of command folders is UNVERIFIED."
+
+[[rule]]
+id = "claude.agent"
+en = "A subagent is a Markdown file in an agents folder. Its name and description are listed to the main conversation, and its body becomes the whole system prompt of the subagent when it runs."
+ko = "서브에이전트는 agents 폴더에 있는 마크다운 파일입니다. 이름과 설명은 메인 대화에 목록으로 전달되고, 본문은 서브에이전트가 실행될 때 그 서브에이전트의 시스템 프롬프트 전체가 됩니다."
+evidence = "docs/agents/claude-code.md section 4, Subagents (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.hidden_model_invocation_off"
+en = "This skill sets disable-model-invocation, so Claude Code leaves it out of the listing. Only the user can invoke it."
+ko = "이 스킬은 disable-model-invocation을 켜 두었기 때문에 Claude Code가 목록에서 뺍니다. 사용자만 이 스킬을 실행할 수 있습니다."
+evidence = "docs/agents/claude-code.md section 4, Skills, skills hidden from the listing (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.hidden_override"
+en = "A skillOverrides entry in the settings sets this skill to user-invocable-only or off, so Claude Code leaves it out of the listing."
+ko = "설정의 skillOverrides 항목이 이 스킬을 user-invocable-only 또는 off로 정해 두었기 때문에 Claude Code가 목록에서 뺍니다."
+evidence = "docs/agents/claude-code.md section 4, Skills, skills hidden from the listing (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.rejected_too_large"
+en = "Claude Code skips a skill, command or subagent file that is larger than 1,048,576 bytes."
+ko = "Claude Code는 1,048,576바이트보다 큰 스킬, 명령, 서브에이전트 파일을 건너뜁니다."
+evidence = "docs/agents/claude-code.md section 4, shared loader rules (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.rejected_yaml"
+en = "The frontmatter of this subagent file is not valid YAML, so Claude Code skips the file."
+ko = "이 서브에이전트 파일의 프런트매터가 올바른 YAML이 아니어서 Claude Code가 파일을 건너뜁니다."
+evidence = "docs/agents/claude-code.md section 4, Subagents, files Claude Code skips (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.rejected_agent_name"
+en = "A subagent file needs a name that is not empty, does not start with a dash, has no colon and has at most 256 characters. Claude Code skips a file whose name breaks one of these rules, and treats a file with no name as documentation."
+ko = "서브에이전트 파일에는 이름이 있어야 하고, 이름은 대시로 시작하지 않으며 콜론을 포함하지 않고 256자 이하여야 합니다. 이 규칙을 하나라도 어기면 Claude Code가 파일을 건너뛰고, 이름이 없는 파일은 문서로 취급합니다."
+evidence = "docs/agents/claude-code.md section 4, Subagents, files Claude Code skips (CONFIRMED)."
+
+[[rule]]
+id = "claude.ext.rejected_agent_description"
+en = "A subagent file needs a description. Claude Code skips a file that has a name and no description."
+ko = "서브에이전트 파일에는 description이 있어야 합니다. 이름은 있고 description이 없는 파일은 Claude Code가 건너뜁니다."
+evidence = "docs/agents/claude-code.md section 4, Subagents, files Claude Code skips (CONFIRMED)."
+
+[[rule]]
+id = "claude.hook.toggle_managed"
+en = "This hook comes from a managed settings file or from the server-managed cache. An administrator owns it, and no user setting can turn it off, so this tool cannot switch it."
+ko = "이 훅은 관리형 설정 파일이나 서버 관리형 캐시에서 왔습니다. 관리자가 소유하며 사용자 설정으로는 끌 수 없으므로 이 도구도 켜고 끌 수 없습니다."
+evidence = "docs/agents/claude-code.md section 3, Definition locations and Switches (CONFIRMED)."
+
+[[rule]]
+id = "claude.hook.toggle_plugin"
+en = "This hook comes from a plugin. Claude Code has no switch for a single hook, and the plugin cache is replaced on every update, so this tool cannot switch it. Disable the plugin instead."
+ko = "이 훅은 플러그인에서 왔습니다. Claude Code에는 훅 하나만 끄는 스위치가 없고 플러그인 캐시는 업데이트할 때마다 교체되므로 이 도구도 켜고 끌 수 없습니다. 대신 플러그인을 끄세요."
+evidence = "docs/agents/claude-code.md section 3, Switches and Notes for the editor (CONFIRMED)."
+
+[[rule]]
+id = "claude.hook.toggle_frontmatter"
+en = "This hook is defined in the frontmatter of a skill, command or subagent file. Claude Code has no switch for a single hook, and this tool does not rewrite YAML frontmatter, so it cannot switch it. Edit the file to remove it."
+ko = "이 훅은 스킬, 명령 또는 서브에이전트 파일의 프런트매터에 정의되어 있습니다. Claude Code에는 훅 하나만 끄는 스위치가 없고 이 도구는 YAML 프런트매터를 고쳐 쓰지 않으므로 켜고 끌 수 없습니다. 파일을 직접 고쳐서 훅을 지우세요."
+evidence = "docs/agents/claude-code.md section 3, Switches and Notes for the editor (CONFIRMED)."
+
+[[rule]]
+id = "claude.hook.run_unsupported"
+en = "This tool test-runs only command hooks. The hook has another handler type, or its command is missing."
+ko = "이 도구는 command 훅만 시험 실행합니다. 이 훅은 다른 종류의 핸들러이거나 command 값이 없습니다."
+evidence = "docs/agents/claude-code.md section 3, Handler types and fields (CONFIRMED)."
+
+[[rule]]
+id = "claude.hook.plugin_variable_outside_plugin"
+en = "The command uses CLAUDE_PLUGIN_ROOT or CLAUDE_PLUGIN_DATA, which Claude Code resolves only in plugin hooks. In a settings file the hook fails, so this tool cannot run it."
+ko = "이 command는 CLAUDE_PLUGIN_ROOT 또는 CLAUDE_PLUGIN_DATA를 사용하는데, Claude Code는 이 변수를 플러그인 훅에서만 해석합니다. 설정 파일에서는 훅이 실패하므로 이 도구도 실행할 수 없습니다."
+evidence = "docs/agents/claude-code.md section 3, Path placeholders and hook environment (CONFIRMED). What CLAUDE_PLUGIN_ROOT means in a skill outside a plugin is UNVERIFIED (H2)."
+
+[[rule]]
+id = "claude.hook.user_config_needs_exec_form"
+en = "The command uses a user_config placeholder. Claude Code substitutes it only in the exec form of a plugin hook, where args is set, and this tool does not hold the user's plugin options, so it cannot run the hook."
+ko = "이 command는 user_config 자리표시자를 사용합니다. Claude Code는 플러그인 훅의 실행 형식, 즉 args를 지정한 경우에만 이 값을 치환하고, 이 도구는 사용자의 플러그인 옵션을 가지고 있지 않으므로 훅을 실행할 수 없습니다."
+evidence = "docs/agents/claude-code.md section 3, Path placeholders and hook environment (CONFIRMED)."
