@@ -4,6 +4,7 @@
 pub mod agents;
 pub mod api;
 pub mod cfg;
+pub mod doctor;
 pub mod edit;
 pub mod env;
 pub mod glob;
@@ -11,8 +12,12 @@ pub mod limits;
 pub mod md;
 pub mod model;
 pub mod parked;
+pub mod passes;
 pub mod probe_fs;
+pub mod program;
 pub mod scan;
+pub mod search;
+pub mod simulate;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod tokens;
