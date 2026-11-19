@@ -604,4 +604,3 @@ Three candidates wrote this design independently against one grounding file: one
 - Contract unit: `Preview` gains `conflicts: Vec<Conflict>`, because section 4 says a revert reports a file at neither state "as a conflict in the preview" and the listing has no field for it.
 - Contract unit: `ChangeSummary` is `{ edit: ChangeEdit, agent: Option<AgentId>, targets: Vec<AbsPath> }`, facts only, as rule 3 of `AGENTS.md` requires. `ChangeEdit` mirrors the `Edit` variants.
 - Contract unit: `ApiError::ReadOnly`, `InvalidEdit` and `Forbidden` carry `why: RuleRef` instead of prose. `ExtStatus::Shadowed { by }` holds an `ExtId`.
-- Contract unit: a snapshot's `FileState::Present.tokens` is 0 until the engines unit adds the tokenizer.

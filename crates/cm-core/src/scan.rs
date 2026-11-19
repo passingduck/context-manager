@@ -160,12 +160,12 @@ fn read_entry(cx: &ScanCx, path: &AbsPath, claimed: EditPolicy) -> FileEntry {
                         };
                     }
                 }
+                let rev = Revision::of(&bytes);
                 FileState::Present {
-                    rev: Revision::of(&bytes),
+                    tokens: crate::tokens::count_cached(&rev, &bytes),
+                    rev,
                     bytes: bytes.len() as u64,
                     lines: count_lines(&bytes),
-                    // The tokenizer arrives with the engines unit. Until then no count exists.
-                    tokens: 0,
                     mtime_ms: stat.mtime_ms,
                 }
             }
@@ -256,6 +256,20 @@ mod tests {
         fx.write(&fx.home_path(".codex/AGENTS.md"), "rules");
         let second = scan(&fx.env());
         assert_ne!(second.fingerprint, first.fingerprint);
+    }
+
+    #[test]
+    fn a_present_file_carries_its_o200k_token_count() {
+        let fx = Fixture::new();
+        let path = fx.project_path("CLAUDE.md");
+        fx.write(&path, "hello world");
+        let env = fx.env();
+        let fs = ProbeFs::new();
+        let entry = read_entry(&ScanCx { env: &env, fs: &fs }, &path, EditPolicy::Editable);
+        let FileState::Present { tokens, .. } = entry.state else {
+            panic!("expected a present file");
+        };
+        assert_eq!(tokens, 2);
     }
 
     #[test]
