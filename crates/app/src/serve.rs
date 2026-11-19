@@ -253,11 +253,16 @@ mod tests {
     }
 
     async fn start(fx: &Fixture) -> SocketAddr {
+        start_with(fx, false).await
+    }
+
+    async fn start_with(fx: &Fixture, read_only: bool) -> SocketAddr {
         let host = Arc::new(Host::new(HostConfig {
             shell: Shell::Serve,
-            read_only: false,
+            read_only,
             env: fx.env(),
             watch_timeout: std::time::Duration::from_secs(1),
+            data_dir: fx.root().join("data"),
         }));
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -361,6 +366,36 @@ mod tests {
         assert_eq!(reply.status, 200);
         let snapshot: Snapshot = serde_json::from_str(&reply.body).unwrap();
         assert_eq!(snapshot.agents.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_read_only_host_refuses_apply_and_leaves_the_file_alone() {
+        let fx = Fixture::new();
+        let file = fx.project_path("CLAUDE.md");
+        fx.write(&file, "before");
+        let addr = start_with(&fx, true).await;
+        let (key, value) = auth();
+        let body = serde_json::json!({
+            "op": "apply",
+            "args": {
+                "cwd": fx.project().as_str(),
+                "digest": "whatever",
+                "edit": {
+                    "kind": "save",
+                    "path": file.as_str(),
+                    "base": {"kind": "rev", "rev": "sha256:x"},
+                    "text": "after",
+                },
+            },
+        })
+        .to_string();
+        let reply = send(addr, "POST", "/api/rpc", &[(key, &value)], body.as_bytes()).await;
+        assert_eq!(reply.status, 403, "{}", reply.body);
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&reply.body).unwrap(),
+            serde_json::json!({"kind": "readOnly", "why": "host.read_only"})
+        );
+        assert_eq!(std::fs::read_to_string(file.as_path()).unwrap(), "before");
     }
 
     #[tokio::test]
