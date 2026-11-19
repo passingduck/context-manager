@@ -182,7 +182,11 @@ fn known_projects_are_the_keys_of_projects_json() {
     register(&fx, "p");
     let env = fx.env();
     let fs = ProbeFs::new();
-    let projects = Gemini.known_projects(&ScanCx { env: &env, fs: &fs });
+    let projects = Gemini.known_projects(&ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    });
     assert_eq!(
         projects,
         [fx.project(), AbsPath::parse("/other/project").unwrap()]

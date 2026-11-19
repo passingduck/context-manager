@@ -5,7 +5,7 @@ use std::time::Duration;
 use cm_core::agents::{Agent, registry};
 use cm_core::env::ScanEnv;
 use cm_core::probe_fs::fingerprint_of;
-use cm_core::scan::{Scanned, scan_with};
+use cm_core::scan::{Scanned, scan_with_parked};
 use cm_core::*;
 
 use crate::apply::{Ctx, OsTrash, Trasher};
@@ -131,9 +131,11 @@ impl Host {
     async fn scanned(&self, cwd: AbsPath) -> Result<Scanned, ApiError> {
         let env = self.config.env.with_cwd(cwd.clone());
         let agents = self.ctx.agents;
-        let scanned = tokio::task::spawn_blocking(move || scan_with(agents, &env))
-            .await
-            .map_err(join_error)?;
+        let parked = self.ctx.parked_dir.clone();
+        let scanned =
+            tokio::task::spawn_blocking(move || scan_with_parked(agents, &env, Some(&parked)))
+                .await
+                .map_err(join_error)?;
         self.probes
             .lock()
             .expect("probe table")

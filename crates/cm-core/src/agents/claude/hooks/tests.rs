@@ -8,7 +8,11 @@ use serde_json::json;
 
 fn scan_with(env: &ScanEnv) -> HooksOut {
     let fs = ProbeFs::new();
-    let cx = ScanCx { env, fs: &fs };
+    let cx = ScanCx {
+        env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let setup = Setup::load(&cx);
     let ext = extensions::scan(&cx, &setup, 0);
     scan(&cx, &setup, &ext)
@@ -546,7 +550,11 @@ fn exec_spec_builds_the_shell_form_and_the_exec_form() {
     );
     let (env, _) = managed_env(&fx);
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let out = scan_with(&env);
     let input = json!({"session_id": "abc", "hook_event_name": "Stop"});
     let project = fx.project();
@@ -589,7 +597,11 @@ fn exec_spec_resolves_the_plugin_root_for_plugin_hooks() {
     );
     let (env, _) = managed_env(&fx);
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let out = scan_with(&env);
     let hook = by_event(&out, "SessionStart")[0];
     let spec = exec_spec(hook, &sample_input("SessionStart", &cx), &cx).unwrap();
@@ -613,7 +625,11 @@ fn every_event_has_a_sample_input_naming_itself() {
     let fx = Fixture::new();
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     for event in &schema().events {
         let input = sample_input(&event.name, &cx);
         assert_eq!(input["hook_event_name"], event.name.as_str());

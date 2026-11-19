@@ -571,7 +571,11 @@ fn ours(t: &Tree, cwd: &Path) -> String {
     let env = ScanEnv::for_fixture(abs(&t.home()), abs(cwd))
         .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
     let scan = agent.scan(&cx);
     let blocks = agent.render(&cx, &scan.view);
