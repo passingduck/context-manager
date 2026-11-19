@@ -1,119 +1,109 @@
-import { useEffect, useState } from "react";
-import { call } from "./api/client";
-import type { AgentInfo } from "./gen/AgentInfo";
-import type { Session } from "./gen/Session";
+import { useMemo } from "react";
+import { useAgents, useScan, useSession, useWatch } from "./api/queries";
+import { ProjectProvider } from "./app/project";
+import { Rail } from "./app/Rail";
+import { useTheme } from "./app/theme";
+import { TopBar } from "./app/TopBar";
+import { ErrorNote, Loading } from "./components/ui";
+import { useI18n } from "./i18n";
 import type { Snapshot } from "./gen/Snapshot";
-import { catalogs, detectLang, rememberLang, type Lang } from "./i18n";
+import { useRoute, type Route } from "./lib/route";
 import { runSelftest } from "./selftest";
+import { ContextView } from "./views/ContextView";
+import { Detail } from "./views/Detail";
+import { DoctorView } from "./views/DoctorView";
+import { HistoryView } from "./views/HistoryView";
+import { HooksView } from "./views/HooksView";
+import { MemoryView } from "./views/MemoryView";
+import { SearchPanel } from "./views/SearchPanel";
 
-interface Loaded {
-  session: Session;
-  agents: AgentInfo[];
-  snapshot: Snapshot;
+/** With nothing selected, each view shows its first item so the detail pane is never blank. */
+function defaultSelection(view: Route["view"], snapshot: Snapshot): Partial<Route> {
+  switch (view) {
+    case "context": {
+      for (const agent of snapshot.agents) {
+        const load = agent.loads.find((l) => l.when.kind === "sessionStart");
+        if (load) return { sel: `file:${load.file}`, ag: agent.agent };
+      }
+      return {};
+    }
+    case "memory": {
+      const store = snapshot.agents.flatMap((agent) => agent.memory.map((m) => ({ agent: agent.agent, store: m }))).find(({ store: m }) => m.index ?? m.entries[0]);
+      const file = store?.store.index ?? store?.store.entries[0]?.file;
+      return file && store ? { sel: `file:${file}`, ag: store.agent } : {};
+    }
+    case "hooks": {
+      for (const agent of snapshot.agents) if (agent.hooks[0]) return { sel: `hook:${agent.hooks[0].id}`, ag: agent.agent };
+      return {};
+    }
+    case "doctor": {
+      for (const diagnostic of snapshot.diagnostics) {
+        if (diagnostic.at.kind === "file") return { sel: `file:${diagnostic.at.path}`, ag: diagnostic.agent ?? "", ln: diagnostic.at.line ?? 0 };
+        if (diagnostic.at.kind === "hook") return { sel: `hook:${diagnostic.at.hook}`, ag: diagnostic.agent ?? "" };
+      }
+      return {};
+    }
+    case "history":
+      return {};
+  }
 }
 
-async function load(): Promise<Loaded> {
-  const session = await call("session", null);
-  const [agents, snapshot] = await Promise.all([call("agents", null), call("scan", { cwd: session.launchCwd })]);
-  return { session, agents, snapshot };
-}
+if (new URLSearchParams(window.location.search).has("selftest")) void runSelftest();
 
 export function App() {
-  const [lang, setLang] = useState<Lang>(detectLang);
-  const [state, setState] = useState<{ loaded: Loaded } | { error: unknown } | null>(null);
-  const t = catalogs[lang];
+  const { t } = useI18n();
+  const [route, go] = useRoute();
+  const [theme, toggleTheme] = useTheme();
+  const session = useSession();
+  const agents = useAgents();
+  const cwd = route.p || session.data?.launchCwd || null;
+  const scan = useScan(cwd);
+  useWatch(cwd, scan.data?.fingerprint);
 
-  useEffect(() => {
-    load().then(
-      (loaded) => setState({ loaded }),
-      (error: unknown) => setState({ error }),
-    );
-    if (new URLSearchParams(window.location.search).has("selftest")) void runSelftest();
-  }, []);
-
-  function choose(next: Lang) {
-    setLang(next);
-    rememberLang(next);
-    document.documentElement.lang = next;
-  }
-
-  return (
-    <main className="mx-auto max-w-3xl p-6 font-sans">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{t.title}</h1>
-        <div role="group" aria-label={t.language} className="flex gap-1 text-sm">
-          {(["ko", "en"] as const).map((code) => (
-            <button
-              key={code}
-              type="button"
-              aria-pressed={lang === code}
-              onClick={() => choose(code)}
-              className="rounded border px-2 py-1 aria-pressed:bg-neutral-900 aria-pressed:text-white"
-            >
-              {code === "ko" ? "한국어" : "EN"}
-            </button>
-          ))}
-        </div>
-      </header>
-      {state === null ? (
-        <p>{t.loading}</p>
-      ) : "error" in state ? (
-        <p role="alert">
-          {t.failed}: {JSON.stringify(state.error)}
-        </p>
-      ) : (
-        <Overview t={t} loaded={state.loaded} />
-      )}
-    </main>
+  const value = useMemo(
+    () =>
+      session.data && agents.data && scan.data && cwd
+        ? { cwd, home: session.data.home, snapshot: scan.data, infos: agents.data, readOnly: session.data.readOnly }
+        : null,
+    [session.data, agents.data, scan.data, cwd],
   );
-}
 
-function Overview({ t, loaded }: { t: (typeof catalogs)[Lang]; loaded: Loaded }) {
-  const { session, agents, snapshot } = loaded;
-  const rows: [string, string][] = [
-    [t.session.version, session.version],
-    [t.session.shell, t.shell[session.shell]],
-    [t.session.readOnly, session.readOnly ? t.session.yes : t.session.no],
-    [t.session.launchCwd, session.launchCwd],
-    [t.session.home, session.home],
-    [t.session.os, t.os[session.os]],
-  ];
+  // With nothing selected, the context view shows its first file so the detail pane is never blank.
+  const shown = value && !route.sel ? { ...route, ...defaultSelection(route.view, value.snapshot) } : route;
+
+  const failure = session.error ?? agents.error ?? scan.error;
   return (
-    <>
-      <section className="mb-8">
-        <h2 className="mb-2 text-lg font-medium">{t.session.heading}</h2>
-        <dl className="grid grid-cols-[10rem_1fr] gap-y-1 text-sm">
-          {rows.map(([label, value]) => (
-            <div key={label} className="contents">
-              <dt className="text-neutral-500">{label}</dt>
-              <dd className="break-all">{value}</dd>
-            </div>
-          ))}
-        </dl>
-      </section>
-      <section>
-        <h2 className="mb-2 text-lg font-medium">{t.agents.heading}</h2>
-        <ul className="divide-y rounded border">
-          {snapshot.agents.map((view) => {
-            const info = agents.find((agent) => agent.id === view.agent);
-            const home = view.homes[0];
-            return (
-              <li key={view.agent} className="p-3 text-sm">
-                <div className="flex justify-between">
-                  <span className="font-medium">{info?.displayName ?? view.agent}</span>
-                  <span>{t.presence[view.presence.kind]}</span>
-                </div>
-                {home && (
-                  <div className="break-all text-neutral-500">
-                    {t.agents.home}: {home.path}
-                    {home.exists ? "" : ` (${t.agents.missing})`}
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-    </>
+    <div className="grid h-full grid-rows-[auto_1fr]">
+      <TopBar cwd={cwd ?? ""} home={session.data?.home ?? ""} route={route} go={go} theme={theme} toggleTheme={toggleTheme} />
+      {failure ? (
+        <ErrorNote error={failure} />
+      ) : !value ? (
+        <Loading />
+      ) : (
+        <ProjectProvider value={value}>
+          <div className="grid min-h-0 grid-cols-[13rem_minmax(0,5fr)_minmax(0,6fr)]">
+            <Rail route={route} go={go} snapshot={value.snapshot} readOnly={value.readOnly} pending={session.data?.pending.length ?? 0} />
+            <main className="flex min-h-0 min-w-0 flex-col border-r border-line" aria-label={t.title}>
+              {route.q.trim() ? (
+                <SearchPanel route={route} go={go} />
+              ) : route.view === "context" ? (
+                <ContextView route={shown} go={go} />
+              ) : route.view === "memory" ? (
+                <MemoryView route={route} go={go} />
+              ) : route.view === "hooks" ? (
+                <HooksView route={route} go={go} />
+              ) : route.view === "doctor" ? (
+                <DoctorView route={route} go={go} />
+              ) : (
+                <HistoryView route={route} go={go} />
+              )}
+            </main>
+            <aside className="min-h-0 min-w-0 bg-bg" aria-label={t.detail.why}>
+              <Detail route={shown} go={go} />
+            </aside>
+          </div>
+        </ProjectProvider>
+      )}
+    </div>
   );
 }

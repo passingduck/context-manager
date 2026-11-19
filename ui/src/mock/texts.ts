@@ -2,18 +2,22 @@
 
 const lines = (n: number, make: (i: number) => string) => Array.from({ length: n }, (_, i) => make(i + 1)).join("\n");
 
+const topics = ["error handling", "logging", "naming", "testing", "migrations", "release notes", "code review", "dependencies", "performance", "accessibility"];
+const pad = (text: string, count: number) =>
+  `${text}\n## Notes\n\n${lines(count, (i) => `- ${topics[i % topics.length]}: keep the change small, explain the reason in the commit message, and link the issue (note ${i}).`)}\n`;
+
 export const CWD = "/Users/dev/acme-app";
 export const HOME = "/Users/dev";
 
-export const claudeUser = `# Personal preferences
+export const claudeUser = pad(`# Personal preferences
 
 - Answer in the language I write in.
 - Prefer small diffs. Do not reformat files you did not change.
 - Never commit to main. Open a branch and a draft pull request.
 - Ask before you delete anything that is not under version control.
-`;
+`, 14);
 
-export const claudeProject = `# acme-app
+export const claudeProject = pad(`# acme-app
 
 A Tauri desktop app with an Axum backend and a React 19 frontend.
 @AGENTS.md
@@ -37,9 +41,9 @@ The backend is Rust (axum, tokio). The frontend is React 19 with Vite.
 
 @docs/missing-style.md
 @~/shared/team-notes.md
-`;
+`, 22);
 
-export const agentsMd = `# AGENTS.md
+export const agentsMd = pad(`# AGENTS.md
 
 ## Build and test
 
@@ -52,7 +56,7 @@ export const agentsMd = `# AGENTS.md
 - Rust: no unwrap in library code. Return errors with context.
 - TypeScript: strict mode. No any. Validate data where it enters the program.
 - Commit titles look like type(scope): subject.
-`;
+`, 18);
 
 export const claudeRuleAlways = `# Security
 
@@ -80,12 +84,12 @@ paths: **/*.rs
 Use thiserror in libraries and anyhow in binaries.
 `;
 
-export const claudeApi = `# src/api
+export const claudeApi = pad(`# src/api
 
 - Handlers stay thin. Business logic belongs in core.
 - Every handler returns a typed error. No string errors cross this boundary.
 - New routes need a test that calls them over HTTP.
-`;
+`, 12);
 
 export const claudeVendor = `# vendor/lib
 
@@ -114,7 +118,7 @@ export const memoryIndex = [
   "# Memory index",
   "",
   ...Array.from(
-    { length: 212 },
+    { length: 211 },
     (_, i) => `- [Note ${i + 1}](notes/note-${i + 1}.md) - one line summary of note ${i + 1}`,
   ),
   "- [Debugging](debugging.md) - how to read the host logs",

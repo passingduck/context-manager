@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { AbsPath } from "../gen/AbsPath";
 import { shortPath } from "../lib/format";
 import { en } from "./en";
@@ -46,10 +46,12 @@ const Context = createContext<I18n | null>(null);
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>(detectLang);
   const [roots, setRoots] = useState<{ cwd: AbsPath; home: AbsPath }>({ cwd: "", home: "" });
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
   const setLang = useCallback((next: Lang) => {
     setLangState(next);
     rememberLang(next);
-    document.documentElement.lang = next;
   }, []);
   const setRootsStable = useCallback((cwd: AbsPath, home: AbsPath) => {
     setRoots((old) => (old.cwd === cwd && old.home === home ? old : { cwd, home }));

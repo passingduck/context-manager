@@ -4,5 +4,5 @@ import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  build: { target: "es2022", outDir: "dist", emptyOutDir: true },
+  build: { target: "es2022", outDir: "dist", emptyOutDir: true, chunkSizeWarningLimit: 1500 },
 });

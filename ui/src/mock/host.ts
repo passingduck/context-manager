@@ -11,7 +11,12 @@ import type { Simulation } from "../gen/Simulation";
 import { agentInfos, CWD, files, FINGERPRINT, HOME, snapshot, texts } from "./snapshot";
 
 const globToRegExp = (glob: string) =>
-  new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*\*\//g, "(?:.*/)?").replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*")}$`);
+  new RegExp(
+    `^${glob
+      .split(/(\*\*\/|\*\*|\*)/)
+      .map((part) => (part === "**/" ? "(?:.*/)?" : part === "**" ? ".*" : part === "*" ? "[^/]*" : part.replace(/[.+^${}()|[\]\\?]/g, "\\$&")))
+      .join("")}$`,
+  );
 
 function fires(load: Load, path: AbsPath): boolean {
   if (load.when.kind !== "onAccess") return false;
