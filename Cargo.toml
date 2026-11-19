@@ -31,6 +31,7 @@ jsonc-parser = { version = "0.34", features = ["cst", "serde_json", "preserve_or
 toml_edit = "0.25"
 ignore = "0.4"
 globset = "0.4"
+regex = "1"
 
 [profile.release]
 lto = "thin"
