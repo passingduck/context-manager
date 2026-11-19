@@ -25,6 +25,7 @@ subtle = "2"
 getrandom = "0.4"
 tauri = { version = "2", features = ["custom-protocol"] }
 tauri-build = "2"
+trash = "5"
 
 [profile.release]
 lto = "thin"
