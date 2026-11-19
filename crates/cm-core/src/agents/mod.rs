@@ -83,6 +83,17 @@ pub trait Agent: Sync {
     fn plan(&self, _cx: &PlanCx, _edit: &Edit) -> Option<Result<Preview, ApiError>> {
         None
     }
+    /// Warnings for one planned write or trash of a file this agent uses, whoever planned it. A
+    /// plain save gets them too. `before` and `after` are the file's text, `None` when absent.
+    fn write_warnings(
+        &self,
+        _cx: &PlanCx,
+        _path: &AbsPath,
+        _before: Option<&str>,
+        _after: Option<&str>,
+    ) -> Vec<Warning> {
+        Vec::new()
+    }
     /// Runs on every planned write.
     fn guard(
         &self,

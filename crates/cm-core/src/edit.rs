@@ -137,7 +137,10 @@ impl<'a> Planner<'a> {
     pub fn plan(&self, edit: &Edit) -> Result<Preview, ApiError> {
         match edit {
             Edit::Save { path, base, text } => self.save(path, base, text),
-            Edit::Trash { path, base } => self.trash(path, base),
+            Edit::Trash { path, base } => match self.by_owner(path, edit) {
+                Some(result) => result,
+                None => self.trash(path, base),
+            },
             Edit::Revert { change } => self.revert(change),
             Edit::NewItem { agent, .. }
             | Edit::AddMemory { agent, .. }
@@ -396,6 +399,7 @@ impl<'a> Planner<'a> {
             }
             self.verify(op, &mut before)?;
             self.guard_op(op, &before)?;
+            self.add_write_warnings(op, &before, &mut warnings);
             let through = self.fs().stat(&op.path).ok().filter(|s| s.is_symlink);
             if through.is_some()
                 && let Ok(target) = self.fs().real_path(&op.path)
@@ -408,6 +412,39 @@ impl<'a> Planner<'a> {
             }
         }
         Ok(self.preview(summary, ops, before, warnings, conflicts))
+    }
+
+    /// Each owner of the file adds its warnings for the write, once.
+    fn add_write_warnings(
+        &self,
+        op: &FileOp,
+        before: &BTreeMap<AbsPath, Option<String>>,
+        warnings: &mut Vec<Warning>,
+    ) {
+        let after = match &op.action {
+            Action::Write { text } => Some(text.as_str()),
+            Action::Trash => None,
+            Action::TrashDir => return,
+        };
+        let before = before.get(&op.path).and_then(|b| b.as_deref());
+        let cx = self.plan_cx();
+        let owners = self.owners(&op.path);
+        for agent in self.agents.iter().filter(|a| owners.contains(&a.id())) {
+            for warning in agent.write_warnings(&cx, &op.path, before, after) {
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+        }
+    }
+
+    fn plan_cx(&self) -> PlanCx<'_> {
+        PlanCx {
+            env: self.env,
+            fs: self.fs(),
+            snapshot: &self.scanned.snapshot,
+            parked_dir: self.parked_dir,
+        }
     }
 
     fn check_dir(&self, dir: &AbsPath, mode: Mode) -> Result<(), ApiError> {
@@ -683,28 +720,39 @@ impl<'a> Planner<'a> {
         if agent.is_some() && candidates.is_empty() {
             return Err(invalid("agent", "edit.unknown_agent"));
         }
-        let cx = PlanCx {
-            env: self.env,
-            fs: self.fs(),
-            snapshot: &self.scanned.snapshot,
-            parked_dir: self.parked_dir,
-        };
+        let cx = self.plan_cx();
         for candidate in candidates {
             if let Some(result) = candidate.plan(&cx, edit) {
-                let preview = result?;
-                return self.finish(
-                    Mode::Agent,
-                    Draft {
-                        summary: preview.change_set.summary,
-                        ops: preview.change_set.ops,
-                        before: preview.before,
-                        warnings: preview.warnings,
-                        conflicts: preview.conflicts,
-                    },
-                );
+                return self.agent_preview(result);
             }
         }
         Err(invalid("edit", "edit.unsupported"))
+    }
+
+    /// An edit on a file an agent owns, such as a trash that also fixes an index. The first owner
+    /// that plans it wins. `None`: the generic plan applies.
+    fn by_owner(&self, path: &AbsPath, edit: &Edit) -> Option<Result<Preview, ApiError>> {
+        let owners = self.owners(path);
+        let cx = self.plan_cx();
+        self.agents
+            .iter()
+            .filter(|a| owners.contains(&a.id()))
+            .find_map(|a| a.plan(&cx, edit))
+            .map(|result| self.agent_preview(result))
+    }
+
+    fn agent_preview(&self, result: Result<Preview, ApiError>) -> Result<Preview, ApiError> {
+        let preview = result?;
+        self.finish(
+            Mode::Agent,
+            Draft {
+                summary: preview.change_set.summary,
+                ops: preview.change_set.ops,
+                before: preview.before,
+                warnings: preview.warnings,
+                conflicts: preview.conflicts,
+            },
+        )
     }
 }
 
