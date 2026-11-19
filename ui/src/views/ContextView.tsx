@@ -3,7 +3,6 @@ import { useRender, useSimulate } from "../api/queries";
 import { useProject } from "../app/project";
 import { Badge, Chip, ErrorNote, Mono, PaneTitle } from "../components/ui";
 import type { AgentView } from "../gen/AgentView";
-import type { BlockLabel } from "../gen/BlockLabel";
 import type { DocKind } from "../gen/DocKind";
 import type { Load } from "../gen/Load";
 import type { Simulation } from "../gen/Simulation";
@@ -11,21 +10,15 @@ import { useI18n } from "../i18n";
 import type { BundledKind } from "../i18n/en";
 import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
-import { activationTone, buildGroups, GROUPS, type GroupKey, statusTone, type Node } from "../lib/loads";
+import { buildPrefix, exact } from "../lib/prefix";
+import { activationTone, buildGroups, GROUPS, type GroupKey, LABEL_COLOR, statusTone, type Node } from "../lib/loads";
 import type { Route } from "../lib/route";
+import { PrefixMap } from "./PrefixMap";
 import { NewMenu } from "../write/create";
 import { useDirtyPaths } from "../write/buffers";
 import { RowMenu } from "../write/trash";
 
 type Go = (patch: Partial<Route>) => void;
-
-const LABEL_COLOR: Record<BlockLabel, string> = {
-  instructions: "var(--c2)",
-  memory: "var(--c4)",
-  skillCatalog: "var(--c3)",
-  agentCatalog: "var(--c1)",
-  commandCatalog: "var(--c0)",
-};
 
 export function ContextView({ route, go }: { route: Route; go: Go }) {
   const { t } = useI18n();
@@ -36,6 +29,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const snapshot = project.snapshot;
+  const firstWithBlocks = snapshot.agents.find((view) => view.session.length > 0)?.agent;
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const rows = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[data-row]"));
@@ -110,6 +104,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
         {snapshot.agents.map((view) => (
           <section key={view.agent} className="border-b border-line pb-2" aria-label={project.name(view.agent)}>
             <AgentHeader view={view} sim={byAgent.get(view.agent)} />
+            <PrefixMap view={view} route={route} go={go} intro={view.agent === firstWithBlocks} />
             {route.mode === "tree" ? (
               <AgentTree view={view} route={route} go={go} sim={byAgent.get(view.agent)} focused={focused} setFocused={setFocused} collapsed={collapsed} setCollapsed={setCollapsed} expanded={expanded} setExpanded={setExpanded} />
             ) : (
@@ -398,6 +393,7 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
   const { t } = useI18n();
   const project = useProject();
   const render = useRender(project.cwd, view.agent, project.snapshot.fingerprint, true);
+  const prefix = useMemo(() => buildPrefix(view), [view]);
   if (view.session.length === 0) return <p className="px-3 py-2 text-muted">{t.context.noLoads}</p>;
   if (render.isError) return <ErrorNote error={render.error} onRetry={() => void render.refetch()} />;
   return (
@@ -412,6 +408,7 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
               <Chip>{t.delivery[block.delivery]}</Chip>
               <Badge tone={block.fidelity === "exact" ? "ok" : "neutral"} title={t.fidelityHint[block.fidelity]}>{t.fidelity[block.fidelity]}</Badge>
               <span className="text-faint">{t.context.blockParts(block.parts.length)}</span>
+              <span className="tabular-nums text-faint">{t.prefix.blockRange(exact(prefix.blocks[index]!.start), exact(prefix.blocks[index]!.end))}</span>
               <span className="ml-auto tabular-nums">{fmt.tokens(block.tokens)}</span>
             </div>
             <ul className="flex flex-wrap gap-1 border-b border-line px-2 py-1">
