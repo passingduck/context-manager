@@ -172,12 +172,14 @@ pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, Ma
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
 pub struct ContextBlock {
-    pub delivery: Delivery,                  // SystemPrompt | UserMessage | DeveloperMessage | ToolSpec
+    pub delivery: Delivery,                  // SystemPrompt | SystemMessage | UserMessage | DeveloperMessage | ToolSpec
     pub label: BlockLabel,                   // Instructions | Memory | SkillCatalog | AgentCatalog | CommandCatalog
     pub parts: Vec<Part>,
     pub tokens: u32,
     pub fidelity: Fidelity,                  // Exact (compared with the real CLI in tests) | Approximate
+    pub preceded_by: Vec<Unsized>,           // content of unknown size sent between the previous block and this one, in the order the agent sends it
 }
+pub enum Unsized { BuiltIn, FirstPrompt }    // BuiltIn: built-in prompt and tool definitions. FirstPrompt: the user's first prompt and the context around it
 pub enum Part { Load { load: LoadId, tokens: u32 }, Glue { tokens: u32 } }
 pub struct Budget {
     pub session_start: u32,                  // sum of ContextBlock.tokens
@@ -608,6 +610,8 @@ Three candidates wrote this design independently against one grounding file: one
 **Changed after the security review.** The first version of this section had recovery finish a pending change on its own ("roll forward"). A reviewer showed two ways that goes wrong: a save that failed with a permission error was applied silently on a later history read, and a file that returned to its old content (a `git checkout`) was overwritten at the next start. Recovery now only classifies, a failed apply undoes itself, and the user decides about anything in between.
 
 **Added after the security review (second batch).** The reviewer reproduced six more defects, and each one became a rule above: a trash of a nested Gemini context file took its whole directory, because a slot shape meant for directory items was reused for "a file in any subdirectory" (the rule on directory items now reads from the snapshot, not from the path); a link to `/dev/zero` at a settings path made a scan run without end (the one reader now checks kind and size); Gemini imports multiplied with every sibling (the expander has a node budget); a save through a dangling link created a file outside the project (refused); a save split hard links (written in place); and a second instance finished or broke the first instance's change (the data directory lock).
+
+**Accepted after a capture.** `Delivery::SystemMessage` (a system-role message inside the conversation) and `ContextBlock.preceded_by` with `Unsized { BuiltIn, FirstPrompt }` were added because the lead captured one real Claude Code 2.1.329 request: it sends the subagent listing before the skill listing, in a system-role message, with the first prompt in between. `preceded_by` is a list so that one block can follow several gaps. The core pass starts the list of the first session block of every agent with `BuiltIn`. The Claude adapter adds `FirstPrompt` to its first listing block, so a project with skills and no instruction file starts with `[BuiltIn, FirstPrompt]`.
 
 ## Deviations
 

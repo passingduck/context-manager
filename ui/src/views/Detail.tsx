@@ -159,7 +159,7 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
               <li key={agent} data-prefix-position={agent} className="flex items-baseline gap-2">
                 <span className="size-2 shrink-0 rounded-full" style={{ background: project.color(agent) }} aria-hidden />
                 <b>{project.name(agent)}</b>
-                <span className="tabular-nums">{t.prefix.detailLine(t.prefix.positionText(exact(pos.seg.start), exact(pos.seg.end), exact(pos.total)), t.prefix.afterText(exact(pos.after)))}</span>
+                <span className="tabular-nums">{t.prefix.detailLine(t.prefix.positionText(exact(pos.seg.start), exact(pos.seg.end), exact(pos.total)), (pos.unsized.length > 0 ? t.prefix.afterAtLeast : t.prefix.afterText)(exact(pos.after)))}</span>
               </li>
             ))}
           </ul>

@@ -193,6 +193,7 @@ pub(super) fn built(
             parts,
             tokens: total,
             fidelity,
+            preceded_by: Vec::new(),
         },
     }
 }

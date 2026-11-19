@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use cm_core::agents::{ScanCx, find};
 use cm_core::env::ScanEnv;
-use cm_core::model::{AbsPath, AgentId, Fidelity};
+use cm_core::model::{AbsPath, AgentId, BlockLabel, Delivery, Fidelity, Unsized};
 use cm_core::probe_fs::ProbeFs;
 use serde_json::Value;
 
@@ -735,4 +735,346 @@ fn oracle_nested_worktree() {
 #[test]
 fn oracle_bytes() {
     check(Scenario::Bytes);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The skill and subagent listings (spec 4, "What reaches the model")
+// ---------------------------------------------------------------------------------------------
+
+/// The catalog fixture: skills and subagents of both scopes created out of name order, a command
+/// of each scope, `tools` and `disallowedTools` variants, and a memory index.
+fn build_catalogs(t: &Tree) -> PathBuf {
+    t.w("cfg/CLAUDE.md", "MARK-USER-CLAUDE\n");
+    t.w("top/repo/CLAUDE.md", "MARK-REPO-CLAUDE\n@AGENTS.md\n");
+    t.w("top/repo/AGENTS.md", "MARK-REPO-AGENTS\n");
+    std::fs::create_dir_all(t.repo()).unwrap();
+    git(&t.repo(), &["init", "-q", "."]);
+    for n in ["u-Zed", "u-mid", "u-Alpha", "u-beta"] {
+        t.w(
+            &format!("cfg/skills/{n}/SKILL.md"),
+            &format!("---\nname: {n}\ndescription: MARK-S-{n}\n---\nbody\n"),
+        );
+    }
+    for n in ["p-zulu", "p-Echo", "p-bravo", "p-Delta"] {
+        t.w(
+            &format!("top/repo/.claude/skills/{n}/SKILL.md"),
+            &format!("---\nname: {n}\ndescription: MARK-S-{n}\n---\nbody\n"),
+        );
+    }
+    t.w(
+        "cfg/commands/acmd.md",
+        "---\ndescription: MARK-S-acmd\n---\nbody\n",
+    );
+    t.w(
+        "top/repo/.claude/commands/zcmd.md",
+        "---\ndescription: MARK-S-zcmd\n---\nbody\n",
+    );
+    for (n, front) in [
+        ("ua-zz", ""),
+        ("ua-AA", ""),
+        ("pa-Mid", "tools: Read, Grep\n"),
+        ("pa-alpha", "disallowedTools: Write, Edit\n"),
+        (
+            "pa-both",
+            "tools: Read, Grep, Bash\ndisallowedTools: Bash\n",
+        ),
+        ("aa-last", "tools:\n  - Read\n"),
+    ] {
+        let dir = if n.starts_with("ua") {
+            "cfg/agents"
+        } else {
+            "top/repo/.claude/agents"
+        };
+        t.w(
+            &format!("{dir}/{n}.md"),
+            &format!("---\nname: {n}\ndescription: MARK-A-{n}\n{front}---\nbody\n"),
+        );
+    }
+    let key: String = t
+        .repo()
+        .to_str()
+        .unwrap()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    t.w(
+        &format!("cfg/projects/{key}/memory/MEMORY.md"),
+        "- [Mem](m.md) MARK-MEMORY-INDEX\n",
+    );
+    std::fs::create_dir_all(t.home()).unwrap();
+    t.repo()
+}
+
+fn texts_of(content: &Value) -> Vec<String> {
+    match content {
+        Value::String(s) => vec![s.clone()],
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b.get("text").and_then(Value::as_str).map(str::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn role_of(delivery: Delivery) -> &'static str {
+    match delivery {
+        Delivery::SystemMessage => "system",
+        Delivery::UserMessage => "user",
+        other => panic!("{other:?} is not a message role of a conversation"),
+    }
+}
+
+/// Claude Code 2.1.329 in print mode, spec 4: the instruction reminder opens the first user
+/// message, the first prompt follows it, and one later system-role message lists the subagents
+/// and then the skills. The adapter's blocks must agree with that request.
+#[test]
+fn oracle_catalogs() {
+    let Some(claude) = which("claude") else {
+        eprintln!("SKIP catalogs: `claude` is not installed");
+        return;
+    };
+    if which("git").is_none() {
+        eprintln!("SKIP catalogs: `git` is not installed");
+        return;
+    }
+    let t = fresh_root("catalogs");
+    let cwd = build_catalogs(&t);
+    let run = run_claude(&claude, &t, &cwd);
+    assert_eq!(
+        run.tripwire_connections, 0,
+        "a connection reached the proxy tripwire"
+    );
+    let body: Value = run
+        .requests
+        .iter()
+        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
+        .find(|b| b.get("messages").is_some())
+        .expect("the sink saw no request with messages");
+
+    // The request as one text, in the order the model reads it, with the message each text
+    // block belongs to.
+    let mut flat = String::new();
+    let mut roles: Vec<(usize, &str)> = Vec::new();
+    for block in texts_of(body.get("system").unwrap_or(&Value::Null)) {
+        flat.push_str(&block);
+        flat.push('\n');
+    }
+    let messages = body["messages"].as_array().expect("messages");
+    let mut first_user_blocks: Vec<usize> = Vec::new();
+    for (k, msg) in messages.iter().enumerate() {
+        let role = msg["role"].as_str().expect("role");
+        for text in texts_of(&msg["content"]) {
+            roles.push((flat.len(), role));
+            if k == 0 {
+                first_user_blocks.push(flat.len());
+            }
+            flat.push_str(&text);
+            flat.push('\n');
+        }
+    }
+    let at = |needle: &str| -> usize {
+        flat.find(needle)
+            .unwrap_or_else(|| panic!("`{needle}` is not in the captured request"))
+    };
+    let role_at = |pos: usize| roles.iter().rev().find(|(p, _)| *p <= pos).unwrap().1;
+
+    // The instruction reminder is in the first user message, before the prompt text.
+    assert_eq!(messages[0]["role"], "user");
+    let reminder = at(INTRO_START);
+    let prompt = flat.rfind("say hi").expect("the prompt text");
+    assert!(
+        first_user_blocks.iter().any(|&p| p <= reminder) && reminder < prompt,
+        "the instruction reminder is not before the prompt in the first user message"
+    );
+
+    // Our side.
+    let abs = |p: &Path| AbsPath::parse(p.to_str().unwrap()).unwrap();
+    let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
+        .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
+    let fs = ProbeFs::new();
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
+    let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
+    let view = agent.scan(&cx).view;
+    let rendered = agent.render(&cx, &view);
+    assert_eq!(view.session.len(), rendered.len());
+
+    // Every listing line we render appears verbatim in the capture, and the lines keep our
+    // order. The message that holds them has the role our delivery names.
+    let mut from = 0usize;
+    for (block, text) in view.session.iter().zip(&rendered) {
+        if !matches!(
+            block.label,
+            BlockLabel::AgentCatalog | BlockLabel::SkillCatalog
+        ) {
+            continue;
+        }
+        let want_role = role_of(block.delivery);
+        for line in text.text.lines().filter(|l| !l.is_empty()) {
+            let needle = format!("{line}\n");
+            let found = flat[from..]
+                .find(&needle)
+                .map(|p| p + from)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "line not found after offset {from}, in order, in the captured request: {line}"
+                    )
+                });
+            assert_eq!(
+                role_at(found),
+                want_role,
+                "`{line}` is in a message of another role than the adapter's delivery says"
+            );
+            from = found + needle.len();
+        }
+    }
+    assert!(from > 0, "the adapter rendered no listing");
+
+    // The session blocks, placed in the request, are in increasing order.
+    let place = |label: BlockLabel, text: &str| -> usize {
+        let first = text
+            .lines()
+            .find(|l| !l.is_empty() && !l.starts_with("<system-reminder>"))
+            .unwrap();
+        match label {
+            BlockLabel::Instructions => at(INTRO_START),
+            _ => at(first),
+        }
+    };
+    let placed: Vec<(BlockLabel, usize)> = view
+        .session
+        .iter()
+        .zip(&rendered)
+        .map(|(b, r)| (b.label, place(b.label, &r.text)))
+        .collect();
+    assert!(
+        placed.windows(2).all(|w| w[0].1 < w[1].1),
+        "session blocks are not in request order: {placed:?}"
+    );
+    assert_eq!(
+        placed.iter().map(|p| p.0).collect::<Vec<_>>(),
+        [
+            BlockLabel::Instructions,
+            BlockLabel::Memory,
+            BlockLabel::AgentCatalog,
+            BlockLabel::SkillCatalog
+        ]
+    );
+
+    // `preceded_by` says what the request holds between two blocks: the first prompt lies
+    // between the instructions and the first catalog, and nothing else sits between the catalogs.
+    let catalog = view
+        .session
+        .iter()
+        .position(|b| b.label == BlockLabel::AgentCatalog)
+        .unwrap();
+    assert_eq!(view.session[catalog].preceded_by, [Unsized::FirstPrompt]);
+    assert!(placed[catalog - 1].1 < prompt && prompt < placed[catalog].1);
+    assert!(view.session[catalog + 1].preceded_by.is_empty());
+}
+
+/// The same request with no instruction file at all (spec 4): the first user message holds no
+/// instruction reminder, and the two listings still arrive in a later message, the subagent
+/// listing first. The first block of our view is then a listing block that follows both gaps.
+#[test]
+fn oracle_catalogs_without_instructions() {
+    let Some(claude) = which("claude") else {
+        eprintln!("SKIP catalogs without instructions: `claude` is not installed");
+        return;
+    };
+    if which("git").is_none() {
+        eprintln!("SKIP catalogs without instructions: `git` is not installed");
+        return;
+    }
+    let t = fresh_root("catalogs-bare");
+    t.w(
+        "cfg/skills/solo/SKILL.md",
+        "---\nname: solo\ndescription: MARK-S-solo\n---\nbody\n",
+    );
+    t.w(
+        "cfg/agents/helper.md",
+        "---\nname: helper\ndescription: MARK-A-helper\n---\nbody\n",
+    );
+    std::fs::create_dir_all(t.repo()).unwrap();
+    git(&t.repo(), &["init", "-q", "."]);
+    std::fs::create_dir_all(t.home()).unwrap();
+    let cwd = t.repo();
+    let run = run_claude(&claude, &t, &cwd);
+    assert_eq!(
+        run.tripwire_connections, 0,
+        "a connection reached the proxy tripwire"
+    );
+    let body: Value = run
+        .requests
+        .iter()
+        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
+        .find(|b| b.get("messages").is_some())
+        .expect("the sink saw no request with messages");
+
+    // (message index, role, text) for every text block of the conversation.
+    let mut texts: Vec<(usize, String, String)> = Vec::new();
+    for (k, msg) in body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .enumerate()
+    {
+        let role = msg["role"].as_str().expect("role").to_owned();
+        for text in texts_of(&msg["content"]) {
+            texts.push((k, role.clone(), text));
+        }
+    }
+    let everything: String = texts_of(body.get("system").unwrap_or(&Value::Null))
+        .into_iter()
+        .chain(texts.iter().map(|t| t.2.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !everything.contains(INTRO_START),
+        "the request holds an instruction reminder although no instruction file exists"
+    );
+    let find_msg = |needle: &str| {
+        texts
+            .iter()
+            .find(|t| t.2.contains(needle))
+            .unwrap_or_else(|| panic!("`{needle}` is not in any message"))
+            .clone()
+    };
+    let agents = find_msg("MARK-A-helper");
+    let skills = find_msg("MARK-S-solo");
+    let prompt = find_msg("say hi");
+    assert_eq!(texts[0].1, "user");
+    assert_eq!(prompt.0, 0, "the first prompt is in the first user message");
+    assert!(
+        agents.0 > 0 && skills.0 > 0,
+        "the listings are in a later message"
+    );
+    assert_eq!(agents.1, "system");
+    assert_eq!(skills.1, "system");
+    let order = |needle: &str| everything.find(needle).unwrap();
+    assert!(order("MARK-A-helper") < order("MARK-S-solo"));
+
+    // Our side.
+    let abs = |p: &Path| AbsPath::parse(p.to_str().unwrap()).unwrap();
+    let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
+        .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
+    let fs = ProbeFs::new();
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
+    let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
+    let mut view = agent.scan(&cx).view;
+    cm_core::passes::unsized_gaps(&mut view);
+    let labels: Vec<BlockLabel> = view.session.iter().map(|b| b.label).collect();
+    assert_eq!(labels, [BlockLabel::AgentCatalog, BlockLabel::SkillCatalog]);
+    assert_eq!(
+        view.session[0].preceded_by,
+        [Unsized::BuiltIn, Unsized::FirstPrompt]
+    );
+    assert!(view.session[1].preceded_by.is_empty());
 }

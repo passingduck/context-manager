@@ -287,8 +287,20 @@ export const ko: typeof en = {
     title: "프롬프트 앞부분 지도",
     intro: "모델 제공사는 프롬프트의 앞부분이 이전과 똑같을 때만 저장해 둔 사본을 다시 씁니다. 이 앞부분을 프리픽스라고 부릅니다. 이 막대는 에이전트가 세션을 시작할 때 보내는 내용을 보내는 순서대로 보여 줍니다.",
     groupLabel: (name) => `${name}의 프롬프트 앞부분 지도`,
-    stubCaption: "내장 부분, 크기 모름",
-    stubTitle: "에이전트는 이 블록들보다 먼저 내장 프롬프트와 도구 정의를 보냅니다. 스캔으로는 이 크기를 잴 수 없어서 이 짧은 막대는 실제 크기를 따르지 않습니다.",
+    stub: {
+      builtIn: {
+        caption: "내장 부분, 크기 모름",
+        title: "에이전트는 이 블록들보다 먼저 내장 프롬프트와 도구 정의를 보냅니다. 스캔으로는 이 크기를 잴 수 없어서 이 짧은 막대는 실제 크기를 따르지 않습니다.",
+      },
+      firstPrompt: {
+        caption: "첫 프롬프트, 크기 모름",
+        title: "에이전트는 이 블록보다 먼저 사용자의 첫 프롬프트와, git 상태처럼 에이전트가 그 주변에 덧붙이는 내용을 보냅니다. 스캔으로는 이 크기를 잴 수 없어서 이 짧은 막대는 실제 크기를 따르지 않습니다.",
+      },
+    },
+    unsizedName: {
+      builtIn: "내장 프롬프트와 도구 정의",
+      firstPrompt: "첫 프롬프트와 그 주변 내용",
+    },
     blockRange: (from, to) => `토큰 ${from}부터 ${to}까지`,
     axis: "스캔이 아는 첫 블록의 시작부터 센 토큰 수",
     legendExact: "꽉 찬 색은 정확한 텍스트입니다",
@@ -304,7 +316,9 @@ export const ko: typeof en = {
     after: "뒤에 오는 양",
     positionText: (from, to, total) => `전체 ${total} 중 ${from}부터 ${to}까지`,
     afterText: (n) => `토큰 ${n}개`,
+    afterAtLeast: (n) => `토큰 ${n}개 이상`,
     tail: (n) => `이 파일이 바뀌면 여기서부터 프리픽스가 달라집니다. 앞부분이 똑같아야 쓰는 캐시는 이 파일 뒤의 토큰 ${n}개를 다시 쓰지 못합니다. 이것은 순서에서 따라오는 설명이며, 캐시를 실제로 잰 값은 아닙니다.`,
+    tailAtLeast: (n, what) => `이 파일이 바뀌면 여기서부터 프리픽스가 달라집니다. 앞부분이 똑같아야 쓰는 캐시는 이 파일 뒤의 텍스트를 다시 쓰지 못합니다. 스캔이 센 토큰은 ${n}개이고, 여기에 스캔이 잴 수 없는 내용인 ${what}도 더해집니다. 그래서 ${n}개는 최소한의 값입니다. 이것은 순서에서 따라오는 설명이며, 캐시를 실제로 잰 값은 아닙니다.`,
     tailNone: "이 파일 뒤에는 아무것도 없으므로 이 파일이 바뀌어도 뒤에 오는 텍스트는 영향을 받지 않습니다.",
     glueTitle: (n) => `파일 사이의 연결 문구, 토큰 ${n}개`,
     segLabel: (name, tokens, from, to) => `${name}, 토큰 ${tokens}개, ${from}부터 ${to}까지`,
@@ -654,6 +668,7 @@ export const ko: typeof en = {
   },
   delivery: {
     systemPrompt: "시스템 프롬프트",
+    systemMessage: "시스템 메시지",
     userMessage: "사용자 메시지",
     developerMessage: "개발자 메시지",
     toolSpec: "도구 설명",

@@ -892,6 +892,24 @@ camelCase keys. Only `name` and `description` are required. Unknown keys are ign
 | `experimental.cacheTtl` | `5m` or `1h`. Read from files only, not from `--agents` JSON. | no | CONFIRMED |
 | `observer`, `observerMessage`, `observeSubagents`, `observeToolResults` | In the binary schema but not in the docs. An editor should preserve them unchanged. | — | UNVERIFIED (what they do) |
 
+### Where the listings sit in the request
+
+Scope: Claude Code 2.1.329, print mode (`claude -p "say hi"`), captured 2026-11-20. Interactive mode was not captured. Evidence: the request bodies from a local sink, saved by the oracle scenario `oracle_catalogs` in `crates/cm-core/tests/claude_oracle.rs`. The fixture has user and project skills and subagents created out of name order, a command of each scope, `tools` and `disallowedTools` variants, and a project `MEMORY.md`. CONFIRMED for that version and mode.
+
+The first request is laid out in this order:
+
+1. `system`: a billing header, an identity line, and the built-in prompt. `tools`: 12 definitions (21 in later requests of the same run).
+2. `messages[0]`, role `user`, four text blocks: the instruction reminder (the `Contents of` blocks, then the auto-memory `MEMORY.md` inside the same `<system-reminder>`), a context reminder with the git status, an attribution reminder, and the prompt.
+3. `messages[1]`, role `system`, one text block: `# Environment`, a notice about deferred tools, the subagent listing, one sentence about launching agents, the skill listing, and the date.
+
+The listings are not wrapped in `<system-reminder>`. The subagent intro is followed directly by its entries. The sentence `When you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently.` follows the entries after a blank line. The skill intro is followed by a blank line and then its entries.
+
+- Subagent entry: `- <name>: <description> (Tools: <tools>)`. With no `tools` key, an empty one or `*`, `<tools>` is `All tools`, or `All tools except <disallowedTools>` when that key is set. With a `tools` list (a comma separated string or a YAML sequence), `<tools>` is that list joined by `, ` minus the names in `disallowedTools`, and `None` when nothing is left. A name such as `Agent(foo)` is kept as written.
+- Order of the subagents: by name without regard to case, across scopes, with the built-in ones in the same sequence.
+- Order of the skills: user skills, then project skills, each by name without regard to case, then the bundled skills. Commands come after all skills, by name without regard to case across scopes. The capture shows nothing about managed and plugin skills.
+- Built-in subagents (`claude`, `Explore`, `general-purpose`, `Plan`, `statusline-setup`) and about fifteen bundled skills sit in the same listings. A scan cannot see their text, so both listing blocks are `Approximate`.
+- Between the instruction reminder and the listing message the request holds the git status, the attribution reminder and the user's first prompt. Their size is not known to a scan. The model marks this with `preceded_by = FirstPrompt` on the first listing block.
+
 ### Output styles
 
 | path pattern | scope | when loaded (session start, or on demand + trigger) | limits and notes | evidence | status |

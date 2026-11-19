@@ -469,7 +469,9 @@ variants! {
 // ---------------------------------------------------------------------------------------------
 
 choices! {
-    pub enum Delivery { SystemPrompt, UserMessage, DeveloperMessage, ToolSpec }
+    pub enum Delivery { SystemPrompt, SystemMessage, UserMessage, DeveloperMessage, ToolSpec }
+    /// Content of unknown size that an agent sends between two session blocks.
+    pub enum Unsized { BuiltIn, FirstPrompt }
     pub enum BlockLabel { Instructions, Memory, SkillCatalog, AgentCatalog, CommandCatalog }
     /// `Exact` is compared with the real CLI in tests.
     pub enum Fidelity { Exact, Approximate }
@@ -485,6 +487,10 @@ records! {
         pub parts: Vec<Part>,
         pub tokens: u32,
         pub fidelity: Fidelity,
+        /// Content of unknown size that the agent sends between the previous block and this
+        /// one, in the order the agent sends it. The core pass starts the list of the first
+        /// block of every agent with `BuiltIn`.
+        pub preceded_by: Vec<Unsized>,
     }
 
     pub struct Budget {
