@@ -27,6 +27,9 @@ pub enum TokenSyntax {
 pub enum Protect {
     /// Code spans, fenced code blocks (backtick and tilde) and block-level HTML comments.
     Markdown,
+    /// Like `Markdown`, and also every closed `<!-- ... -->` inside a line of text. Claude Code
+    /// 2.1.328 does not import from an inline HTML comment (RUN:fromrepo of the Claude spec).
+    MarkdownAndInlineComments,
     /// A run of N backticks up to the next run of N, and nothing else.
     BacktickRuns,
     Nothing,
@@ -163,6 +166,14 @@ impl ImportRules {
             protect: Protect::BacktickRuns,
             cycles: CyclePolicy::PerChain,
             file_types: FileTypes::Any,
+        }
+    }
+
+    /// [`ImportRules::claude`] with the inline-comment protection that the real binary shows.
+    pub fn claude_observed(home: AbsPath, cwd: Option<AbsPath>) -> ImportRules {
+        ImportRules {
+            protect: Protect::MarkdownAndInlineComments,
+            ..ImportRules::claude(home, cwd)
         }
     }
 
@@ -370,6 +381,27 @@ impl Expander<'_> {
         match self.rules.protect {
             Protect::Nothing => Vec::new(),
             Protect::BacktickRuns => spans::backtick_regions(text),
+            Protect::MarkdownAndInlineComments => {
+                let s = spans::scan(text);
+                let mut regions: Vec<Range<usize>> = s
+                    .fences
+                    .iter()
+                    .chain(&s.code_spans)
+                    .chain(&s.comments)
+                    .map(|x| x.range.clone())
+                    .collect();
+                let mut at = 0;
+                while let Some(open) = text[at..].find("<!--") {
+                    let start = at + open;
+                    let Some(close) = text[start + 4..].find("-->") else {
+                        break;
+                    };
+                    let end = start + 4 + close + 3;
+                    regions.push(start..end);
+                    at = end;
+                }
+                regions
+            }
             Protect::Markdown => {
                 let s = spans::scan(text);
                 s.fences
@@ -747,5 +779,25 @@ mod tests {
     fn an_agent_without_imports_has_no_nodes() {
         let c = Case::new(&[("AGENTS.md", "@a.md\n"), ("a.md", "")]);
         assert!(c.run(&ImportRules::none(), "AGENTS.md").nodes.is_empty());
+    }
+
+    #[test]
+    fn claude_observed_skips_an_import_inside_an_inline_comment() {
+        let f = Fixture::new();
+        f.write(&f.project_path("a.md"), "x <!-- @b.md --> y\n@c.md\n");
+        f.write(&f.project_path("b.md"), "B\n");
+        f.write(&f.project_path("c.md"), "C\n");
+        let rules = ImportRules::claude_observed(f.home(), Some(f.project()));
+        let tree = expand(&f.project_path("a.md"), &rules, &ProbeFs::new());
+        let names: Vec<_> = tree
+            .imported()
+            .iter()
+            .map(|n| n.path.as_ref().unwrap().file_name().unwrap().to_owned())
+            .collect();
+        assert_eq!(names, ["c.md"]);
+        // The shipped rules keep treating an inline comment as text, as before.
+        let plain = ImportRules::claude(f.home(), Some(f.project()));
+        let tree = expand(&f.project_path("a.md"), &plain, &ProbeFs::new());
+        assert_eq!(tree.imported().len(), 2);
     }
 }

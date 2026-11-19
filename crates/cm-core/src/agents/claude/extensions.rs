@@ -1,9 +1,6 @@
 //! Claude Code skills, commands, subagents and plugins (spec 4). Output styles and MCP server
 //! configuration are not extensions in the model and are not read here.
 
-// Until `mod.rs` calls `scan`.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use serde_json::Value;

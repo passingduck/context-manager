@@ -3,9 +3,6 @@
 //! frontmatter of skills, commands and subagents. Hooks defined in code (the SDK, `--settings`,
 //! `--agents`) are not on disk and are not listed.
 
-// Until `mod.rs` calls `scan`.
-#![allow(dead_code)]
-
 mod exec;
 mod schema;
 
