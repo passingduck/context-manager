@@ -159,7 +159,9 @@ fn fill(w: &World, dir: &AbsPath, store: &mut MemoryStore, claims: &mut Vec<File
                     description,
                 });
             }
-            EntryKind::File if entry.name == ".extraction-state.json" || entry.name == ".extraction.lock" => {
+            EntryKind::File
+                if entry.name == ".extraction-state.json" || entry.name == ".extraction.lock" =>
+            {
                 claims.push(FileClaim {
                     path: path.clone(),
                     policy: EditPolicy::ReadOnly {
@@ -235,7 +237,11 @@ pub(super) fn note_loads(b: &mut Builder, stores: &Stores) {
     let Some(primary) = stores.stores.iter().find(|s| s.id == "gemini.private") else {
         return;
     };
-    for entry in primary.entries.iter().filter(|e| e.role == MemoryRole::Note) {
+    for entry in primary
+        .entries
+        .iter()
+        .filter(|e| e.role == MemoryRole::Note)
+    {
         let cx = b.w.cx;
         let text = read_lossy(cx, &entry.file).unwrap_or_default();
         let id = b.next_id();

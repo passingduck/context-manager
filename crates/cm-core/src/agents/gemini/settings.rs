@@ -105,7 +105,12 @@ enum ArrayMerge {
 }
 
 fn array_strategy(path: &[String]) -> ArrayMerge {
-    match path.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+    match path
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .as_slice()
+    {
         ["hooks", _] | ["context", "includeDirectories"] => ArrayMerge::Concat,
         ["hooksConfig", "disabled"] | ["context", "fileFiltering", "customIgnoreFilePaths"] => {
             ArrayMerge::Union
@@ -121,7 +126,9 @@ fn merge(base: &mut Value, over: &Value, path: &mut Vec<String>) {
     for (key, incoming) in over_map {
         path.push(key.clone());
         match (base_map.get_mut(key), incoming) {
-            (Some(existing @ Value::Object(_)), Value::Object(_)) => merge(existing, incoming, path),
+            (Some(existing @ Value::Object(_)), Value::Object(_)) => {
+                merge(existing, incoming, path)
+            }
             (Some(Value::Array(existing)), Value::Array(more)) => match array_strategy(path) {
                 ArrayMerge::Concat => existing.extend(more.iter().cloned()),
                 ArrayMerge::Union => {
@@ -227,7 +234,11 @@ mod tests {
     #[test]
     fn comments_pass_and_a_trailing_comma_is_fatal() {
         assert!(parse_settings_text("// c\n{\"a\": 1 /* x */}").is_ok());
-        assert!(parse_settings_text("{\"a\": [1, 2,]}").unwrap_err().contains("trailing comma"));
+        assert!(
+            parse_settings_text("{\"a\": [1, 2,]}")
+                .unwrap_err()
+                .contains("trailing comma")
+        );
         assert!(parse_settings_text("[1]").is_err());
         assert!(parse_settings_text("  ").is_err());
     }

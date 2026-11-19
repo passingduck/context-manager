@@ -133,7 +133,10 @@ fn skills(b: &mut Builder, out: &mut Exts) {
         }
     }
 
-    let ids: Vec<ExtId> = entries.iter().map(|e| ext_id("skill", &e.found.file)).collect();
+    let ids: Vec<ExtId> = entries
+        .iter()
+        .map(|e| ext_id("skill", &e.found.file))
+        .collect();
     for (index, entry) in entries.iter().enumerate() {
         let found = &entry.found;
         plugin_claim(out, found);
@@ -190,7 +193,7 @@ fn skills(b: &mut Builder, out: &mut Exts) {
         );
         let listing = found.problem.is_none().then(|| {
             let id = b.next_id();
-            let pushed = b.push(Load {
+            b.push(Load {
                 id: LoadId(id.0),
                 file: found.file.clone(),
                 kind: DocKind::Listing,
@@ -208,8 +211,7 @@ fn skills(b: &mut Builder, out: &mut Exts) {
                     tokens: tokens::count(&snippet),
                     transformed: true,
                 }),
-            });
-            pushed
+            })
         });
         let body = push_body(b, found, DocKind::SkillBody, "gemini.skill", &skip, true);
         out.items.push(Extension {
@@ -245,7 +247,8 @@ fn skill_files(w: &World, dir: &AbsPath) -> Vec<AbsPath> {
     }
     if let Ok(entries) = w.cx.fs.list(dir) {
         for entry in entries.iter() {
-            if entry.kind == EntryKind::Dir && entry.name != "node_modules" && entry.name != ".git" {
+            if entry.kind == EntryKind::Dir && entry.name != "node_modules" && entry.name != ".git"
+            {
                 let file = dir.join(&entry.name).join("SKILL.md");
                 if is_file(w.cx, &file) {
                     files.push(file);
@@ -283,7 +286,10 @@ fn read_skill(w: &World, file: &AbsPath, scope: Scope, plugin: Option<String>) -
             (Some(n), Some(d)) => Some((n.to_owned(), d.to_owned())),
             _ => None,
         },
-        None => fm.block.as_ref().and_then(|block| simple_frontmatter(&text[block.clone()])),
+        None => fm
+            .block
+            .as_ref()
+            .and_then(|block| simple_frontmatter(&text[block.clone()])),
     };
     let Some((name, description)) = pair else {
         return found;
@@ -305,15 +311,28 @@ fn simple_frontmatter(block: &str) -> Option<(String, String)> {
     while i < inner.len() {
         let line = inner[i];
         let lower = line.trim_start().to_lowercase();
-        if let Some(rest) = lower.strip_prefix("name") && rest.trim_start().starts_with(':') {
-            let value = line.trim_start()[4..].trim_start().trim_start_matches(':').trim();
+        if let Some(rest) = lower.strip_prefix("name")
+            && rest.trim_start().starts_with(':')
+        {
+            let value = line.trim_start()[4..]
+                .trim_start()
+                .trim_start_matches(':')
+                .trim();
             name = Some(unquote(value));
-        } else if let Some(rest) = lower.strip_prefix("description") && rest.trim_start().starts_with(':') {
-            let value = line.trim_start()[11..].trim_start().trim_start_matches(':').trim();
+        } else if let Some(rest) = lower.strip_prefix("description")
+            && rest.trim_start().starts_with(':')
+        {
+            let value = line.trim_start()[11..]
+                .trim_start()
+                .trim_start_matches(':')
+                .trim();
             let mut parts = vec![value.to_owned()];
             while let Some(next) = inner.get(i + 1) {
                 let key_like = next.trim_start().split(':').next().is_some_and(|k| {
-                    !k.is_empty() && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') && next.contains(':')
+                    !k.is_empty()
+                        && k.chars()
+                            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+                        && next.contains(':')
                 });
                 if next.trim().is_empty() || next.trim_start().starts_with('#') || key_like {
                     break;
@@ -322,7 +341,11 @@ fn simple_frontmatter(block: &str) -> Option<(String, String)> {
                 i += 1;
             }
             description = Some(unquote(
-                &parts.into_iter().filter(|p| !p.is_empty()).collect::<Vec<_>>().join(" "),
+                &parts
+                    .into_iter()
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" "),
             ));
         }
         i += 1;
@@ -355,7 +378,9 @@ fn push_body(
         file: found.file.clone(),
         kind: doc,
         scope: found.scope.clone(),
-        via: Via::Discovery { rule: rule(rule_id) },
+        via: Via::Discovery {
+            rule: rule(rule_id),
+        },
         when: Activation::OnInvoke,
         status: match skip {
             Some(skip) => LoadStatus::Skipped { skip: skip.clone() },
@@ -382,7 +407,13 @@ pub(super) fn command_name(relative: &str) -> String {
         .map(|segment| {
             let clean: String = segment
                 .chars()
-                .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' })
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.') {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect();
             if clean.chars().count() > 50 {
                 format!("{}...", clean.chars().take(47).collect::<String>())
@@ -484,13 +515,20 @@ fn commands(b: &mut Builder, out: &mut Exts) {
                 (ExtStatus::Active, None)
             };
             let index = out.items.len();
-            if status == ExtStatus::Active {
-                if let Some(old) = taken.insert(name.clone(), index) {
-                    // Project replaces user (spec 6, custom commands).
-                    out.items[old].status = ExtStatus::Shadowed { by: id.clone() };
-                }
+            if status == ExtStatus::Active
+                && let Some(old) = taken.insert(name.clone(), index)
+            {
+                // Project replaces user (spec 6, custom commands).
+                out.items[old].status = ExtStatus::Shadowed { by: id.clone() };
             }
-            let body = push_body(b, &found, DocKind::CommandBody, "gemini.command", &skip, false);
+            let body = push_body(
+                b,
+                &found,
+                DocKind::CommandBody,
+                "gemini.command",
+                &skip,
+                false,
+            );
             out.items.push(Extension {
                 id,
                 ext_kind: ExtKind::Command,
@@ -562,7 +600,9 @@ fn agents(b: &mut Builder, out: &mut Exts) {
         };
         let mut names: Vec<&str> = entries
             .iter()
-            .filter(|e| e.kind == EntryKind::File && !e.name.starts_with('_') && e.name.ends_with(".md"))
+            .filter(|e| {
+                e.kind == EntryKind::File && !e.name.starts_with('_') && e.name.ends_with(".md")
+            })
             .map(|e| e.name.as_str())
             .collect();
         names.sort_by(|a, b| cmp_utf16(a, b));
@@ -586,7 +626,9 @@ fn agents(b: &mut Builder, out: &mut Exts) {
                 scope: source.scope.clone(),
                 body: text[fm.body].trim().to_owned(),
                 plugin: source.plugin.clone(),
-                problem: fields.is_none().then_some("gemini.agent.invalid_frontmatter"),
+                problem: fields
+                    .is_none()
+                    .then_some("gemini.agent.invalid_frontmatter"),
             };
             plugin_claim(out, &found);
             let hash = sha256_hex(text.as_bytes());
@@ -656,7 +698,14 @@ fn agents(b: &mut Builder, out: &mut Exts) {
             } else {
                 (ExtStatus::Active, None)
             };
-            let body = push_body(b, &found, DocKind::SubagentPrompt, "gemini.agent", &skip, true);
+            let body = push_body(
+                b,
+                &found,
+                DocKind::SubagentPrompt,
+                "gemini.agent",
+                &skip,
+                true,
+            );
             out.items.push(Extension {
                 id: ext_id("subagent", &file),
                 ext_kind: ExtKind::Subagent,

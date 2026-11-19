@@ -15,12 +15,11 @@ pub(super) struct SystemMd {
 /// `resolvePathFromEnv`: `0`, `false` or unset keep the built-in prompt, `1` or `true` mean
 /// `<cwd>/.gemini/system.md`, and anything else is a path.
 pub(super) fn system_md(w: &World) -> Option<SystemMd> {
-    let raw = w
-        .cx
-        .env
-        .var("GEMINI_SYSTEM_MD")
-        .map(str::to_owned)
-        .or_else(|| dotenv_value(w, "GEMINI_SYSTEM_MD"))?;
+    let raw =
+        w.cx.env
+            .var("GEMINI_SYSTEM_MD")
+            .map(str::to_owned)
+            .or_else(|| dotenv_value(w, "GEMINI_SYSTEM_MD"))?;
     let trimmed = raw.trim();
     match trimmed.to_lowercase().as_str() {
         "" | "0" | "false" => None,

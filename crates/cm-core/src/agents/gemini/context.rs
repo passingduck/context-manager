@@ -78,7 +78,9 @@ impl<'w, 'a> Builder<'w, 'a> {
             file: path.clone(),
             kind: doc,
             scope: scope.clone(),
-            via: Via::Discovery { rule: rule(rule_id) },
+            via: Via::Discovery {
+                rule: rule(rule_id),
+            },
             when: when.clone(),
             status,
             delivered,
@@ -117,9 +119,8 @@ impl<'w, 'a> Builder<'w, 'a> {
             let l = self.push(skipped(Skip::Empty));
             return bare(l, None, 0);
         }
-        let block = format!(
-            "--- Context from: {path} ---\n{trimmed}\n--- End of Context from: {path} ---"
-        );
+        let block =
+            format!("--- Context from: {path} ---\n{trimmed}\n--- End of Context from: {path} ---");
         let block_tokens = tokens::count(&block);
         let delivered = Delivered {
             bytes: block.len() as u64,
@@ -174,7 +175,12 @@ impl<'w, 'a> Builder<'w, 'a> {
                         Problem::ImportMissing { raw }
                     };
                     self.diagnose(subject, problem);
-                    (LoadStatus::Skipped { skip: Skip::Missing }, None)
+                    (
+                        LoadStatus::Skipped {
+                            skip: Skip::Missing,
+                        },
+                        None,
+                    )
                 }
                 ImportOutcome::OutsideRoot => {
                     self.diagnose(subject, Problem::ImportOutsideRoot { raw });
@@ -193,7 +199,12 @@ impl<'w, 'a> Builder<'w, 'a> {
                         .iter()
                         .find(|(p, _)| *p == path)
                         .map_or_else(|| host.clone(), |(_, load)| load.clone());
-                    (LoadStatus::Skipped { skip: Skip::AlreadyLoaded { first } }, None)
+                    (
+                        LoadStatus::Skipped {
+                            skip: Skip::AlreadyLoaded { first },
+                        },
+                        None,
+                    )
                 }
                 _ => {
                     self.diagnose(subject, Problem::ImportMissing { raw });
@@ -241,16 +252,26 @@ impl<'w, 'a> Builder<'w, 'a> {
 
     /// A file that the folder's trust keeps out of the session (spec 1, "Only loaded when
     /// trusted").
-    pub fn add_untrusted(&mut self, path: &AbsPath, scope: Scope, when: Activation, rule_id: &'static str) {
+    pub fn add_untrusted(
+        &mut self,
+        path: &AbsPath,
+        scope: Scope,
+        when: Activation,
+        rule_id: &'static str,
+    ) {
         let id = self.next_id();
         self.push(Load {
             id,
             file: path.clone(),
             kind: DocKind::Instructions,
             scope,
-            via: Via::Discovery { rule: rule(rule_id) },
+            via: Via::Discovery {
+                rule: rule(rule_id),
+            },
             when,
-            status: LoadStatus::Skipped { skip: Skip::Untrusted },
+            status: LoadStatus::Skipped {
+                skip: Skip::Untrusted,
+            },
             delivered: None,
         });
     }
@@ -282,9 +303,11 @@ pub(super) fn inline(
             (Some(path), ImportOutcome::Missing) => out.push_str(&format!(
                 "<!-- Import failed: {raw} - ENOENT: no such file or directory, access '{path}' -->"
             )),
-            (Some(_), ImportOutcome::Unreadable | ImportOutcome::NotText) => out.push_str(&format!(
-                "<!-- Import failed: {raw} - EISDIR: illegal operation on a directory, read -->"
-            )),
+            (Some(_), ImportOutcome::Unreadable | ImportOutcome::NotText) => {
+                out.push_str(&format!(
+                    "<!-- Import failed: {raw} - EISDIR: illegal operation on a directory, read -->"
+                ))
+            }
             _ => out.push_str(&format!(
                 "<!-- Import failed: {raw} - Path traversal attempt -->"
             )),
@@ -386,9 +409,7 @@ fn session_identities(w: &World) -> HashSet<String> {
     let os = w.cx.env.os;
     let mut paths = global_files(w);
     paths.extend(extension_files(w).into_iter().map(|(p, _)| p));
-    if w.trusted() {
-        paths.extend(project_files(w).files);
-    }
+    paths.extend(project_files(w).files);
     paths.extend(memory::private_files(w));
     paths
         .iter()
@@ -486,12 +507,21 @@ pub(super) fn gather(b: &mut Builder) -> Gathered {
             );
             out.project.push(item);
         } else {
-            b.add_untrusted(path, scope, Activation::SessionStart, "gemini.context.project");
+            b.add_untrusted(
+                path,
+                scope,
+                Activation::SessionStart,
+                "gemini.context.project",
+            );
         }
     }
     for (path, first) in &project.duplicates {
-        let Some(first_id) = b.loads.iter().find(|l| l.file == *first)
-            .map(|l| l.id.clone()) else {
+        let Some(first_id) = b
+            .loads
+            .iter()
+            .find(|l| l.file == *first)
+            .map(|l| l.id.clone())
+        else {
             continue;
         };
         let id = b.next_id();

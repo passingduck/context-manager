@@ -60,7 +60,10 @@ The following content is loaded from local and global configuration files.\n\
         sections.push(format!(
             "<user_project_memory>\n--- Private Project Memory Index (private, not committed to repo) ---\n{private}\n--- End Private Project Memory Index ---\n</user_project_memory>"
         ));
-        format!("\n---\n\n<loaded_context>\n{}\n</loaded_context>", sections.join("\n"))
+        format!(
+            "\n---\n\n<loaded_context>\n{}\n</loaded_context>",
+            sections.join("\n")
+        )
     };
     collapse_newlines(&text).trim_start_matches('\n').to_owned()
 }
@@ -83,7 +86,10 @@ fn tier2(extension: &str, project: &str) -> String {
     if sections.is_empty() {
         return String::new();
     }
-    format!("\n<loaded_context>\n{}\n</loaded_context>", sections.join("\n"))
+    format!(
+        "\n<loaded_context>\n{}\n</loaded_context>",
+        sections.join("\n")
+    )
 }
 
 fn skill_catalog(skills: &[(LoadId, String, String, AbsPath)]) -> String {
@@ -101,12 +107,7 @@ fn skill_catalog(skills: &[(LoadId, String, String, AbsPath)]) -> String {
     )
 }
 
-fn make(
-    delivery: Delivery,
-    label: BlockLabel,
-    text: String,
-    loads: &[(LoadId, u32)],
-) -> Composed {
+fn make(delivery: Delivery, label: BlockLabel, text: String, loads: &[(LoadId, u32)]) -> Composed {
     let total = tokens::count(&text);
     let counted: u32 = loads.iter().map(|(_, t)| *t).sum();
     let mut parts: Vec<Part> = loads
@@ -168,7 +169,12 @@ pub(super) fn compose(
             .catalog
             .iter()
             .map(|(load, name, description, file)| {
-                let one = skill_catalog(&[(load.clone(), name.clone(), description.clone(), file.clone())]);
+                let one = skill_catalog(&[(
+                    load.clone(),
+                    name.clone(),
+                    description.clone(),
+                    file.clone(),
+                )]);
                 (load.clone(), tokens::count(&one))
             })
             .collect();
@@ -190,7 +196,11 @@ pub(super) fn compose(
             &loads,
         ));
     }
-    let project = if w.trusted() { blocks(&g.project) } else { String::new() };
+    let project = if w.trusted() {
+        blocks(&g.project)
+    } else {
+        String::new()
+    };
     let session = tier2(&blocks(&g.extension), &project);
     if !session.is_empty() {
         let mut loads = loads_of(&g.extension);

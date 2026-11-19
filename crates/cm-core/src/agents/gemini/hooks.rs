@@ -79,7 +79,10 @@ struct Switches {
 
 fn switches(w: &World) -> Switches {
     let enabled = w.settings.bool("hooksConfig.enabled", true);
-    let enabled_in = w.settings.set_in("hooksConfig.enabled").map(|l| l.path.clone());
+    let enabled_in = w
+        .settings
+        .set_in("hooksConfig.enabled")
+        .map(|l| l.path.clone());
     let mut disabled: Vec<(String, AbsPath)> = Vec::new();
     for layer in w.settings.layers.iter().filter(|l| l.active) {
         if let Some(Value::Array(names)) = layer.value.pointer("/hooksConfig/disabled") {
@@ -170,9 +173,7 @@ fn layer_scope(w: &World, layer: &Layer) -> Scope {
     match layer.kind {
         LayerKind::SystemDefaults | LayerKind::System => Scope::Managed,
         LayerKind::User => Scope::User,
-        LayerKind::Workspace => Scope::Project {
-            dir: w.cwd.clone(),
-        },
+        LayerKind::Workspace => Scope::Project { dir: w.cwd.clone() },
     }
 }
 
@@ -338,7 +339,10 @@ fn matcher_eval(event: &str, raw: Option<&str>) -> (MatcherEval, Option<String>)
     let Some(matcher) = raw.map(str::trim).filter(|m| !m.is_empty() && *m != "*") else {
         return (MatcherEval::All, None);
     };
-    let kind = EVENTS.iter().find(|(name, _)| *name == event).map(|(_, k)| *k);
+    let kind = EVENTS
+        .iter()
+        .find(|(name, _)| *name == event)
+        .map(|(_, k)| *k);
     match kind {
         Some(MatcherKind::Regex) => match Regex::new(matcher) {
             Ok(_) => (MatcherEval::Regex, None),
@@ -377,20 +381,28 @@ pub(super) fn sample_input(event: &str, cx: &ScanCx) -> Value {
         "timestamp": "2026-01-01T00:00:00.000Z",
     });
     let extra = match event {
-        "BeforeTool" => json!({"tool_name": "write_file", "tool_input": {"file_path": "README.md", "content": "text"}}),
+        "BeforeTool" => {
+            json!({"tool_name": "write_file", "tool_input": {"file_path": "README.md", "content": "text"}})
+        }
         "AfterTool" => json!({
             "tool_name": "write_file",
             "tool_input": {"file_path": "README.md", "content": "text"},
             "tool_response": {"llmContent": "ok", "returnDisplay": "ok"},
         }),
         "BeforeAgent" => json!({"prompt": "Describe this project."}),
-        "AfterAgent" => json!({"prompt": "Describe this project.", "prompt_response": "Done.", "stop_hook_active": false}),
-        "Notification" => json!({"notification_type": "ToolPermission", "message": "Allow write_file?", "details": {}}),
+        "AfterAgent" => {
+            json!({"prompt": "Describe this project.", "prompt_response": "Done.", "stop_hook_active": false})
+        }
+        "Notification" => {
+            json!({"notification_type": "ToolPermission", "message": "Allow write_file?", "details": {}})
+        }
         "SessionStart" => json!({"source": "startup"}),
         "SessionEnd" => json!({"reason": "exit"}),
         "PreCompress" => json!({"trigger": "auto"}),
         "BeforeModel" | "BeforeToolSelection" => json!({"llm_request": llm_request()}),
-        "AfterModel" => json!({"llm_request": llm_request(), "llm_response": {"text": "ok", "candidates": []}}),
+        "AfterModel" => {
+            json!({"llm_request": llm_request(), "llm_response": {"text": "ok", "candidates": []}})
+        }
         _ => json!({}),
     };
     if let (Some(base), Value::Object(extra)) = (input.as_object_mut(), extra) {
@@ -405,11 +417,7 @@ fn llm_request() -> Value {
 
 /// The invocation the CLI itself would make (spec 5, "Execution"): `bash -c <command>` with the
 /// five `$NAMES` replaced and shell-escaped, and the same names exported.
-pub(super) fn exec_spec(
-    hook: &Hook,
-    input: &Value,
-    cx: &ScanCx,
-) -> Result<ExecSpec, RuleRef> {
+pub(super) fn exec_spec(hook: &Hook, input: &Value, cx: &ScanCx) -> Result<ExecSpec, RuleRef> {
     if cx.env.os == Os::Windows {
         return Err(rule("gemini.hook.windows_unsupported"));
     }

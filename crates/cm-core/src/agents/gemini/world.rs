@@ -39,7 +39,12 @@ impl<'a> World<'a> {
 
         let mut layers = Vec::new();
         if let Some(path) = settings::system_defaults_path(cx) {
-            layers.push(settings::read_layer(cx, LayerKind::SystemDefaults, path, true));
+            layers.push(settings::read_layer(
+                cx,
+                LayerKind::SystemDefaults,
+                path,
+                true,
+            ));
         }
         layers.push(settings::read_layer(
             cx,

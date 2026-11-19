@@ -88,7 +88,12 @@ pub(super) fn normalize_name(name: &str) -> String {
 
 /// Files below `dir`, at any depth up to `max_depth`, whose name ends with `ext`, sorted by
 /// path. Symlinks to directories are followed, as the CLI's glob does.
-pub(super) fn files_with_ext(cx: &ScanCx, dir: &AbsPath, ext: &str, max_depth: usize) -> Vec<AbsPath> {
+pub(super) fn files_with_ext(
+    cx: &ScanCx,
+    dir: &AbsPath,
+    ext: &str,
+    max_depth: usize,
+) -> Vec<AbsPath> {
     let mut out = Vec::new();
     collect(cx, dir, ext, max_depth, &mut out);
     out.sort_by(|a, b| cmp_utf16(a.as_str(), b.as_str()));

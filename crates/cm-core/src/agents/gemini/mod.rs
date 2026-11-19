@@ -12,8 +12,8 @@ use crate::tokens;
 
 mod compose;
 mod context;
-mod exts;
 mod extension;
+mod exts;
 mod guard;
 mod hooks;
 mod memory;
@@ -225,7 +225,12 @@ fn system_md(b: &mut Builder) -> Option<compose::SystemMdText> {
             }),
         ),
         // The CLI throws `missing system prompt file` and does not start.
-        None => (LoadStatus::Skipped { skip: Skip::Missing }, None),
+        None => (
+            LoadStatus::Skipped {
+                skip: Skip::Missing,
+            },
+            None,
+        ),
     };
     let load = b.push(Load {
         id,
@@ -370,10 +375,7 @@ fn state_claims(w: &World) -> Vec<FileClaim> {
             });
         }
     }
-    for path in [
-        w.gdir.join("trusted_hooks.json"),
-        w.trust.file.clone(),
-    ] {
+    for path in [w.gdir.join("trusted_hooks.json"), w.trust.file.clone()] {
         if util::is_file(w.cx, &path) {
             claims.push(state(path));
         }

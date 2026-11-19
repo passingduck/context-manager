@@ -47,7 +47,10 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
     let Ok(entries) = cx.fs.list(&base) else {
         return out;
     };
-    let admin_off = settings.get("admin.extensions.enabled").and_then(Value::as_bool) == Some(false);
+    let admin_off = settings
+        .get("admin.extensions.enabled")
+        .and_then(Value::as_bool)
+        == Some(false);
     let enablement = read_enablement(cx, &base);
     for entry in entries.iter().filter(|e| e.kind == EntryKind::Dir) {
         if entry.name.ends_with(".lock") {
@@ -67,7 +70,8 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
         };
         let meta = read_install_metadata(cx, &dir);
         if admin_off {
-            out.diagnostics.push(reject("gemini.extension.admin_disabled", &dir));
+            out.diagnostics
+                .push(reject("gemini.extension.admin_disabled", &dir));
             continue;
         }
         if let Some(why) = blocked_by_security(cx, settings, meta.as_ref()) {
@@ -91,13 +95,15 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
             manifest_path
         };
         let Some(text) = read_lossy(cx, &manifest_path) else {
-            out.diagnostics.push(reject("gemini.extension.invalid_manifest", &manifest_path));
+            out.diagnostics
+                .push(reject("gemini.extension.invalid_manifest", &manifest_path));
             continue;
         };
         let manifest: Value = match serde_json::from_str(&text) {
             Ok(value) => value,
             Err(_) => {
-                out.diagnostics.push(reject("gemini.extension.invalid_manifest", &manifest_path));
+                out.diagnostics
+                    .push(reject("gemini.extension.invalid_manifest", &manifest_path));
                 continue;
             }
         };
@@ -105,12 +111,15 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
             manifest.get("name").and_then(Value::as_str),
             manifest.get("version").and_then(Value::as_str),
         ) else {
-            out.diagnostics.push(reject("gemini.extension.invalid_manifest", &manifest_path));
+            out.diagnostics
+                .push(reject("gemini.extension.invalid_manifest", &manifest_path));
             continue;
         };
         if out.exts.iter().any(|e| e.name == name) {
-            out.fatal
-                .push((manifest_path.clone(), format!("duplicate extension name {name}")));
+            out.fatal.push((
+                manifest_path.clone(),
+                format!("duplicate extension name {name}"),
+            ));
             continue;
         }
         let off_by = disabled_by(&enablement, name, cwd);
@@ -133,7 +142,11 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
 }
 
 fn read_install_metadata(cx: &ScanCx, dir: &AbsPath) -> Option<Value> {
-    serde_json::from_str(&read_lossy(cx, &dir.join(".gemini-extension-install.json"))?).ok()
+    serde_json::from_str(&read_lossy(
+        cx,
+        &dir.join(".gemini-extension-install.json"),
+    )?)
+    .ok()
 }
 
 /// `security.allowedExtensions` (a regex list on the install source) and
