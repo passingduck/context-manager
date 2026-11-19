@@ -19,8 +19,9 @@ if (!chrome) {
 
 const STEP_MS = 90_000;
 const here = dirname(fileURLToPath(import.meta.url));
-// CM_E2E_ONLY=<text in a step file name> runs only those steps, for debugging one flow.
-const stepFiles = readdirSync(join(here, "steps")).filter((f) => f.endsWith(".mjs") && f.includes(process.env.CM_E2E_ONLY ?? "")).sort();
+// CM_E2E_ONLY=a,b runs only the steps whose file name contains one of the words, for debugging a flow.
+const only = (process.env.CM_E2E_ONLY ?? "").split(",").filter(Boolean);
+const stepFiles = readdirSync(join(here, "steps")).filter((f) => f.endsWith(".mjs") && (only.length === 0 || only.some((word) => f.includes(word)))).sort();
 
 const box = createSandbox();
 try {
