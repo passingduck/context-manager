@@ -8,3 +8,4 @@ crates/app/gen/
 CLAUDE.local.md
 .claude/worktrees/
 .omc/
+ui/screenshots/

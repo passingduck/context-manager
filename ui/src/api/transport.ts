@@ -6,6 +6,11 @@ const TOKEN_KEY = "context-manager.token";
 
 export type TransportName = "invoke" | "http";
 
+/** `?mock=1` answers from the bundled mock snapshot instead of the host. */
+export function mockEnabled(): boolean {
+  return new URLSearchParams(window.location.search).get("mock") === "1";
+}
+
 export function transportName(): TransportName {
   return "__TAURI_INTERNALS__" in window ? "invoke" : "http";
 }
@@ -39,6 +44,10 @@ function token(): string | null {
 
 /** Sends one request. A failure is thrown as the `ApiError` the host returned. */
 export async function send(request: Request): Promise<unknown> {
+  if (mockEnabled()) {
+    const { handle } = await import("../mock/host");
+    return handle(request);
+  }
   if (transportName() === "invoke") {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke("rpc", { request });
