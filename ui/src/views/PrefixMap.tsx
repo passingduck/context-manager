@@ -92,8 +92,8 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
       </p>
       <div className="relative">
         <div className="relative" style={{ height: CAPTION_H + STRIP_H }}>
-          {prefix.stubs.map((stub) => (
-            <div key={stub.block} data-stub={stub.kind} className="absolute top-0" style={{ left: place.at(stub.at, "before"), width: STUB_W, height: CAPTION_H + STRIP_H }} title={t.prefix.stub[stub.kind].title}>
+          {prefix.stubs.map((stub, order) => (
+            <div key={`${stub.block}-${stub.kind}`} data-stub={stub.kind} className="absolute top-0" style={{ left: `calc(${place.at(stub.at, "before")} + ${Math.max(0, order - stubsBefore(prefix, stub.at, "before")) * STUB_W}px)`, width: STUB_W, height: CAPTION_H + STRIP_H }} title={t.prefix.stub[stub.kind].title}>
               <p className="break-keep pr-1 text-[10px] leading-3 text-faint" style={{ height: CAPTION_H }}>{t.prefix.stub[stub.kind].caption}</p>
               <div aria-hidden className="absolute inset-x-0 bottom-0 border-y-2 border-dashed border-faint bg-sunken" style={{ height: STRIP_H, clipPath: "polygon(0 0, 100% 0, 92% 25%, 100% 50%, 92% 75%, 100% 100%, 0 100%)" }} />
             </div>

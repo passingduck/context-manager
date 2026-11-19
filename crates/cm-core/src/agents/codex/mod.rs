@@ -155,7 +155,7 @@ fn context_block(block: &Block) -> ContextBlock {
         } else {
             Fidelity::Exact
         },
-        preceded_by: None,
+        preceded_by: Vec::new(),
     }
 }
 

@@ -971,10 +971,110 @@ fn oracle_catalogs() {
         .iter()
         .position(|b| b.label == BlockLabel::AgentCatalog)
         .unwrap();
-    assert_eq!(
-        view.session[catalog].preceded_by,
-        Some(Unsized::FirstPrompt)
-    );
+    assert_eq!(view.session[catalog].preceded_by, [Unsized::FirstPrompt]);
     assert!(placed[catalog - 1].1 < prompt && prompt < placed[catalog].1);
-    assert_eq!(view.session[catalog + 1].preceded_by, None);
+    assert!(view.session[catalog + 1].preceded_by.is_empty());
+}
+
+/// The same request with no instruction file at all (spec 4): the first user message holds no
+/// instruction reminder, and the two listings still arrive in a later message, the subagent
+/// listing first. The first block of our view is then a listing block that follows both gaps.
+#[test]
+fn oracle_catalogs_without_instructions() {
+    let Some(claude) = which("claude") else {
+        eprintln!("SKIP catalogs without instructions: `claude` is not installed");
+        return;
+    };
+    if which("git").is_none() {
+        eprintln!("SKIP catalogs without instructions: `git` is not installed");
+        return;
+    }
+    let t = fresh_root("catalogs-bare");
+    t.w(
+        "cfg/skills/solo/SKILL.md",
+        "---\nname: solo\ndescription: MARK-S-solo\n---\nbody\n",
+    );
+    t.w(
+        "cfg/agents/helper.md",
+        "---\nname: helper\ndescription: MARK-A-helper\n---\nbody\n",
+    );
+    std::fs::create_dir_all(t.repo()).unwrap();
+    git(&t.repo(), &["init", "-q", "."]);
+    std::fs::create_dir_all(t.home()).unwrap();
+    let cwd = t.repo();
+    let run = run_claude(&claude, &t, &cwd);
+    assert_eq!(
+        run.tripwire_connections, 0,
+        "a connection reached the proxy tripwire"
+    );
+    let body: Value = run
+        .requests
+        .iter()
+        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
+        .find(|b| b.get("messages").is_some())
+        .expect("the sink saw no request with messages");
+
+    // (message index, role, text) for every text block of the conversation.
+    let mut texts: Vec<(usize, String, String)> = Vec::new();
+    for (k, msg) in body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .enumerate()
+    {
+        let role = msg["role"].as_str().expect("role").to_owned();
+        for text in texts_of(&msg["content"]) {
+            texts.push((k, role.clone(), text));
+        }
+    }
+    let everything: String = texts_of(body.get("system").unwrap_or(&Value::Null))
+        .into_iter()
+        .chain(texts.iter().map(|t| t.2.clone()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !everything.contains(INTRO_START),
+        "the request holds an instruction reminder although no instruction file exists"
+    );
+    let find_msg = |needle: &str| {
+        texts
+            .iter()
+            .find(|t| t.2.contains(needle))
+            .unwrap_or_else(|| panic!("`{needle}` is not in any message"))
+            .clone()
+    };
+    let agents = find_msg("MARK-A-helper");
+    let skills = find_msg("MARK-S-solo");
+    let prompt = find_msg("say hi");
+    assert_eq!(texts[0].1, "user");
+    assert_eq!(prompt.0, 0, "the first prompt is in the first user message");
+    assert!(
+        agents.0 > 0 && skills.0 > 0,
+        "the listings are in a later message"
+    );
+    assert_eq!(agents.1, "system");
+    assert_eq!(skills.1, "system");
+    let order = |needle: &str| everything.find(needle).unwrap();
+    assert!(order("MARK-A-helper") < order("MARK-S-solo"));
+
+    // Our side.
+    let abs = |p: &Path| AbsPath::parse(p.to_str().unwrap()).unwrap();
+    let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
+        .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
+    let fs = ProbeFs::new();
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
+    let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
+    let mut view = agent.scan(&cx).view;
+    cm_core::passes::unsized_gaps(&mut view);
+    let labels: Vec<BlockLabel> = view.session.iter().map(|b| b.label).collect();
+    assert_eq!(labels, [BlockLabel::AgentCatalog, BlockLabel::SkillCatalog]);
+    assert_eq!(
+        view.session[0].preceded_by,
+        [Unsized::BuiltIn, Unsized::FirstPrompt]
+    );
+    assert!(view.session[1].preceded_by.is_empty());
 }

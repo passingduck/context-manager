@@ -488,8 +488,9 @@ records! {
         pub tokens: u32,
         pub fidelity: Fidelity,
         /// Content of unknown size that the agent sends between the previous block and this
-        /// one. The core pass sets `BuiltIn` on the first block of every agent.
-        pub preceded_by: Option<Unsized>,
+        /// one, in the order the agent sends it. The core pass starts the list of the first
+        /// block of every agent with `BuiltIn`.
+        pub preceded_by: Vec<Unsized>,
     }
 
     pub struct Budget {

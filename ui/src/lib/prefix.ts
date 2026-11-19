@@ -45,7 +45,7 @@ export function buildPrefix(view: AgentView): Prefix {
   let at = 0;
   view.session.forEach((block, index) => {
     const blockStart = at;
-    if (block.precededBy) stubs.push({ at: blockStart, block: index, kind: block.precededBy });
+    for (const kind of block.precededBy) stubs.push({ at: blockStart, block: index, kind });
     for (const part of block.parts) {
       segs.push({ index: segs.length, block: index, load: part.kind === "load" ? (view.loads[part.load] ?? null) : null, tokens: part.tokens, start: at, end: at + part.tokens });
       at += part.tokens;

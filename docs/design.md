@@ -177,7 +177,7 @@ pub struct ContextBlock {
     pub parts: Vec<Part>,
     pub tokens: u32,
     pub fidelity: Fidelity,                  // Exact (compared with the real CLI in tests) | Approximate
-    pub preceded_by: Option<Unsized>,        // content of unknown size sent between the previous block and this one
+    pub preceded_by: Vec<Unsized>,           // content of unknown size sent between the previous block and this one, in the order the agent sends it
 }
 pub enum Unsized { BuiltIn, FirstPrompt }    // BuiltIn: built-in prompt and tool definitions. FirstPrompt: the user's first prompt and the context around it
 pub enum Part { Load { load: LoadId, tokens: u32 }, Glue { tokens: u32 } }
@@ -607,7 +607,7 @@ Three candidates wrote this design independently against one grounding file: one
 
 **Changed after the security review.** The first version of this section had recovery finish a pending change on its own ("roll forward"). A reviewer showed two ways that goes wrong: a save that failed with a permission error was applied silently on a later history read, and a file that returned to its old content (a `git checkout`) was overwritten at the next start. Recovery now only classifies, a failed apply undoes itself, and the user decides about anything in between.
 
-**Accepted after a capture.** `Delivery::SystemMessage` (a system-role message inside the conversation) and `ContextBlock.preceded_by` with `Unsized { BuiltIn, FirstPrompt }` were added because the lead captured one real Claude Code 2.1.329 request: it sends the subagent listing before the skill listing, in a system-role message, with the first prompt in between. The core pass sets `BuiltIn` on the first session block of every agent. The Claude adapter sets `FirstPrompt` on its first listing block.
+**Accepted after a capture.** `Delivery::SystemMessage` (a system-role message inside the conversation) and `ContextBlock.preceded_by` with `Unsized { BuiltIn, FirstPrompt }` were added because the lead captured one real Claude Code 2.1.329 request: it sends the subagent listing before the skill listing, in a system-role message, with the first prompt in between. `preceded_by` is a list so that one block can follow several gaps. The core pass starts the list of the first session block of every agent with `BuiltIn`. The Claude adapter adds `FirstPrompt` to its first listing block, so a project with skills and no instruction file starts with `[BuiltIn, FirstPrompt]`.
 
 ## Deviations
 

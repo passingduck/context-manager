@@ -12,6 +12,7 @@ import type { Unsized } from "./Unsized";
 export type ContextBlock = { delivery: Delivery, label: BlockLabel, parts: Array<Part>, tokens: number, fidelity: Fidelity, 
 /**
  * Content of unknown size that the agent sends between the previous block and this
- * one. The core pass sets `BuiltIn` on the first block of every agent.
+ * one, in the order the agent sends it. The core pass starts the list of the first
+ * block of every agent with `BuiltIn`.
  */
-precededBy: Unsized | null, };
+precededBy: Array<Unsized>, };

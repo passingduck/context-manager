@@ -127,7 +127,7 @@ pub(super) fn build(cx: &ScanCx, setup: &Setup, extensions: &[Extension]) -> Vec
     // Spec 4: the first prompt and the context around it sit between the instruction reminder
     // and this message.
     if let Some(first) = out.first_mut() {
-        first.block.preceded_by = Some(Unsized::FirstPrompt);
+        first.block.preceded_by = vec![Unsized::FirstPrompt];
     }
     out
 }
@@ -343,8 +343,8 @@ mod tests {
                 .all(|b| b.delivery == Delivery::SystemMessage
                     && b.fidelity == Fidelity::Approximate)
         );
-        assert_eq!(view.session[0].preceded_by, Some(Unsized::FirstPrompt));
-        assert_eq!(view.session[1].preceded_by, None);
+        assert_eq!(view.session[0].preceded_by, [Unsized::FirstPrompt]);
+        assert!(view.session[1].preceded_by.is_empty());
         assert_eq!(
             block(&rendered, BlockLabel::AgentCatalog).text,
             "Available agent types for the Agent tool:\n- helper: d-helper (Tools: All tools)\n\nWhen you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently."
