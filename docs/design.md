@@ -172,12 +172,14 @@ pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, Ma
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
 pub struct ContextBlock {
-    pub delivery: Delivery,                  // SystemPrompt | UserMessage | DeveloperMessage | ToolSpec
+    pub delivery: Delivery,                  // SystemPrompt | SystemMessage | UserMessage | DeveloperMessage | ToolSpec
     pub label: BlockLabel,                   // Instructions | Memory | SkillCatalog | AgentCatalog | CommandCatalog
     pub parts: Vec<Part>,
     pub tokens: u32,
     pub fidelity: Fidelity,                  // Exact (compared with the real CLI in tests) | Approximate
+    pub preceded_by: Option<Unsized>,        // content of unknown size sent between the previous block and this one
 }
+pub enum Unsized { BuiltIn, FirstPrompt }    // BuiltIn: built-in prompt and tool definitions. FirstPrompt: the user's first prompt and the context around it
 pub enum Part { Load { load: LoadId, tokens: u32 }, Glue { tokens: u32 } }
 pub struct Budget {
     pub session_start: u32,                  // sum of ContextBlock.tokens
@@ -604,6 +606,8 @@ Three candidates wrote this design independently against one grounding file: one
 **Rejected.** A filesystem trait with an in-memory implementation: tests use real temp directories, so symlinks and case-insensitive names behave as they do for the agents. Calling `codex app-server` during every scan: it needs Codex installed and makes a scan start a process. A native directory picker and "reveal in Finder": they need a second Tauri API beside `rpc`. Detecting running agent processes for a warning: it adds a process-inspection dependency. A limit on failed logins, a token file flag, a `Host` allowlist flag and a directory allowlist for serve: the token is 256 random bits and is never sent by the browser on its own, and a token holder can already run commands through a hook.
 
 **Changed after the security review.** The first version of this section had recovery finish a pending change on its own ("roll forward"). A reviewer showed two ways that goes wrong: a save that failed with a permission error was applied silently on a later history read, and a file that returned to its old content (a `git checkout`) was overwritten at the next start. Recovery now only classifies, a failed apply undoes itself, and the user decides about anything in between.
+
+**Accepted after a capture.** `Delivery::SystemMessage` (a system-role message inside the conversation) and `ContextBlock.preceded_by` with `Unsized { BuiltIn, FirstPrompt }` were added because the lead captured one real Claude Code 2.1.329 request: it sends the subagent listing before the skill listing, in a system-role message, with the first prompt in between. The core pass sets `BuiltIn` on the first session block of every agent. The Claude adapter sets `FirstPrompt` on its first listing block.
 
 ## Deviations
 

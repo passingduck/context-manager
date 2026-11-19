@@ -86,6 +86,7 @@ pub fn scan_with_parked(
     diagnostics.extend(passes::reference_graph(&cx, &project_root, &mut views));
     for view in &mut views {
         passes::budget(view);
+        passes::unsized_gaps(view);
     }
     let index = walk::walk(&env.cwd, &fs);
     let files = intern(&cx, &views, &claimed);

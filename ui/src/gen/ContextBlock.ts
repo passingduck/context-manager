@@ -3,9 +3,15 @@ import type { BlockLabel } from "./BlockLabel";
 import type { Delivery } from "./Delivery";
 import type { Fidelity } from "./Fidelity";
 import type { Part } from "./Part";
+import type { Unsized } from "./Unsized";
 
 /**
  * What the agent sends when a session starts. Structure only. The literal text comes from
  * the `render` operation.
  */
-export type ContextBlock = { delivery: Delivery, label: BlockLabel, parts: Array<Part>, tokens: number, fidelity: Fidelity, };
+export type ContextBlock = { delivery: Delivery, label: BlockLabel, parts: Array<Part>, tokens: number, fidelity: Fidelity, 
+/**
+ * Content of unknown size that the agent sends between the previous block and this
+ * one. The core pass sets `BuiltIn` on the first block of every agent.
+ */
+precededBy: Unsized | null, };

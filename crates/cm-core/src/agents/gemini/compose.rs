@@ -127,6 +127,7 @@ fn make(delivery: Delivery, label: BlockLabel, text: String, loads: &[(LoadId, u
             parts,
             tokens: total,
             fidelity: Fidelity::Approximate,
+            preceded_by: None,
         },
         rendered: RenderedBlock {
             delivery,

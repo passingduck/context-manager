@@ -509,18 +509,21 @@ fn ext_id(kind: ExtKind, file: &AbsPath) -> ExtId {
 
 /// Spec 4, "What reaches the model": one catalog line and what the cut did to it. A skill or
 /// command entry is `description - when_to_use`, cut at `max_desc` characters. A subagent entry
-/// is the whole description.
+/// is the whole description and the `(Tools: ...)` suffix.
 pub(super) fn listing_entry(
     kind: ExtKind,
     name: &str,
     description: &str,
-    when_to_use: Option<&str>,
+    fm: &Option<serde_json::Map<String, Value>>,
     max_desc: u64,
 ) -> (String, LoadStatus) {
     if kind == ExtKind::Subagent {
-        return (format!("{name}: {description}"), LoadStatus::Loaded);
+        return (
+            format!("{name}: {description} (Tools: {})", agent_tools(fm)),
+            LoadStatus::Loaded,
+        );
     }
-    let full = match when_to_use {
+    let full = match fm_str(fm, "when_to_use") {
         Some(w) => format!("{description} - {w}"),
         None => description.to_owned(),
     };
@@ -539,6 +542,50 @@ pub(super) fn listing_entry(
         }
     };
     (format!("{name}: {}", cut.text), status)
+}
+
+/// A frontmatter list that is a comma separated string or a YAML sequence, trimmed, without
+/// empty items.
+fn fm_names(map: &Option<serde_json::Map<String, Value>>, key: &str) -> Vec<String> {
+    let items: Vec<String> = match map.as_ref().and_then(|m| m.get(key)) {
+        Some(Value::String(s)) => s.split(',').map(str::to_owned).collect(),
+        Some(Value::Array(a)) => a
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    items
+        .into_iter()
+        .map(|i| i.trim().to_owned())
+        .filter(|i| !i.is_empty())
+        .collect()
+}
+
+/// Spec 4, subagent entry: the text after `Tools:`, as the 2.1.329 capture shows it. No `tools`
+/// (or an empty list, or `*`) is `All tools`, with `except` and the `disallowedTools` when
+/// those are set. A `tools` list loses the names `disallowedTools` holds, and an empty
+/// remainder is `None`.
+fn agent_tools(map: &Option<serde_json::Map<String, Value>>) -> String {
+    let allowed = fm_names(map, "tools");
+    let denied = fm_names(map, "disallowedTools");
+    if allowed.is_empty() || allowed == ["*"] {
+        return if denied.is_empty() {
+            "All tools".to_owned()
+        } else {
+            format!("All tools except {}", denied.join(", "))
+        };
+    }
+    let kept: Vec<String> = allowed
+        .into_iter()
+        .filter(|t| !denied.contains(t))
+        .collect();
+    if kept.is_empty() {
+        "None".to_owned()
+    } else {
+        kept.join(", ")
+    }
 }
 
 /// The cut length that `skillListingMaxDescChars` sets.
@@ -933,9 +980,7 @@ impl Builder<'_, '_> {
             let mut listing = None;
             if status == ExtStatus::Active {
                 let desc = p.description.clone().unwrap_or_default();
-                let when_to_use = fm_str(map, "when_to_use");
-                let (entry, load_status) =
-                    listing_entry(cand.kind, &p.name, &desc, when_to_use, max_desc);
+                let (entry, load_status) = listing_entry(cand.kind, &p.name, &desc, map, max_desc);
                 let toks = tokens::count(&entry);
                 if cand.kind == ExtKind::Subagent {
                     agent_tokens += u64::from(toks);

@@ -197,3 +197,9 @@ id = "claude.plan.title_invalid"
 en = "A memory needs a title, which names its file and its line in MEMORY.md."
 ko = "메모리에는 제목이 필요합니다. 제목이 파일 이름과 MEMORY.md의 한 줄이 됩니다."
 evidence = "docs/agents/claude-code.md section 2.6 (CONFIRMED)."
+
+[[rule]]
+id = "claude.catalogs"
+en = "Claude Code sends the subagent listing and then the skill listing in one system message after the first user message, not in the first user message. The first prompt and the context around it sit between the instruction files and this message. Both listings also hold built-in entries that a scan cannot see, so the sizes shown for them are lower bounds."
+ko = "Claude Code는 서브에이전트 목록과 스킬 목록을 첫 사용자 메시지 안이 아니라 그 뒤에 오는 시스템 메시지 하나에 순서대로 담아 보냅니다. 첫 프롬프트와 그 주변 내용은 지침 파일과 이 메시지 사이에 들어갑니다. 두 목록에는 스캔이 볼 수 없는 기본 제공 항목도 들어 있으므로, 화면에 보이는 크기는 실제보다 작거나 같은 값입니다."
+evidence = "docs/agents/claude-code.md section 4, Where the listings sit in the request (CONFIRMED for 2.1.329 in print mode, oracle scenario oracle_catalogs)."

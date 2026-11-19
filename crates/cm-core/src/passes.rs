@@ -207,6 +207,15 @@ pub fn budget(view: &mut AgentView) {
     };
 }
 
+/// Every agent sends its built-in prompt and tool definitions before the first session block
+/// (design section 3, `ContextBlock.preceded_by`). An adapter that already named a gap on that
+/// block keeps its own.
+pub fn unsized_gaps(view: &mut AgentView) {
+    if let Some(first) = view.session.first_mut() {
+        first.preceded_by.get_or_insert(Unsized::BuiltIn);
+    }
+}
+
 fn is_on_access(loads: &[Load], load: &Load, depth: usize) -> bool {
     match (&load.when, &load.via) {
         (Activation::OnAccess { .. }, _) => true,

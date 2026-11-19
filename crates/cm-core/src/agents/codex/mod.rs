@@ -46,7 +46,7 @@ struct Computed {
 fn rank(delivery: Delivery) -> u8 {
     match delivery {
         Delivery::SystemPrompt => 0,
-        Delivery::DeveloperMessage => 1,
+        Delivery::SystemMessage | Delivery::DeveloperMessage => 1,
         Delivery::UserMessage => 2,
         Delivery::ToolSpec => 3,
     }
@@ -155,6 +155,7 @@ fn context_block(block: &Block) -> ContextBlock {
         } else {
             Fidelity::Exact
         },
+        preceded_by: None,
     }
 }
 
