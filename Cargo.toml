@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/cm-core", "crates/cm-host", "crates/app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[workspace.dependencies]
+cm-core = { path = "crates/cm-core" }
+cm-host = { path = "crates/cm-host" }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ts-rs = { version = "12", features = ["serde-json-impl"] }
+sha2 = "0.11"
+toml = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "signal"] }
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+rust-embed = { version = "8", features = ["debug-embed"] }
+subtle = "2"
+getrandom = "0.4"
+tauri = { version = "2", features = ["custom-protocol"] }
+tauri-build = "2"
+
+[profile.release]
+lto = "thin"

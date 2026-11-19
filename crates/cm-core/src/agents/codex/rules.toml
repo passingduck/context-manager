@@ -1,0 +1,5 @@
+[[rule]]
+id = "codex.home"
+en = "Codex CLI reads its user-level files from the directory in CODEX_HOME, and from .codex in the home directory when that variable is not set."
+ko = "Codex CLI는 사용자 수준 파일을 CODEX_HOME 환경 변수가 가리키는 디렉터리에서 읽고, 이 변수가 없으면 홈 디렉터리의 .codex 디렉터리에서 읽습니다."
+evidence = "docs/agents/codex.md section 6.1"

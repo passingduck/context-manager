@@ -1,0 +1,5 @@
+[[rule]]
+id = "claude.home"
+en = "Claude Code reads its user-level files from the directory in CLAUDE_CONFIG_DIR, and from .claude in the home directory when that variable is not set."
+ko = "Claude Code는 사용자 수준 파일을 CLAUDE_CONFIG_DIR 환경 변수가 가리키는 디렉터리에서 읽고, 이 변수가 없으면 홈 디렉터리의 .claude 디렉터리에서 읽습니다."
+evidence = "docs/agents/claude-code.md section 1.1"

@@ -1,0 +1,5 @@
+[[rule]]
+id = "gemini.home"
+en = "Gemini CLI treats GEMINI_CLI_HOME as the home directory and reads its user-level files from the .gemini directory inside it. Without that variable it uses .gemini in the real home directory."
+ko = "Gemini CLI는 GEMINI_CLI_HOME 환경 변수를 홈 디렉터리로 취급하고, 그 안의 .gemini 디렉터리에서 사용자 수준 파일을 읽습니다. 이 변수가 없으면 실제 홈 디렉터리의 .gemini 디렉터리를 사용합니다."
+evidence = "docs/agents/gemini-cli.md section 7"
