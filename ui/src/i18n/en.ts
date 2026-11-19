@@ -107,6 +107,8 @@ const warning: WarnMsgs = {
   hookKeyShared: (v) => `${v.others} other hook(s) use the same name or command, and the switch turns them on or off too.`,
 };
 
+export type BundledKind = Extract<DocKind, "listing" | "skillBody" | "commandBody" | "subagentPrompt" | "reference">;
+
 export const en = {
   newKind,
   warning,
@@ -143,7 +145,8 @@ export const en = {
     conflictsBody: "These files match neither the state before nor the state after the change.",
     conflictAbsent: "The file does not exist on disk any more.",
     conflictShow: "Show the text on disk",
-    conflictsTick: "I have looked at these files.",
+    conflictsRefused: "The change cannot be reverted as a whole until these files match the state after the change again. Put them back by hand, then open the history again.",
+    conflictOpen: "Open the file",
     warningsTitle: "What the agent does with this change",
     needsAttention: "Needs attention",
     warningTick: "I understand this.",
@@ -276,6 +279,13 @@ export const en = {
     notInstalled: "This agent is not installed here. Its files would be in these places.",
     installedAt: (bin: string) => `Program at ${bin}`,
     noLoads: "This agent loads nothing for this project.",
+    bundle: {
+      listing: (n: number) => `Catalog lines, ${n}`,
+      skillBody: (n: number) => `Skill bodies, ${n}`,
+      commandBody: (n: number) => `Command bodies, ${n}`,
+      subagentPrompt: (n: number) => `Subagent prompts, ${n}`,
+      reference: (n: number) => `Files the model may read, ${n}`,
+    } satisfies Record<BundledKind, (n: number) => string>,
     expand: "Expand",
     collapse: "Collapse",
     importedFrom: (host: string, line: number) => `imported at ${host}:${line}`,
@@ -292,6 +302,8 @@ export const en = {
     emptyTitle: "Nothing to show yet",
     blocksFor: "Blocks in delivery order",
     blockParts: (n: number) => `${n} ${n === 1 ? "file" : "files"}`,
+    showAll: "Show all the text",
+    showLess: "Show less",
     literalText: "Literal text sent to the model",
     renderFailed: "The host could not render this block text.",
     scanDirs: (dirs: number, files: number) => `Walked ${dirs.toLocaleString("en-US")} directories and ${files.toLocaleString("en-US")} files`,

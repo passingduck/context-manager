@@ -42,7 +42,8 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
     <article className="mx-3 mt-2 rounded border border-line">
       <header className="space-y-1 border-b border-line bg-subtle px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
-          <b className="font-mono text-[12px]">{store.id}</b>
+          <b>{project.name(agent)}</b>
+          <span className="font-mono text-[11px] text-faint">{store.id}</span>
           <Badge tone={store.enabled.kind === "on" ? "ok" : "warn"}>{store.enabled.kind === "on" ? t.memory.enabled : t.memory.off}</Badge>
           <span className="ml-auto"><AddMemory agent={agent} store={store} /></span>
         </div>
