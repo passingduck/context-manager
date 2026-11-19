@@ -27,6 +27,8 @@ pub struct Stat {
     pub is_symlink: bool,
     pub len: u64,
     pub mtime_ms: i64,
+    /// Any execute bit is set.
+    pub executable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +185,16 @@ fn mtime_ns(meta: &fs::Metadata) -> i128 {
         .map_or(0, |d| d.as_nanos() as i128)
 }
 
+#[cfg(unix)]
+fn is_executable(meta: &fs::Metadata) -> bool {
+    std::os::unix::fs::PermissionsExt::mode(&meta.permissions()) & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_: &fs::Metadata) -> bool {
+    true
+}
+
 fn stat_path(path: &AbsPath) -> Cached<Stat> {
     let meta = fs::metadata(path.as_path())?;
     let is_symlink = fs::symlink_metadata(path.as_path())
@@ -193,6 +205,7 @@ fn stat_path(path: &AbsPath) -> Cached<Stat> {
         is_symlink,
         len: meta.len(),
         mtime_ms: (mtime_ns(&meta) / 1_000_000) as i64,
+        executable: is_executable(&meta),
     })
 }
 

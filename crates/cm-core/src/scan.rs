@@ -3,10 +3,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::agents::{Agent, AgentScan, ScanCx, registry};
+use crate::agents::{Agent, FileClaim, ScanCx, registry};
 use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeFs};
+use crate::{doctor, passes, walk};
 
 /// Files over this size are listed and never read.
 pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
@@ -56,15 +57,35 @@ pub fn scan_with(agents: &[&dyn Agent], env: &ScanEnv) -> Scanned {
     let fs = ProbeFs::new();
     let cx = ScanCx { env, fs: &fs };
     let git_root = find_git_root(&cx);
-    let scans: Vec<AgentScan> = agents.iter().map(|agent| agent.scan(&cx)).collect();
-    let files = intern(&cx, &scans);
+    let project_root = git_root.clone().unwrap_or_else(|| env.cwd.clone());
 
-    let mut diagnostics = Vec::new();
     let mut views = Vec::new();
-    for scan in scans {
-        diagnostics.extend(scan.diagnostics);
+    let mut claimed = Vec::new();
+    let mut diagnostics = Vec::new();
+    for agent in agents {
+        let scan = agent.scan(&cx);
         views.push(scan.view);
+        claimed.push(scan.files);
+        diagnostics.extend(scan.diagnostics);
     }
+
+    // The passes that run after the adapters (design section 5).
+    diagnostics.extend(passes::reference_graph(&cx, &project_root, &mut views));
+    for view in &mut views {
+        passes::budget(view);
+    }
+    let index = walk::walk(&env.cwd, &fs);
+    let files = intern(&cx, &views, &claimed);
+    let found = doctor::check(&doctor::Input {
+        cx: &cx,
+        agents,
+        views: &views,
+        files: &files,
+        project_root: &project_root,
+        walk_capped: index.capped,
+        existing: &diagnostics,
+    });
+    diagnostics.extend(found);
 
     let snapshot = Snapshot {
         cwd: env.cwd.clone(),
@@ -74,9 +95,9 @@ pub fn scan_with(agents: &[&dyn Agent], env: &ScanEnv) -> Scanned {
         agents: views,
         diagnostics,
         walk: WalkSummary {
-            dirs: 0,
-            files: 0,
-            capped: false,
+            dirs: index.dirs().count() as u32,
+            files: index.files().count() as u32,
+            capped: index.capped,
         },
     };
     let probed = fs.probed();
@@ -100,7 +121,11 @@ fn find_git_root(cx: &ScanCx) -> Option<AbsPath> {
 }
 
 /// Builds the file table: every claimed file and every loaded file, once.
-fn intern(cx: &ScanCx, scans: &[AgentScan]) -> BTreeMap<AbsPath, FileEntry> {
+fn intern(
+    cx: &ScanCx,
+    views: &[AgentView],
+    claimed: &[Vec<FileClaim>],
+) -> BTreeMap<AbsPath, FileEntry> {
     struct Claim {
         agents: Vec<AgentId>,
         policy: EditPolicy,
@@ -118,13 +143,12 @@ fn intern(cx: &ScanCx, scans: &[AgentScan]) -> BTreeMap<AbsPath, FileEntry> {
             entry.policy = policy;
         }
     };
-    for scan in scans {
-        let agent = &scan.view.agent;
-        for file in &scan.files {
-            claim(&file.path, agent, file.policy.clone());
+    for (view, files) in views.iter().zip(claimed) {
+        for file in files {
+            claim(&file.path, &view.agent, file.policy.clone());
         }
-        for load in &scan.view.loads {
-            claim(&load.file, agent, EditPolicy::Editable);
+        for load in &view.loads {
+            claim(&load.file, &view.agent, EditPolicy::Editable);
         }
     }
 
@@ -192,7 +216,7 @@ fn count_lines(bytes: &[u8]) -> u32 {
     (newlines + usize::from(unterminated)) as u32
 }
 
-fn format_of(path: &AbsPath) -> Format {
+pub(crate) fn format_of(path: &AbsPath) -> Format {
     let name = path.file_name().unwrap_or("");
     match name.rsplit_once('.').map(|(_, ext)| ext) {
         Some("md" | "markdown") => Format::Markdown,
@@ -218,6 +242,7 @@ fn display_of(env: &ScanEnv, path: &AbsPath) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentScan;
     use crate::testing::Fixture;
 
     #[test]

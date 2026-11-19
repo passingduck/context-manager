@@ -624,9 +624,14 @@ async fn without_an_os_trash_the_file_is_removed_and_reported_and_revert_still_w
 
 /// The one test that calls the real OS trash. It moves a file of the fixture and nothing else.
 /// It does not list `~/.Trash`, which macOS refuses to a terminal: success of the call is the
-/// evidence.
+/// evidence. Every run would leave a file in the operator's trash, so it runs only with
+/// `CM_TEST_REAL_TRASH=1`.
 #[tokio::test]
 async fn the_os_trash_takes_the_file() {
+    if std::env::var("CM_TEST_REAL_TRASH").as_deref() != Ok("1") {
+        eprintln!("skipped: set CM_TEST_REAL_TRASH=1 to send a temp file to the real OS trash");
+        return;
+    }
     let fx = Fixture::new();
     let file = fx.project_path("CLAUDE.md");
     fx.write(&file, "to the trash");
