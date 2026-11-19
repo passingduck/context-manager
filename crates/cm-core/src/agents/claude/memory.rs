@@ -886,4 +886,40 @@ mod tests {
         let named: Vec<_> = links.iter().map(|l| (l.target.as_str(), l.line)).collect();
         assert_eq!(named, [("a.md", 1), ("c.md", 3)]);
     }
+
+    /// The port is checked against `tools/oracle/claude/project_key.py`, the tested reference of
+    /// the research. The test skips when `python3` is missing.
+    #[test]
+    fn the_key_equals_the_python_reference_on_the_research_cases() {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tools/oracle/claude/project_key.py");
+        let long = format!(
+            "/Users/me/{} \u{fc}n\u{ef}c\u{f8}d\u{e9}/{}",
+            "very long directory ".repeat(9),
+            "x".repeat(10)
+        );
+        let cases = [
+            "/Users/me/my_app".to_owned(),
+            "/private/tmp/claude-501/-Users-x/ccm-exp/base/top/repo".to_owned(),
+            "/a/\u{1F600}/b".to_owned(),
+            long,
+            format!("/{}", "y".repeat(200)),
+            format!("/{}", "y".repeat(199)),
+            format!("/{}", "\u{1F600}".repeat(120)),
+        ];
+        for case in cases {
+            let Ok(out) = std::process::Command::new("python3")
+                .args(["-I"])
+                .arg(&script)
+                .arg(&case)
+                .output()
+            else {
+                eprintln!("SKIP: python3 is not installed");
+                return;
+            };
+            assert!(out.status.success(), "reference failed on {case:?}");
+            let want = String::from_utf8(out.stdout).unwrap();
+            assert_eq!(project_key(&case), want.trim(), "{case:?}");
+        }
+    }
 }

@@ -62,7 +62,6 @@ pub(super) struct Project {
 pub(super) struct Setup {
     pub home: AbsPath,
     pub cwd: AbsPath,
-    pub os: Os,
     pub config: AbsPath,
     pub config_from_env: Option<&'static str>,
     pub managed: AbsPath,
@@ -204,7 +203,6 @@ impl Setup {
         Setup {
             home,
             cwd: env.cwd.clone(),
-            os: env.os,
             config,
             config_from_env,
             managed,

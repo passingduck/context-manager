@@ -305,11 +305,7 @@ pub(super) struct Collector<'a> {
 enum Verdict {
     Absent,
     Skip(Skip),
-    Present {
-        text: String,
-        stripped: bool,
-        bytes_on_disk: u64,
-    },
+    Present { text: String, stripped: bool },
 }
 
 impl<'a> Collector<'a> {
@@ -473,10 +469,10 @@ impl<'a> Collector<'a> {
         Verdict::Present {
             text,
             stripped: stripped.transformed,
-            bytes_on_disk: bytes.len() as u64,
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn push_load(
         &mut self,
         file: &AbsPath,

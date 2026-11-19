@@ -27,6 +27,7 @@ const CHARS_PER_TOKEN: f64 = 4.0;
 /// Spec 4: agent descriptions over this many tokens give a startup warning.
 const AGENT_CATALOG_WARN_TOKENS: u64 = 15_000;
 /// Spec 4: `UEs=200000`, the window the catalog budget assumes when none is given.
+#[cfg(test)]
 pub(super) const DEFAULT_WINDOW_TOKENS: u32 = 200_000;
 
 pub(super) struct ExtOut {
@@ -42,6 +43,7 @@ pub(super) struct ExtOut {
 
 /// Every discovery location of spec 4. `first_load_id` is the index the first returned load
 /// will have in `AgentView.loads`.
+#[cfg(test)]
 pub(super) fn scan(cx: &ScanCx, setup: &Setup, first_load_id: u32) -> ExtOut {
     scan_with_window(cx, setup, first_load_id, DEFAULT_WINDOW_TOKENS)
 }

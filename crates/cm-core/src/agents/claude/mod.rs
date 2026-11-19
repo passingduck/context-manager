@@ -17,6 +17,8 @@ mod memory;
 mod render;
 mod setup;
 mod slots;
+#[cfg(test)]
+mod tests;
 
 use instructions::ASSUMED_WINDOW_TOKENS;
 use setup::{SettingsKind, Setup};
@@ -319,7 +321,7 @@ fn guard(path: &AbsPath, before: Option<&str>, after: Option<&str>) -> Result<()
     }
     if p.contains("/.claude/rules/") && name.ends_with(".md") {
         let broke = crate::md::frontmatter::parse(after).error.is_some()
-            && !before.is_some_and(|b| crate::md::frontmatter::parse(b).error.is_some());
+            && before.is_none_or(|b| crate::md::frontmatter::parse(b).error.is_none());
         if broke {
             return Err(ApiError::InvalidEdit {
                 field: "frontmatter".to_owned(),

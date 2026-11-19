@@ -29,6 +29,8 @@ pub(in crate::agents::claude) struct Plugin {
     pub origin: Origin,
     pub enabled: bool,
     /// Where `enabledPlugins` said so, when a settings file did.
+    /// The settings file that decided enablement. Kept for the UI to show.
+    #[allow(dead_code)]
     pub enabled_by: Option<AbsPath>,
     /// A managed `enabledPlugins` `true` force-enables the plugin (spec 3, `allowManagedHooksOnly`).
     pub forced_by_managed: bool,
