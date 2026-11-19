@@ -345,14 +345,16 @@ impl Two {
     }
 }
 
+/// Design section 4: recovery never writes an agent file. It seals a record whose files are all
+/// at after, aborts one whose files are all at before, and leaves any other for the user.
 #[tokio::test]
-async fn a_crash_after_any_step_recovers_to_the_end_state_with_a_sealed_record() {
-    for step in [
-        Step::Pending,
-        Step::Op(0),
-        Step::Op(1),
-        Step::Executed,
-        Step::Sealed,
+async fn recovery_after_a_crash_classifies_the_record_and_leaves_the_files_as_they_are() {
+    for (step, files, state) in [
+        (Step::Pending, ("a0", "b0"), ChangeState::Aborted),
+        (Step::Op(0), ("a1", "b0"), ChangeState::NeedsAttention),
+        (Step::Op(1), ("a1", "b1"), ChangeState::Sealed),
+        (Step::Executed, ("a1", "b1"), ChangeState::Sealed),
+        (Step::Sealed, ("a1", "b1"), ChangeState::Sealed),
     ] {
         let two = Two::new();
         let err = two.crash_after(step).await;
@@ -362,17 +364,29 @@ async fn a_crash_after_any_step_recovers_to_the_end_state_with_a_sealed_record()
         );
 
         let restarted = two.restart();
-        assert_eq!(read(&two.a), "a1", "{step:?}");
-        assert_eq!(read(&two.b), "b1", "{step:?}");
+        assert_eq!(
+            (read(&two.a).as_str(), read(&two.b).as_str()),
+            files,
+            "{step:?}"
+        );
         let records = history(&restarted).await;
         assert_eq!(records.len(), 1, "{step:?}");
-        assert_eq!(records[0].state, ChangeState::Sealed, "{step:?}");
-        assert!(restarted.session(()).await.unwrap().pending.is_empty());
+        assert_eq!(records[0].state, state, "{step:?}");
+        let unfinished = state == ChangeState::NeedsAttention;
+        assert_eq!(
+            restarted.session(()).await.unwrap().pending,
+            if unfinished {
+                vec![records[0].id.clone()]
+            } else {
+                Vec::new()
+            },
+            "{step:?}"
+        );
         let pending = two.fx.root().join(&format!(
             "data/history/changes/{}.pending.json",
             records[0].id.0
         ));
-        assert!(!pending.as_path().exists(), "{step:?}");
+        assert_eq!(pending.as_path().exists(), unfinished, "{step:?}");
     }
 }
 
@@ -406,7 +420,7 @@ async fn recovery_removes_a_temp_file_the_crash_left_beside_a_target() {
 
     two.restart();
     assert!(!tmp.as_path().exists());
-    assert_eq!(read(&two.a), "a1");
+    assert_eq!(read(&two.a), "a0");
 }
 
 #[tokio::test]
@@ -419,8 +433,15 @@ async fn an_outside_edit_after_the_crash_keeps_the_record_pending_and_names_the_
     let restarted = two.restart();
     let report = recovery::recover(&restarted.ctx, true);
     assert_eq!(report.sealed, Vec::<ChangeId>::new());
+    assert_eq!(report.aborted, Vec::<ChangeId>::new());
     assert_eq!(report.attention.len(), 1);
-    assert_eq!(report.attention[0].1, vec![two.b.clone()]);
+    assert_eq!(
+        report.attention[0].1,
+        vec![
+            (two.a.clone(), recovery::OpState::AtAfter),
+            (two.b.clone(), recovery::OpState::Other)
+        ]
+    );
     assert_eq!(
         read(&two.b),
         "outside",
@@ -467,26 +488,146 @@ async fn a_read_only_host_classifies_a_pending_record_and_writes_nothing() {
 }
 
 #[tokio::test]
-async fn reverting_an_unfinished_change_resolves_it_so_recovery_does_not_redo_it() {
+async fn a_revert_of_a_record_that_needs_attention_restores_its_files_and_resolves_it() {
     let two = Two::new();
     two.crash_after(Step::Op(0)).await;
-    // Another process holds the pending record: open a host that does not recover on start.
-    let ro = host_with(&two.fx, two.agent(), true, Box::new(FakeTrash::default()));
-    let id = history(&ro).await[0].id.clone();
-    drop(ro);
-
     let host = two.restart();
-    // Recovery on start already rolled the change forward. Undo it: the revert applies.
-    assert_eq!(read(&two.b), "b1");
+    assert_eq!((read(&two.a).as_str(), read(&two.b).as_str()), ("a1", "b0"));
+    let id = history(&host).await[0].id.clone();
+
     applied(
-        run(&host, &two.fx, &Edit::Revert { change: id })
+        run(&host, &two.fx, &Edit::Revert { change: id.clone() })
             .await
             .unwrap(),
     );
     assert_eq!((read(&two.a).as_str(), read(&two.b).as_str()), ("a0", "b0"));
+    let records = history(&host).await;
+    let reverted = records.iter().find(|r| r.id == id).unwrap();
+    assert_eq!(reverted.state, ChangeState::Aborted);
+    assert!(host.session(()).await.unwrap().pending.is_empty());
     drop(host);
     two.restart();
     assert_eq!((read(&two.a).as_str(), read(&two.b).as_str()), ("a0", "b0"));
+}
+
+#[tokio::test]
+async fn a_revert_of_a_record_that_needs_attention_skips_a_file_someone_else_changed() {
+    let two = Two::new();
+    two.crash_after(Step::Op(0)).await;
+    std::fs::write(two.b.as_path(), "b-mine").unwrap();
+    let host = two.restart();
+    let id = history(&host).await[0].id.clone();
+    assert_eq!(history(&host).await[0].state, ChangeState::NeedsAttention);
+
+    let revert = Edit::Revert { change: id.clone() };
+    let preview = plan(&host, &two.fx, &revert).await.unwrap();
+    assert_eq!(
+        preview
+            .conflicts
+            .iter()
+            .map(|c| c.path.clone())
+            .collect::<Vec<_>>(),
+        vec![two.b.clone()]
+    );
+    applied(
+        apply(&host, &two.fx, &revert, &preview.digest)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        (read(&two.a).as_str(), read(&two.b).as_str()),
+        ("a0", "b-mine")
+    );
+    let records = history(&host).await;
+    assert_eq!(
+        records.iter().find(|r| r.id == id).unwrap().state,
+        ChangeState::Aborted
+    );
+}
+
+#[tokio::test]
+async fn a_revert_of_a_sealed_change_with_a_file_someone_else_changed_is_a_conflict() {
+    let two = Two::new();
+    let host = two.restart();
+    applied(run(&host, &two.fx, &two.edit()).await.unwrap());
+    std::fs::write(two.b.as_path(), "b-mine").unwrap();
+    let id = history(&host).await[0].id.clone();
+
+    let revert = Edit::Revert { change: id };
+    let preview = plan(&host, &two.fx, &revert).await.unwrap();
+    let err = apply(&host, &two.fx, &revert, &preview.digest)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Conflict { .. }), "{err:?}");
+    assert_eq!(
+        (read(&two.a).as_str(), read(&two.b).as_str()),
+        ("a1", "b-mine")
+    );
+}
+
+#[tokio::test]
+async fn a_revert_that_finds_every_file_at_before_still_resolves_the_record() {
+    let two = Two::new();
+    two.crash_after(Step::Op(0)).await;
+    let host = two.restart();
+    let id = history(&host).await[0].id.clone();
+    // The user puts the file back by hand before reverting.
+    std::fs::write(two.a.as_path(), "a0").unwrap();
+
+    let revert = Edit::Revert { change: id.clone() };
+    assert_eq!(
+        run(&host, &two.fx, &revert).await.unwrap(),
+        ApplyResult::AlreadyApplied
+    );
+    // Read the record without the recovery a history request runs first.
+    let history = crate::History::open(two.fx.root().join("data").as_path());
+    assert_eq!(history.record(&id).unwrap().state, ChangeState::Aborted);
+    assert!(history.pending().is_empty());
+}
+
+/// Design section 4, "A failed apply is not a crash": the operations before the failed one are
+/// undone, the record is aborted, and nothing applies the change later.
+#[tokio::test]
+async fn a_failed_operation_undoes_the_ones_before_it_and_the_change_never_applies_later() {
+    // SAFETY: `geteuid` reads the effective user id and has no preconditions.
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("skipped: root writes into a directory without write permission");
+        return;
+    }
+    let fx = Fixture::new();
+    let a = fx.project_path("A.md");
+    let b = fx.project_path("locked/B.md");
+    fx.write(&a, "a0");
+    fx.write(&b, "b0");
+    let agent = || TestAgent {
+        files: vec![a.clone(), b.clone()],
+        writes: vec![(a.clone(), "a1".into()), (b.clone(), "b1".into())],
+        ..TestAgent::default()
+    };
+    let first = host(&fx, agent());
+    let edit = Two::new().edit();
+    let preview = plan(&first, &fx, &edit).await.unwrap();
+    let locked = fx.project_path("locked");
+    let mode = |m| std::fs::set_permissions(locked.as_path(), std::fs::Permissions::from_mode(m));
+    mode(0o555).unwrap();
+
+    let err = apply(&first, &fx, &edit, &preview.digest)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!((read(&a).as_str(), read(&b).as_str()), ("a0", "b0"));
+    let records = history(&first).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, ChangeState::Aborted);
+    assert!(first.session(()).await.unwrap().pending.is_empty());
+
+    // The cause goes away. Reading the history and starting again write nothing.
+    mode(0o755).unwrap();
+    assert_eq!(history(&first).await[0].state, ChangeState::Aborted);
+    drop(first);
+    let restarted = host(&fx, agent());
+    assert_eq!(history(&restarted).await[0].state, ChangeState::Aborted);
+    assert_eq!((read(&a).as_str(), read(&b).as_str()), ("a0", "b0"));
 }
 
 // ---------------------------------------------------------------------------------------------

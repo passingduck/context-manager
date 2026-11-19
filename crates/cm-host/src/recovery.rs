@@ -1,16 +1,16 @@
-//! Recovery (design section 4): finishes or flags each change that was journaled and not sealed.
+//! Recovery (design section 4): classifies each change that was journaled and not closed. It
+//! never writes an agent file.
 //!
 //! For each pending record it classifies every operation by the hash on disk: at the before
 //! state, at the after state, or other.
 //!
-//! - No operation is "other": the user asked for this change, so the operations still at before
-//!   are applied from the stored blobs and the record is sealed.
-//! - Some operation is "other": someone edited that file in between. The record stays pending,
-//!   its state becomes `NeedsAttention`, and the report names the file.
+//! - Every operation at after: the whole change is on disk, and the record is sealed.
+//! - Every operation at before: nothing of the change is on disk, and the record is aborted.
+//! - Anything else: the record becomes `NeedsAttention`, and the user reverts it.
 //!
-//! The decision is a function of the disk, so a second run changes nothing, and two processes
-//! that recover one record write the same bytes. Recovery runs when the host starts and when the
-//! history is read. In a read-only host it classifies and reports and writes nothing.
+//! The decision is a function of the disk, so a second run changes nothing. Recovery runs when
+//! the host starts and when the history is read. In a read-only host it classifies and reports
+//! and writes nothing.
 
 use std::fs;
 
@@ -27,13 +27,15 @@ pub enum OpState {
     Other,
 }
 
-/// What a recovery run did.
+/// What a recovery run found.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Report {
-    /// Records rolled forward and sealed.
+    /// Records whose operations are all at after.
     pub sealed: Vec<ChangeId>,
-    /// Records left pending, with the files that were edited in between.
-    pub attention: Vec<(ChangeId, Vec<AbsPath>)>,
+    /// Records whose operations are all at before.
+    pub aborted: Vec<ChangeId>,
+    /// Records left for the user, with the state of each file.
+    pub attention: Vec<(ChangeId, Vec<(AbsPath, OpState)>)>,
 }
 
 /// An operation with neither a before nor an after blob stands for a directory that went to the
@@ -84,68 +86,37 @@ fn remove_temp_files(record: &ChangeRecord) {
     }
 }
 
-pub(crate) fn recover(ctx: &Ctx, roll_forward: bool) -> Report {
+/// `write` is false in a read-only host: the records are classified and left as they are.
+pub(crate) fn recover(ctx: &Ctx, write: bool) -> Report {
     let _serialized = PIPELINE.lock().unwrap_or_else(|e| e.into_inner());
     let mut report = Report::default();
-    if roll_forward {
-        ctx.history.drop_sealed_twins();
+    if write {
+        ctx.history.drop_closed_twins();
     }
     for mut record in ctx.history.pending() {
         let states = inspect(&record);
-        let others: Vec<AbsPath> = states
-            .iter()
-            .filter(|(_, state)| *state == OpState::Other)
-            .map(|(path, _)| path.clone())
-            .collect();
-        if !others.is_empty() {
-            if roll_forward && record.state != ChangeState::NeedsAttention {
+        let all = |wanted: OpState| states.iter().all(|(_, state)| *state == wanted);
+        if write {
+            remove_temp_files(&record);
+        }
+        if all(OpState::AtAfter) {
+            if !write || ctx.history.seal(&mut record).is_ok() {
+                report.sealed.push(record.id.clone());
+            }
+        } else if all(OpState::AtBefore) {
+            if !write || ctx.history.abort(&mut record).is_ok() {
+                report.aborted.push(record.id.clone());
+            }
+        } else {
+            if write && record.state != ChangeState::NeedsAttention {
                 record.state = ChangeState::NeedsAttention;
                 let _ = ctx.history.write_pending(&record);
             }
-            report.attention.push((record.id.clone(), others));
-            continue;
-        }
-        if !roll_forward {
-            continue;
-        }
-        remove_temp_files(&record);
-        if roll_record_forward(ctx, &record).is_ok() && ctx.history.seal(&mut record).is_ok() {
-            report.sealed.push(record.id.clone());
+            report.attention.push((record.id.clone(), states));
         }
     }
-    if roll_forward {
+    if write {
         ctx.history.collect_garbage(BLOB_MAX_AGE);
     }
     report
-}
-
-/// Applies the operations still at before, from the blobs the journal stored.
-fn roll_record_forward(ctx: &Ctx, record: &ChangeRecord) -> std::io::Result<()> {
-    let effects = ctx.effects();
-    let mut not_trashed = Vec::new();
-    let directories: Vec<&AbsPath> = record
-        .ops
-        .iter()
-        .filter(|op| is_directory_op(op) && classify(op) == OpState::AtBefore)
-        .map(|op| &op.path)
-        .collect();
-    for dir in &directories {
-        effects.trash(dir, &mut not_trashed)?;
-    }
-    for (index, op) in record.ops.iter().enumerate() {
-        if is_directory_op(op) || directories.iter().any(|dir| op.path.starts_with(dir)) {
-            continue;
-        }
-        if classify(op) != OpState::AtBefore {
-            continue;
-        }
-        match &op.after {
-            Some(blob) => {
-                let bytes = ctx.history.blob(blob)?;
-                effects.write(&op.path, &bytes, &format!("{}-r{index}", record.id.0))?;
-            }
-            None => effects.trash(&op.path, &mut not_trashed)?,
-        }
-    }
-    Ok(())
 }

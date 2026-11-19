@@ -666,7 +666,7 @@ export const ko: typeof en = {
   format: formatName,
   severity: { error: "오류", warning: "경고", info: "참고" },
   severityOne: { error: "오류", warning: "경고", info: "참고" },
-  changeState: { sealed: "완료", pending: "대기", needsAttention: "확인 필요" },
+  changeState: { sealed: "완료", pending: "대기", needsAttention: "확인 필요", aborted: "적용되지 않음" },
   changeEdit: {
     save: "파일 저장",
     trash: "휴지통으로 이동",

@@ -115,8 +115,8 @@ impl Host {
         host
     }
 
-    /// Finishes or flags the changes a crash left pending (design section 4). A read-only host
-    /// only classifies them. Errors are not fatal: the next history read tries again.
+    /// Classifies the changes a crash left pending (design section 4). A read-only host leaves
+    /// their records as they are. Errors are not fatal: the next history read tries again.
     fn recover_now(&self) {
         if self.ctx.data_dir.as_path().exists() {
             recovery::recover(&self.ctx, !self.config.read_only);
@@ -249,14 +249,14 @@ impl Api for Host {
         .map_err(join_error)?
     }
 
-    /// Newest first. Recovery runs first, so a record a crash left behind is finished or flagged
-    /// before the list is read.
+    /// Newest first. Recovery runs first, so a record a crash left behind is classified before
+    /// the list is read.
     async fn history(&self, req: HistoryReq) -> Result<Vec<ChangeRecord>, ApiError> {
         let ctx = self.ctx.clone();
-        let roll_forward = !self.config.read_only;
+        let write = !self.config.read_only;
         tokio::task::spawn_blocking(move || {
             if ctx.data_dir.as_path().exists() {
-                recovery::recover(&ctx, roll_forward);
+                recovery::recover(&ctx, write);
             }
             let limit = match req.limit as usize {
                 0 => DEFAULT_HISTORY_LIMIT,
@@ -276,10 +276,10 @@ impl Api for Host {
 
     async fn change(&self, req: ChangeReq) -> Result<ChangeDetail, ApiError> {
         let ctx = self.ctx.clone();
-        let roll_forward = !self.config.read_only;
+        let write = !self.config.read_only;
         tokio::task::spawn_blocking(move || {
             if ctx.data_dir.as_path().exists() {
-                recovery::recover(&ctx, roll_forward);
+                recovery::recover(&ctx, write);
             }
             let record = ctx.history.record(&req.id).ok_or(ApiError::NotFound)?;
             ctx.history.detail_of(record)

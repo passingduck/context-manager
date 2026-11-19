@@ -360,7 +360,7 @@ function ChangeDetailView({ id }: { id: string }) {
           </Button>
         </div>
       </header>
-      {record.state !== "sealed" && <Attention id={id} state={record.state} />}
+      {(record.state === "pending" || record.state === "needsAttention") && <Attention id={id} state={record.state} />}
       <div className="space-y-4 p-4">
         {files.map((file) => (
           <section key={file.path}>
