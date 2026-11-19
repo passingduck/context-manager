@@ -15,3 +15,6 @@ pub use recovery::{OpState, Report, classify, inspect};
 
 #[cfg(test)]
 mod pipeline_tests;
+
+#[cfg(test)]
+mod gemini_e2e_tests;
