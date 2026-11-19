@@ -900,6 +900,22 @@ impl<'a> Collector<'a> {
             let via = Via::Discovery {
                 rule: Self::rule_ref("claude.discovery.agents_md"),
             };
+            // Already loaded through an import of a CLAUDE.md: loaded once, nothing was ignored.
+            let real = self.cx.fs.real_path(&path).unwrap_or_else(|_| path.clone());
+            if let Some(first) = self.at.get(&real).or_else(|| self.at.get(&path)).cloned() {
+                self.push_load(
+                    &path,
+                    DocKind::Instructions,
+                    scope.clone(),
+                    via,
+                    Activation::SessionStart,
+                    LoadStatus::Skipped {
+                        skip: Skip::AlreadyLoaded { first },
+                    },
+                    None,
+                );
+                continue;
+            }
             let skip = match mode {
                 _ if !plugin_on => Some(Skip::FeatureOff {
                     name: AGENTS_PLUGIN.into(),
