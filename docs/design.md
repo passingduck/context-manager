@@ -604,3 +604,6 @@ Three candidates wrote this design independently against one grounding file: one
 - Contract unit: `Preview` gains `conflicts: Vec<Conflict>`, because section 4 says a revert reports a file at neither state "as a conflict in the preview" and the listing has no field for it.
 - Contract unit: `ChangeSummary` is `{ edit: ChangeEdit, agent: Option<AgentId>, targets: Vec<AbsPath> }`, facts only, as rule 3 of `AGENTS.md` requires. `ChangeEdit` mirrors the `Edit` variants.
 - Contract unit: `ApiError::ReadOnly`, `InvalidEdit` and `Forbidden` carry `why: RuleRef` instead of prose. `ExtStatus::Shadowed { by }` holds an `ExtId`.
+- Gemini adapter: with folder trust on and no `trustedFolders.json` rule, `Trust.level` is `Untrusted` and `recorded_in` is `None`. The CLI asks the user and behaves as untrusted until they answer (`isTrusted ?? false`), so `Unknown` would imply the Codex behaviour of loading some project files.
+- Gemini adapter: `cm-core` gains a direct `regex` dependency, already in the lockfile through `ignore`, to test hook matchers. It tests the Rust regex syntax, so a JavaScript-only pattern with look-around is treated as valid.
+- Gemini adapter: `MOVING_VARS` gains the nine variables the Gemini rules read. The planners of the Gemini unit land with the write pipeline.
