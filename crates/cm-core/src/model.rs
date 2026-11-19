@@ -792,6 +792,8 @@ variants! {
         ParkedOnThisMachine,
         /// A directory over 16 MiB: the OS trash is the only copy.
         NotRevertible,
+        /// Gemini: the switch is a name or command that other hooks share, so it switches them too.
+        HookKeyShared { others: u32 },
     }
 
     pub enum ApplyResult {

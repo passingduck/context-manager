@@ -5,6 +5,7 @@
 use std::fmt;
 
 use jsonc_parser::ParseOptions;
+use jsonc_parser::common::Ranged;
 use jsonc_parser::cst::{CstInputValue, CstNode, CstRootNode};
 use serde_json::Value;
 
@@ -74,6 +75,9 @@ pub fn set(text: &str, pointer: &str, value: &Value) -> Result<String, JsoncErro
         root.set_value(input);
         return Ok(root.to_string());
     };
+    if let Some(inline) = inline_append(text, &path, value) {
+        return Ok(inline);
+    }
     match descend(&root, parents, Create::Objects)? {
         Container::Obj(obj) => match obj.get(last) {
             Some(prop) => prop.set_value(input),
@@ -84,9 +88,8 @@ pub fn set(text: &str, pointer: &str, value: &Value) -> Result<String, JsoncErro
         Container::Arr(arr) => {
             let at = index(last, &arr)?;
             if at < arr.elements().len() {
-                // Insert the new value, then drop the old one that moved up by one.
-                arr.insert(at, input);
-                arr.elements()[at + 1].clone().remove();
+                // Replace the element where it stands, so the array's layout does not change.
+                replace_node(&arr.elements()[at], input);
             } else {
                 arr.append(input);
             }
@@ -125,6 +128,12 @@ pub fn remove(text: &str, pointer: &str) -> Result<String, JsoncError> {
 /// Appends to the array at `pointer`, creating it and any missing objects.
 pub fn array_append(text: &str, pointer: &str, value: &Value) -> Result<String, JsoncError> {
     let root = parse(text)?;
+    let path = tokens(pointer)?;
+    if let Some(inline) = inline_append(text, &path, &Value::Array(vec![value.clone()]))
+        .or_else(|| inline_push(text, &path, value))
+    {
+        return Ok(inline);
+    }
     array_at(&root, pointer)?.append(to_input(value));
     Ok(root.to_string())
 }
@@ -294,6 +303,106 @@ fn descend_existing(root: &CstRootNode, path: &[String]) -> Option<Container> {
     Some(current)
 }
 
+/// A new key in an object that sits on one line stays on that line: `{ "a": 1 }` becomes
+/// `{ "a": 1, "b": 2 }`, not a block. The syntax tree always breaks the object into lines, and
+/// removing the key again would not bring the one-line layout back. Missing objects on the way
+/// are written inline too. `None`: not that case.
+fn inline_append(text: &str, path: &[String], value: &Value) -> Option<String> {
+    use jsonc_parser::ast::Value as Ast;
+    let options = jsonc_parser::CollectOptions {
+        comments: jsonc_parser::CommentCollectionStrategy::Off,
+        tokens: false,
+    };
+    let parsed = jsonc_parser::parse_to_ast(text, &options, &ParseOptions::default()).ok()?;
+    let mut at = parsed.value?;
+    for (i, token) in path.iter().enumerate() {
+        let Ast::Object(obj) = at else { return None };
+        let Some(prop) = obj.properties.iter().position(|p| p.name.as_str() == token) else {
+            let member_text = text.get(obj.range.start..obj.range.end)?;
+            let last = obj.properties.last()?;
+            let first = obj.properties.first()?;
+            if member_text.contains('\n') {
+                return None;
+            }
+            let colon = &text[last.name.range().end..last.value.range().start];
+            let space_after_colon = colon.ends_with(' ');
+            let comma = if text[obj.range.start + 1..first.range.start].is_empty() {
+                ","
+            } else {
+                ", "
+            };
+            let mut nested = value.clone();
+            for inner in path[i + 1..].iter().rev() {
+                nested = Value::Object([(inner.clone(), nested)].into_iter().collect());
+            }
+            let member = format!(
+                "{comma}{}:{}{}",
+                serde_json::to_string(token).ok()?,
+                if space_after_colon { " " } else { "" },
+                serde_json::to_string(&nested).ok()?
+            );
+            let end = last.range.end;
+            return Some(format!("{}{member}{}", &text[..end], &text[end..]));
+        };
+        at = obj.properties.into_iter().nth(prop)?.value;
+    }
+    None
+}
+
+/// A new element of an array that sits on one line stays on that line.
+fn inline_push(text: &str, path: &[String], value: &Value) -> Option<String> {
+    use jsonc_parser::ast::Value as Ast;
+    let options = jsonc_parser::CollectOptions {
+        comments: jsonc_parser::CommentCollectionStrategy::Off,
+        tokens: false,
+    };
+    let parsed = jsonc_parser::parse_to_ast(text, &options, &ParseOptions::default()).ok()?;
+    let mut at = parsed.value?;
+    for token in path {
+        let Ast::Object(obj) = at else { return None };
+        at = obj
+            .properties
+            .into_iter()
+            .find(|p| p.name.as_str() == token)?
+            .value;
+    }
+    let Ast::Array(arr) = at else { return None };
+    let first = arr.elements.first()?;
+    let last = arr.elements.last()?;
+    if text.get(arr.range.start..arr.range.end)?.contains('\n') {
+        return None;
+    }
+    let comma = if text[arr.range.start + 1..first.range().start].is_empty() {
+        ","
+    } else {
+        ", "
+    };
+    let end = last.range().end;
+    Some(format!(
+        "{}{comma}{}{}",
+        &text[..end],
+        serde_json::to_string(value).ok()?,
+        &text[end..]
+    ))
+}
+
+/// Replaces a value where it stands, so the layout around it does not change.
+fn replace_node(node: &CstNode, input: CstInputValue) {
+    if let Some(n) = node.as_object() {
+        n.replace_with(input);
+    } else if let Some(n) = node.as_array() {
+        n.replace_with(input);
+    } else if let Some(n) = node.as_string_lit() {
+        n.replace_with(input);
+    } else if let Some(n) = node.as_number_lit() {
+        n.replace_with(input);
+    } else if let Some(n) = node.as_boolean_lit() {
+        n.replace_with(input);
+    } else if let Some(n) = node.as_null_keyword() {
+        n.replace_with(input);
+    }
+}
+
 fn to_input(value: &Value) -> CstInputValue {
     match value {
         Value::Null => CstInputValue::Null,
@@ -452,5 +561,25 @@ mod tests {
         let at: Vec<_> = found.iter().map(|t| (t.line, t.col)).collect();
         assert_eq!(at, [(2, 13), (4, 9)]);
         assert!(trailing_commas(FILE).is_empty());
+    }
+
+    #[test]
+    fn a_key_or_element_added_to_a_one_line_container_stays_on_the_line_and_removes_cleanly() {
+        let text = r#"{"a":{"b":1},"l":[1,2]}"#;
+        let added = set(text, "/a/c", &json!([true])).unwrap();
+        assert_eq!(added, r#"{"a":{"b":1,"c":[true]},"l":[1,2]}"#);
+        assert_eq!(remove(&added, "/a/c").unwrap(), text);
+        let nested = set(text, "/x/y", &json!(1)).unwrap();
+        assert_eq!(nested, r#"{"a":{"b":1},"l":[1,2],"x":{"y":1}}"#);
+        assert_eq!(remove(&nested, "/x").unwrap(), text);
+        let pushed = array_append(text, "/l", &json!(3)).unwrap();
+        assert_eq!(pushed, r#"{"a":{"b":1},"l":[1,2,3]}"#);
+        assert_eq!(remove(&pushed, "/l/2").unwrap(), text);
+    }
+
+    #[test]
+    fn replacing_an_array_element_keeps_the_layout_of_the_array() {
+        let text = "{\"l\": [ 1, 2 ]}";
+        assert_eq!(set(text, "/l/0", &json!(9)).unwrap(), "{\"l\": [ 9, 2 ]}");
     }
 }

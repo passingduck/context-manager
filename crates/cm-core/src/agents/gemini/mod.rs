@@ -4,8 +4,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    Agent, AgentScan, Candidate, FileClaim, ScanCx, empty_view, home_dir, home_with_env, presence,
-    rules_from,
+    Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, empty_view, home_dir, home_with_env,
+    presence, rules_from,
 };
 use crate::model::*;
 use crate::tokens;
@@ -15,13 +15,17 @@ mod context;
 mod extension;
 mod exts;
 mod guard;
+mod hook_edit;
 mod hooks;
 mod memory;
+mod memory_edit;
+mod plan;
 mod prompt;
 mod settings;
 mod slots;
 mod trust;
 mod util;
+mod warn;
 mod world;
 
 #[cfg(test)]
@@ -153,6 +157,20 @@ impl Agent for Gemini {
             }
         }
         projects
+    }
+
+    fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>> {
+        plan::plan(cx, edit)
+    }
+
+    fn write_warnings(
+        &self,
+        cx: &PlanCx,
+        path: &AbsPath,
+        before: Option<&str>,
+        after: Option<&str>,
+    ) -> Vec<Warning> {
+        warn::write_warnings(cx, path, before, after)
     }
 
     fn guard(
