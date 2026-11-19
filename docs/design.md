@@ -318,7 +318,7 @@ pub enum ApplyResult {
 
 pub struct ChangeRecord {                   // history/changes/<ulid>.json, or <ulid>.pending.json
     pub id: ChangeId, pub at: String, pub cwd: Option<AbsPath>,
-    pub summary: ChangeSummary, pub ops: Vec<JournalOp>, pub state: ChangeState,   // Sealed | Pending | NeedsAttention
+    pub summary: ChangeSummary, pub ops: Vec<JournalOp>, pub state: ChangeState,   // Sealed | Pending | NeedsAttention | Aborted
 }
 pub struct JournalOp { pub path: AbsPath, pub before: Option<String>, pub after: Option<String> }   // blob ids
 ```
@@ -336,17 +336,21 @@ One mutex per process serializes `apply`.
 1. **Policy.** Refuse when the host runs with `--read-only`.
 2. **Plan again.** Run a fresh scan of `cwd` and plan the edit against it. If the plan is empty, return `AlreadyApplied`. If its digest differs from the one the client sent, the disk changed after the preview: return `Stale` with the new preview and write nothing.
 3. **Journal.** Store the before and after content of each file as blobs named by their hash. Then write `changes/<id>.pending.json`. Each write is a temp file, a sync and a rename.
-4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. If the OS trash is not available, as on a headless Linux host without one, the file is removed, the history blob is the copy, and the result lists the path in `not_trashed`.
+4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
 5. **Seal.** Write `changes/<id>.json` and remove the pending file.
 
 | crash point | left on disk | what recovery does |
 |---|---|---|
 | before step 3 | nothing | nothing |
 | during step 3 | blobs nothing refers to, or a complete pending record | unreferenced blobs older than a day are collected |
-| during step 4 | some operations applied, temp files | see below |
+| during step 4 | some operations applied, temp files | the record needs attention, and the user reverts it |
 | between 4 and 5 | every operation applied, record still pending | seals it |
 
-**Recovery** runs when the host starts and when the history is read. For each pending record it classifies every operation by the hash on disk: at before, at after, or other. If no operation is "other", it applies the ones still at before and seals the record, because the user asked for that change. If any operation is "other", someone edited the file in between. The record stays pending, the UI shows it, and the user reverts or resolves it. Recovery decides from disk hashes, so running it twice changes nothing, and two processes that recover the same record write the same bytes.
+**Recovery** runs when the host starts and when the history is read. It never writes an agent file. For each pending record it classifies every operation by the hash on disk: at before, at after, or other. When every operation is at after, it seals the record. When every operation is at before, it marks the record `Aborted`, because nothing of the change is on disk. In any other case the record becomes `NeedsAttention`: the UI shows which file is in which state, and the user reverts the change. Recovery decides from disk hashes, so running it twice changes nothing.
+
+A revert of an unfinished record restores the files that are at after, leaves the files at before alone, and reports a file at neither as a conflict. When it completes it resolves the record, also when it plans to nothing.
+
+**A failed apply is not a crash.** When an operation returns an error in step 4, `apply` undoes the operations it had already applied, from their before blobs and guarded by their after hash, marks the record `Aborted`, and returns the error. If the undo fails too, the record stays `NeedsAttention`. A change the user saw fail is never applied later.
 
 **Running twice.** A second `apply` of the same edit plans against the disk as it now is. A save whose text is already on disk, or a switch that is already in the wanted position, plans to nothing and returns `AlreadyApplied`. An edit that would act again, such as adding the same hook a second time, produces a different digest and returns `Stale`. Nothing is applied twice.
 
@@ -598,6 +602,8 @@ Three candidates wrote this design independently against one grounding file: one
 **Corrected in the base.** The judge found these in the Opus candidate, and this document fixes them. The simulator was a second adapter method beside the scan's rules; here `on_access` is the one implementation and the scan calls it. The Gemini import root and the `hooksConfig.disabled` match key were stated loosely. A content cache keyed by mtime could show stale text; here bytes are cached for one scan only and token counts are cached by revision. Three checks could not run on this machine as written (`~/.Trash` listing, a Linux container, a paid Claude API call).
 
 **Rejected.** A filesystem trait with an in-memory implementation: tests use real temp directories, so symlinks and case-insensitive names behave as they do for the agents. Calling `codex app-server` during every scan: it needs Codex installed and makes a scan start a process. A native directory picker and "reveal in Finder": they need a second Tauri API beside `rpc`. Detecting running agent processes for a warning: it adds a process-inspection dependency. A limit on failed logins, a token file flag, a `Host` allowlist flag and a directory allowlist for serve: the token is 256 random bits and is never sent by the browser on its own, and a token holder can already run commands through a hook.
+
+**Changed after the security review.** The first version of this section had recovery finish a pending change on its own ("roll forward"). A reviewer showed two ways that goes wrong: a save that failed with a permission error was applied silently on a later history read, and a file that returned to its old content (a `git checkout`) was overwritten at the next start. Recovery now only classifies, a failed apply undoes itself, and the user decides about anything in between.
 
 ## Deviations
 
