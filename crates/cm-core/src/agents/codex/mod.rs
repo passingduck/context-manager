@@ -10,6 +10,7 @@ mod hooks;
 mod instructions;
 mod memory;
 mod out;
+mod plan;
 mod plugins;
 mod setup;
 mod skills;
@@ -260,8 +261,8 @@ impl Agent for Codex {
         extras::known_projects(cx, &Setup::load(cx))
     }
 
-    fn plan(&self, _cx: &PlanCx, _edit: &Edit) -> Option<Result<Preview, ApiError>> {
-        None
+    fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>> {
+        plan::plan(cx, edit)
     }
 
     fn guard(

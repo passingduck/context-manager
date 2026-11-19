@@ -145,7 +145,7 @@ fn validate(events: &Map<String, Json>) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_handler(handler: &Json) -> Result<(), String> {
+pub(super) fn validate_handler(handler: &Json) -> Result<(), String> {
     let obj = handler
         .as_object()
         .ok_or_else(|| "invalid hook handler: expected a map".to_owned())?;
