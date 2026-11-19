@@ -13,6 +13,7 @@ use super::setup::{SettingsFile, SettingsKind, Setup};
 use crate::agents::{FileClaim, ScanCx};
 use crate::md::frontmatter;
 use crate::model::*;
+use crate::parked;
 use schema::Event;
 
 pub(super) struct HooksOut {
@@ -21,6 +22,28 @@ pub(super) struct HooksOut {
     pub diagnostics: Vec<Diagnostic>,
     /// Files this half looked at that no load names.
     pub files: Vec<FileClaim>,
+}
+
+/// Why a draft is refused before it is written (spec 3, Schema, Handler types, Matcher).
+pub(super) enum DraftProblem {
+    UnknownEvent,
+    Handler,
+    Matcher,
+}
+
+/// A hook a user adds or changes must be one Claude Code would run: a known event, a handler it
+/// accepts there, and a matcher that is not an invalid regular expression. A broken entry under
+/// `PreToolUse` or `PermissionRequest` can stop the whole file from applying.
+pub(super) fn check_draft(draft: &HookDraft) -> Result<(), DraftProblem> {
+    let info = schema::event(&draft.event).ok_or(DraftProblem::UnknownEvent)?;
+    if check_handler(Some(info), &draft.event, &draft.handler).is_some() {
+        return Err(DraftProblem::Handler);
+    }
+    let matcher = draft.matcher.as_deref().filter(|m| !m.is_empty());
+    if matches!(matcher_eval(info, matcher).0, MatcherEval::Invalid { .. }) {
+        return Err(DraftProblem::Matcher);
+    }
+    Ok(())
 }
 
 pub(super) fn schema() -> &'static HookSchema {
@@ -125,28 +148,85 @@ impl Walker<'_, '_> {
                 path: file.path.clone(),
                 policy: file.policy(),
             });
-            let Some(map) = file.get("hooks") else {
-                continue;
+            let start = self.out.hooks.len();
+            let parkable = !matches!(file.kind, SettingsKind::Managed | SettingsKind::Remote);
+            if let Some(map) = file.get("hooks") {
+                let origin = if parkable {
+                    Origin::Settings
+                } else {
+                    Origin::Managed
+                };
+                let toggle = if parkable {
+                    Toggle::Park
+                } else {
+                    Toggle::Unavailable {
+                        why: RuleRef::new("claude.hook.toggle_managed"),
+                    }
+                };
+                self.event_map(
+                    map,
+                    &file.path,
+                    &file.scope,
+                    origin,
+                    toggle,
+                    Registration::SessionStart,
+                    &Loc::Json(String::new()),
+                );
+            }
+            if parkable {
+                self.parked(file, start);
+            }
+        }
+    }
+
+    /// Spec 3, Switches: Claude Code has no per-hook switch, so a hook the operator switched off
+    /// lives in the tool's record of this file. It is listed in its old place, `Disabled`.
+    /// `ParkedHook::index` counts the event's handlers with the parked ones in, so inserting the
+    /// records in ascending order rebuilds the original order.
+    fn parked(&mut self, file: &SettingsFile, start: usize) {
+        let Some(dir) = self.cx.parked_dir else {
+            return;
+        };
+        let records = parked::read(self.cx.fs, dir, &file.path);
+        let mut order: Vec<usize> = (0..records.len()).collect();
+        order.sort_by_key(|&key| (records[key].index, key));
+        for key in order {
+            let record = &records[key];
+            let eval = match schema::event(&record.event) {
+                Some(info) => matcher_eval(info, record.matcher.as_deref()).0,
+                None => MatcherEval::All,
             };
-            let origin = match file.kind {
-                SettingsKind::Managed | SettingsKind::Remote => Origin::Managed,
-                _ => Origin::Settings,
+            let same_event: Vec<usize> = (start..self.out.hooks.len())
+                .filter(|&at| self.out.hooks[at].event == record.event)
+                .collect();
+            let at = match same_event.get(record.index) {
+                Some(&at) => at,
+                None => same_event
+                    .last()
+                    .map_or(self.out.hooks.len(), |&last| last + 1),
             };
-            let toggle = match file.kind {
-                SettingsKind::Managed | SettingsKind::Remote => Toggle::Unavailable {
-                    why: RuleRef::new("claude.hook.toggle_managed"),
+            let hook = Hook {
+                id: hook_id(&file.path, &format!("parked/{key}"), &record.handler),
+                source: HookSource {
+                    file: file.path.clone(),
+                    at: Locator::Parked {
+                        key: key.to_string(),
+                    },
+                    scope: file.scope.clone(),
+                    registered: Registration::SessionStart,
                 },
-                _ => Toggle::Park,
+                event: record.event.clone(),
+                matcher: Matcher {
+                    raw: record.matcher.clone(),
+                    eval,
+                },
+                handler: handler_of(&record.handler),
+                state: HookState::Disabled {
+                    by: DisabledBy::Parked,
+                },
+                toggle: Toggle::Park,
             };
-            self.event_map(
-                map,
-                &file.path,
-                &file.scope,
-                origin,
-                toggle,
-                Registration::SessionStart,
-                &Loc::Json(String::new()),
-            );
+            self.out.hooks.insert(at, hook);
         }
     }
 

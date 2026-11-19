@@ -54,8 +54,21 @@ pub fn scan_full(env: &ScanEnv) -> Scanned {
 }
 
 pub fn scan_with(agents: &[&dyn Agent], env: &ScanEnv) -> Scanned {
+    scan_with_parked(agents, env, None)
+}
+
+/// [`scan_with`] that also reads the parked hook records in `parked_dir`.
+pub fn scan_with_parked(
+    agents: &[&dyn Agent],
+    env: &ScanEnv,
+    parked_dir: Option<&AbsPath>,
+) -> Scanned {
     let fs = ProbeFs::new();
-    let cx = ScanCx { env, fs: &fs };
+    let cx = ScanCx {
+        env,
+        fs: &fs,
+        parked_dir,
+    };
     let git_root = find_git_root(&cx);
     let project_root = git_root.clone().unwrap_or_else(|| env.cwd.clone());
 
@@ -295,7 +308,15 @@ mod tests {
         fx.write(&path, "hello world");
         let env = fx.env();
         let fs = ProbeFs::new();
-        let entry = read_entry(&ScanCx { env: &env, fs: &fs }, &path, EditPolicy::Editable);
+        let entry = read_entry(
+            &ScanCx {
+                env: &env,
+                fs: &fs,
+                parked_dir: None,
+            },
+            &path,
+            EditPolicy::Editable,
+        );
         let FileState::Present { tokens, .. } = entry.state else {
             panic!("expected a present file");
         };

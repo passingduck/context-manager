@@ -137,6 +137,7 @@ impl<'a> Planner<'a> {
     pub fn plan(&self, edit: &Edit) -> Result<Preview, ApiError> {
         match edit {
             Edit::Save { path, base, text } => self.save(path, base, text),
+            // An agent may own the trash of a file it keeps an index of, such as a memory topic.
             Edit::Trash { path, base } => match self.by_owner(path, edit) {
                 Some(result) => result,
                 None => self.trash(path, base),
@@ -711,6 +712,8 @@ impl<'a> Planner<'a> {
     // Agent-specific edits
     // -----------------------------------------------------------------------------------------
 
+    /// The first agent plan for an edit that also has a generic plan. `None`: the generic one
+    /// applies.
     fn by_agent(&self, agent: Option<&AgentId>, edit: &Edit) -> Result<Preview, ApiError> {
         let candidates: Vec<&&dyn Agent> = self
             .agents

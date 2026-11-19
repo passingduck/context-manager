@@ -10,7 +10,11 @@ use crate::testing::Fixture;
 fn scan_with(env: &ScanEnv) -> (AgentScan, ProbeFs) {
     let fs = ProbeFs::new();
     let scan = {
-        let cx = ScanCx { env, fs: &fs };
+        let cx = ScanCx {
+            env,
+            fs: &fs,
+            parked_dir: None,
+        };
         Claude.scan(&cx)
     };
     (scan, fs)
@@ -396,7 +400,11 @@ fn on_access_answers_for_a_directory_the_walk_skipped() {
 
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let got = Claude.on_access(&cx, &p.join("ignored/deep"));
     let files: Vec<_> = got.iter().map(|c| c.file.clone()).collect();
     assert_eq!(
@@ -441,7 +449,11 @@ fn a_rule_with_all_star_paths_loads_at_start_and_frontmatter_is_stripped() {
     assert!(load.delivered.as_ref().unwrap().transformed);
     let fs = ProbeFs::new();
     let env = fx.env();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let text = &Claude.render(&cx, &scan.view)[0].text;
     assert!(text.contains("STAR") && !text.contains("---"));
 }
@@ -715,7 +727,11 @@ fn known_projects_are_the_keys_of_the_global_state_file() {
     );
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let got: Vec<String> = Claude
         .known_projects(&cx)
         .iter()
@@ -858,7 +874,11 @@ fn render_matches_the_session_blocks_and_symlinks_show_their_target() {
     let scan = scan_fx(&fx);
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let blocks = Claude.render(&cx, &scan.view);
     assert_eq!(blocks.len(), 1);
     let text = &blocks[0].text;

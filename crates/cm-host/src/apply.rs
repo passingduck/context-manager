@@ -18,7 +18,7 @@ use std::sync::Mutex;
 use cm_core::agents::Agent;
 use cm_core::edit::Planner;
 use cm_core::env::ScanEnv;
-use cm_core::scan::scan_with;
+use cm_core::scan::scan_with_parked;
 use cm_core::{
     AbsPath, Action, ApiError, ApplyResult, Base, ChangeRecord, ChangeState, Edit, FileOp,
     JournalOp, Preview, Revision, sha256_hex,
@@ -86,7 +86,7 @@ pub(crate) struct Ctx {
 impl Ctx {
     pub fn plan(&self, cwd: &AbsPath, edit: &Edit) -> Result<Preview, ApiError> {
         let env = self.env.with_cwd(cwd.clone());
-        let scanned = scan_with(self.agents, &env);
+        let scanned = scan_with_parked(self.agents, &env, Some(&self.parked_dir));
         Planner {
             agents: self.agents,
             scanned: &scanned,

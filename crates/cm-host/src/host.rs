@@ -5,7 +5,7 @@ use std::time::Duration;
 use cm_core::agents::{Agent, ScanCx, registry};
 use cm_core::env::ScanEnv;
 use cm_core::probe_fs::{EntryKind, ProbeFs, fingerprint_of};
-use cm_core::scan::{Scanned, scan_with};
+use cm_core::scan::{Scanned, scan_with_parked};
 use cm_core::*;
 use cm_core::{search, simulate};
 
@@ -127,9 +127,11 @@ impl Host {
     async fn scanned(&self, cwd: AbsPath) -> Result<Scanned, ApiError> {
         let env = self.config.env.with_cwd(cwd.clone());
         let agents = self.ctx.agents;
-        let scanned = tokio::task::spawn_blocking(move || scan_with(agents, &env))
-            .await
-            .map_err(join_error)?;
+        let parked = self.ctx.parked_dir.clone();
+        let scanned =
+            tokio::task::spawn_blocking(move || scan_with_parked(agents, &env, Some(&parked)))
+                .await
+                .map_err(join_error)?;
         self.probes
             .lock()
             .expect("probe table")
@@ -291,7 +293,11 @@ impl Api for Host {
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            let cx = ScanCx { env: &env, fs: &fs };
+            let cx = ScanCx {
+                env: &env,
+                fs: &fs,
+                parked_dir: None,
+            };
             let mut known: BTreeMap<AbsPath, Vec<AgentId>> = BTreeMap::new();
             for agent in agents {
                 for path in agent.known_projects(&cx) {
@@ -328,6 +334,7 @@ impl Api for Host {
             let cx = ScanCx {
                 env: &env,
                 fs: scanned.fs(),
+                parked_dir: None,
             };
             Ok(agent.render(&cx, view))
         })
@@ -343,6 +350,7 @@ impl Api for Host {
             let cx = ScanCx {
                 env: &env,
                 fs: scanned.fs(),
+                parked_dir: None,
             };
             simulate::simulate(agents, &cx, &scanned.snapshot, &req.path)
         })
@@ -362,7 +370,14 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            agent.sample_input(&req.event, &ScanCx { env: &env, fs: &fs })
+            agent.sample_input(
+                &req.event,
+                &ScanCx {
+                    env: &env,
+                    fs: &fs,
+                    parked_dir: None,
+                },
+            )
         })
         .await
         .map_err(join_error)
@@ -391,6 +406,7 @@ impl Api for Host {
             let cx = ScanCx {
                 env: &env,
                 fs: scanned.fs(),
+                parked_dir: None,
             };
             let spec = agent
                 .exec_spec(hook, &req.input, &cx)

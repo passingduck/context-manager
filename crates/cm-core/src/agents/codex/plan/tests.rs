@@ -440,11 +440,15 @@ fn a_switch_never_touches_an_existing_trusted_hash() {
     let hook = home.hook("echo one");
     let env = home.env();
     let fs = crate::probe_fs::ProbeFs::new();
-    let key = crate::agents::codex::inspect_hooks(&ScanCx { env: &env, fs: &fs })
-        .into_iter()
-        .find(|i| i.key.ends_with("pre_tool_use:0:0"))
-        .unwrap()
-        .key;
+    let key = crate::agents::codex::inspect_hooks(&ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    })
+    .into_iter()
+    .find(|i| i.key.ends_with("pre_tool_use:0:0"))
+    .unwrap()
+    .key;
     let start = format!("[hooks.state.\"{key}\"]\ntrusted_hash = \"sha256:abc\"\n");
     home.write("config.toml", &start);
     home.run(&Edit::SetHookEnabled {

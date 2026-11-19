@@ -5,15 +5,18 @@ use std::sync::OnceLock;
 use serde_json::Value;
 
 use super::{
-    Agent, AgentScan, Candidate, FileClaim, ScanCx, home_dir, home_with_env, presence, rules_from,
+    Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, home_dir, home_with_env, presence,
+    rules_from,
 };
 use crate::model::*;
 use crate::walk;
 
+mod catalog;
 mod extensions;
 mod hooks;
 mod instructions;
 mod memory;
+mod plan;
 mod render;
 mod setup;
 mod slots;
@@ -93,7 +96,7 @@ impl Agent for Claude {
         };
         let hook_out = hooks::scan(cx, &setup, &ext);
 
-        let blocks = render::build(cx, &loads);
+        let blocks = render::session(cx, &setup, &loads, &ext.extensions);
         let budget = render::budget(&blocks, &loads);
 
         let mut stores = mem.stores;
@@ -163,7 +166,8 @@ impl Agent for Claude {
     }
 
     fn render(&self, cx: &ScanCx, view: &AgentView) -> Vec<RenderedBlock> {
-        render::build(cx, &view.loads)
+        let setup = Setup::load(cx);
+        render::session(cx, &setup, &view.loads, &view.extensions)
             .into_iter()
             .map(|b| b.rendered)
             .collect()
@@ -182,6 +186,11 @@ impl Agent for Claude {
             .collect();
         out.sort();
         out
+    }
+
+    /// Spec 2.6, 3, 6.2: the edits that mean something to Claude Code.
+    fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>> {
+        plan::plan(cx, edit)
     }
 
     /// Spec 6.2: what a write may not touch, and what it must keep valid.

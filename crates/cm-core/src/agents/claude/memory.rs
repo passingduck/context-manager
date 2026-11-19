@@ -673,15 +673,15 @@ fn not_in_index(
 
 /// A link in the index and the line it is on.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Link {
-    target: String,
-    line: u32,
+pub(super) struct Link {
+    pub target: String,
+    pub line: u32,
     /// A relative path, not a URL or an anchor.
-    local: bool,
+    pub local: bool,
 }
 
 /// `[Title](target.md)` links of an index, by line.
-fn link_targets(text: &str) -> Vec<Link> {
+pub(super) fn link_targets(text: &str) -> Vec<Link> {
     let mut out = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let mut rest = line;

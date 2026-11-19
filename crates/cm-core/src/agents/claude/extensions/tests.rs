@@ -6,7 +6,11 @@ use crate::testing::Fixture;
 
 fn run_with(env: &ScanEnv) -> ExtOut {
     let fs = ProbeFs::new();
-    let cx = ScanCx { env, fs: &fs };
+    let cx = ScanCx {
+        env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let setup = Setup::load(&cx);
     scan(&cx, &setup, 10)
 }

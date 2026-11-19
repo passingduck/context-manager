@@ -507,6 +507,65 @@ fn ext_id(kind: ExtKind, file: &AbsPath) -> ExtId {
     ExtId(sha256_hex(format!("claude\0{tag}\0{file}").as_bytes())[..16].to_owned())
 }
 
+/// Spec 4, "What reaches the model": one catalog line and what the cut did to it. A skill or
+/// command entry is `description - when_to_use`, cut at `max_desc` characters. A subagent entry
+/// is the whole description.
+pub(super) fn listing_entry(
+    kind: ExtKind,
+    name: &str,
+    description: &str,
+    when_to_use: Option<&str>,
+    max_desc: u64,
+) -> (String, LoadStatus) {
+    if kind == ExtKind::Subagent {
+        return (format!("{name}: {description}"), LoadStatus::Loaded);
+    }
+    let full = match when_to_use {
+        Some(w) => format!("{description} - {w}"),
+        None => description.to_owned(),
+    };
+    let cut = limits::cut_chars(&full, max_desc);
+    let status = if cut.is_whole() {
+        LoadStatus::Loaded
+    } else {
+        LoadStatus::Truncated {
+            limit: Limit {
+                kind: LimitKind::ListingEntryChars,
+                value: max_desc,
+                unit: Unit::Chars,
+            },
+            kept: cut.kept,
+            total: cut.total,
+        }
+    };
+    (format!("{name}: {}", cut.text), status)
+}
+
+/// The cut length that `skillListingMaxDescChars` sets.
+pub(super) fn max_desc_chars(setup: &Setup) -> u64 {
+    setup
+        .first("skillListingMaxDescChars")
+        .and_then(|(v, _)| v.as_u64())
+        .unwrap_or(LISTING_MAX_DESC_CHARS)
+}
+
+/// The skill listing's character budget: `SLASH_COMMAND_TOOL_CHAR_BUDGET` when set, else
+/// `window x 4 x skillListingBudgetFraction`.
+pub(super) fn listing_budget_chars(cx: &ScanCx, setup: &Setup, window_tokens: u32) -> u64 {
+    if let Some(fixed) = cx
+        .env
+        .var("SLASH_COMMAND_TOOL_CHAR_BUDGET")
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+    {
+        return fixed;
+    }
+    let fraction = setup
+        .first("skillListingBudgetFraction")
+        .and_then(|(v, _)| v.as_f64())
+        .unwrap_or(LISTING_BUDGET_FRACTION);
+    (f64::from(window_tokens) * CHARS_PER_TOKEN * fraction) as u64
+}
+
 fn fm_str<'a>(map: &'a Option<serde_json::Map<String, Value>>, key: &str) -> Option<&'a str> {
     map.as_ref()?
         .get(key)?
@@ -688,16 +747,7 @@ impl Builder<'_, '_> {
             }
         }
 
-        let budget_fraction = self
-            .setup
-            .first("skillListingBudgetFraction")
-            .and_then(|(v, _)| v.as_f64())
-            .unwrap_or(LISTING_BUDGET_FRACTION);
-        let max_desc = self
-            .setup
-            .first("skillListingMaxDescChars")
-            .and_then(|(v, _)| v.as_u64())
-            .unwrap_or(LISTING_MAX_DESC_CHARS);
+        let max_desc = max_desc_chars(self.setup);
         let overrides = self
             .setup
             .first("skillOverrides")
@@ -883,30 +933,9 @@ impl Builder<'_, '_> {
             let mut listing = None;
             if status == ExtStatus::Active {
                 let desc = p.description.clone().unwrap_or_default();
-                let when_to_use = fm_str(map, "when_to_use").map(str::to_owned);
-                let full = match (&when_to_use, cand.kind) {
-                    (Some(w), ExtKind::Skill | ExtKind::Command) => format!("{desc} - {w}"),
-                    _ => desc,
-                };
-                let (entry, load_status) = if cand.kind == ExtKind::Subagent {
-                    (format!("{}: {full}", p.name), LoadStatus::Loaded)
-                } else {
-                    let cut = limits::cut_chars(&full, max_desc);
-                    let status = if cut.is_whole() {
-                        LoadStatus::Loaded
-                    } else {
-                        LoadStatus::Truncated {
-                            limit: Limit {
-                                kind: LimitKind::ListingEntryChars,
-                                value: max_desc,
-                                unit: Unit::Chars,
-                            },
-                            kept: cut.kept,
-                            total: cut.total,
-                        }
-                    };
-                    (format!("{}: {}", p.name, cut.text), status)
-                };
+                let when_to_use = fm_str(map, "when_to_use");
+                let (entry, load_status) =
+                    listing_entry(cand.kind, &p.name, &desc, when_to_use, max_desc);
                 let toks = tokens::count(&entry);
                 if cand.kind == ExtKind::Subagent {
                     agent_tokens += u64::from(toks);
@@ -955,7 +984,7 @@ impl Builder<'_, '_> {
         }
 
         // Catalog budgets (spec 4: `contextWindowTokens x 4 x skillListingBudgetFraction`).
-        let budget = (f64::from(self.window_tokens) * CHARS_PER_TOKEN * budget_fraction) as u64;
+        let budget = listing_budget_chars(self.cx, self.setup, self.window_tokens);
         if skill_chars > budget {
             diagnostics.push(Diagnostic {
                 severity: Severity::Warning,

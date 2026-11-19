@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use cm_core::agents::{ScanCx, find};
 use cm_core::env::ScanEnv;
-use cm_core::model::{AbsPath, AgentId};
+use cm_core::model::{AbsPath, AgentId, Fidelity};
 use cm_core::probe_fs::ProbeFs;
 use serde_json::Value;
 
@@ -571,12 +571,18 @@ fn ours(t: &Tree, cwd: &Path) -> String {
     let env = ScanEnv::for_fixture(abs(&t.home()), abs(cwd))
         .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
     let scan = agent.scan(&cx);
     let blocks = agent.render(&cx, &scan.view);
+    // The skill and subagent listings are `Approximate`: no run pins their framing.
     blocks
         .iter()
+        .filter(|b| b.fidelity == Fidelity::Exact)
         .map(|b| b.text.as_str())
         .collect::<Vec<_>>()
         .join("\n\n")

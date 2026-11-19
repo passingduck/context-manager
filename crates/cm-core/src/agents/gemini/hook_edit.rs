@@ -99,6 +99,7 @@ pub(super) fn set_enabled(cx: &PlanCx, id: &HookId, enabled: bool) -> Planned {
     let scan = ScanCx {
         env: cx.env,
         fs: cx.fs,
+        parked_dir: None,
     };
     let w = World::new(&scan);
     let listed = |value: &Value| {

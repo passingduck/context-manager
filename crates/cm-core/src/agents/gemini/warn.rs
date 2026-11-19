@@ -17,6 +17,7 @@ pub(super) fn write_warnings(
     let scan = ScanCx {
         env: cx.env,
         fs: cx.fs,
+        parked_dir: None,
     };
     let w = World::new(&scan);
     let mut out = Vec::new();

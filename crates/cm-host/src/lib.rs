@@ -20,4 +20,6 @@ mod codex_tests;
 mod pipeline_tests;
 
 #[cfg(test)]
+mod claude_planner_tests;
+#[cfg(test)]
 mod gemini_e2e_tests;

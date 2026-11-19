@@ -76,6 +76,7 @@ fn scan_cx<'a>(cx: &'a PlanCx) -> ScanCx<'a> {
     ScanCx {
         env: cx.env,
         fs: cx.fs,
+        parked_dir: None,
     }
 }
 

@@ -20,6 +20,9 @@ pub mod gemini;
 pub struct ScanCx<'a> {
     pub env: &'a ScanEnv,
     pub fs: &'a ProbeFs,
+    /// Where the tool keeps parked hook records. `None` for a caller that has no data
+    /// directory: no hook is then reported as parked.
+    pub parked_dir: Option<&'a AbsPath>,
 }
 
 /// What a planner reads through.

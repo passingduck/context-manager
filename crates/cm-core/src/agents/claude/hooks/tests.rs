@@ -8,7 +8,11 @@ use serde_json::json;
 
 fn scan_with(env: &ScanEnv) -> HooksOut {
     let fs = ProbeFs::new();
-    let cx = ScanCx { env, fs: &fs };
+    let cx = ScanCx {
+        env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let setup = Setup::load(&cx);
     let ext = extensions::scan(&cx, &setup, 0);
     scan(&cx, &setup, &ext)
@@ -546,7 +550,11 @@ fn exec_spec_builds_the_shell_form_and_the_exec_form() {
     );
     let (env, _) = managed_env(&fx);
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let out = scan_with(&env);
     let input = json!({"session_id": "abc", "hook_event_name": "Stop"});
     let project = fx.project();
@@ -589,7 +597,11 @@ fn exec_spec_resolves_the_plugin_root_for_plugin_hooks() {
     );
     let (env, _) = managed_env(&fx);
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     let out = scan_with(&env);
     let hook = by_event(&out, "SessionStart")[0];
     let spec = exec_spec(hook, &sample_input("SessionStart", &cx), &cx).unwrap();
@@ -613,7 +625,11 @@ fn every_event_has_a_sample_input_naming_itself() {
     let fx = Fixture::new();
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx { env: &env, fs: &fs };
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
     for event in &schema().events {
         let input = sample_input(&event.name, &cx);
         assert_eq!(input["hook_event_name"], event.name.as_str());
@@ -658,4 +674,78 @@ fn every_rule_ref_of_this_half_has_an_entry_in_both_languages() {
         }
     }
     assert!(seen >= 10, "found only {seen} rule ids");
+}
+
+#[test]
+fn parked_hooks_are_listed_disabled_in_their_old_place() {
+    // Spec 3, Switches: no per-hook switch exists, so a parked hook comes from the record.
+    use crate::parked::{ParkedFile, ParkedHook, record_path, render};
+    let fx = Fixture::new();
+    let file = fx.home_path(".claude/settings.json");
+    fx.write(
+        &file,
+        &settings(
+            json!({"PreToolUse": [{"matcher": "Bash", "hooks": [cmd("a.sh"), cmd("c.sh")]}]}),
+        ),
+    );
+    let parked_dir = fx.root().join("data/parked");
+    let parked = |command: &str, index: usize| ParkedHook {
+        event: "PreToolUse".into(),
+        matcher: Some("Bash".into()),
+        handler: cmd(command),
+        index,
+        restore: None,
+    };
+    // b was between a and c, d came last. Indexes count the event with every parked hook in.
+    fx.write(
+        &record_path(&parked_dir, &file),
+        &render(&ParkedFile {
+            source: file.clone(),
+            hooks: vec![parked("d.sh", 3), parked("b.sh", 1)],
+        }),
+    );
+    let (env, _) = managed_env(&fx);
+    let fs = ProbeFs::new();
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: Some(&parked_dir),
+    };
+    let setup = Setup::load(&cx);
+    let ext = extensions::scan(&cx, &setup, 0);
+    let out = scan(&cx, &setup, &ext);
+
+    let order: Vec<(&str, bool)> = out
+        .hooks
+        .iter()
+        .map(|h| {
+            (
+                h.handler.summary.as_str(),
+                matches!(
+                    h.state,
+                    HookState::Disabled {
+                        by: DisabledBy::Parked
+                    }
+                ),
+            )
+        })
+        .collect();
+    assert_eq!(
+        order,
+        [
+            ("a.sh", false),
+            ("b.sh", true),
+            ("c.sh", false),
+            ("d.sh", true)
+        ]
+    );
+    let b = &out.hooks[1];
+    assert_eq!(b.source.at, Locator::Parked { key: "1".into() });
+    assert_eq!(b.matcher.raw.as_deref(), Some("Bash"));
+    assert_eq!(b.toggle, Toggle::Park);
+    assert_eq!(b.source.file, file);
+
+    // Without a parked directory the scan lists only what the file holds.
+    let plain = scan_with(&env);
+    assert_eq!(plain.hooks.len(), 2);
 }

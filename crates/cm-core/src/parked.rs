@@ -21,6 +21,22 @@ pub struct ParkedHook {
     pub handler: serde_json::Value,
     /// Its index among the event's entries when it was removed.
     pub index: usize,
+    /// What putting it back needs to restore the exact bytes while nothing else touched the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore: Option<Restore>,
+}
+
+/// The text that parking took out of a settings file, and where. It applies only while the file
+/// is as the removal left it, which `after` pins.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Restore {
+    /// Byte offset in the file after the removal.
+    pub offset: usize,
+    /// The text the removal took out.
+    pub text: String,
+    /// SHA-256 of the file after the removal.
+    pub after: String,
 }
 
 /// Everything parked from one settings file.
@@ -65,6 +81,7 @@ mod tests {
             matcher: Some("Bash".into()),
             handler: serde_json::json!({"type": "command", "command": "echo hi", "extra": 1}),
             index: 2,
+            restore: None,
         }
     }
 

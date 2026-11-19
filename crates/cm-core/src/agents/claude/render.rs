@@ -3,7 +3,9 @@
 
 use serde_json::Value;
 
+use super::catalog;
 use super::memory::cut_index;
+use super::setup::Setup;
 use crate::agents::ScanCx;
 use crate::md::strip::strip;
 use crate::model::*;
@@ -81,6 +83,19 @@ fn shown_path(cx: &ScanCx, load: &Load) -> String {
     }
 }
 
+/// Everything that is sent at session start: the instruction and memory blocks, then the skill
+/// and subagent listings.
+pub(super) fn session(
+    cx: &ScanCx,
+    setup: &Setup,
+    loads: &[Load],
+    extensions: &[Extension],
+) -> Vec<Built> {
+    let mut blocks = build(cx, loads);
+    blocks.extend(catalog::build(cx, setup, extensions));
+    blocks
+}
+
 /// The instruction block and the memory block of the first user message. The reminder opens in
 /// the first block and closes in the last.
 pub(super) fn build(cx: &ScanCx, loads: &[Load]) -> Vec<Built> {
@@ -129,18 +144,25 @@ pub(super) fn build(cx: &ScanCx, loads: &[Load]) -> Vec<Built> {
             .iter()
             .map(|(id, piece)| (id.clone(), piece.as_str()))
             .collect(),
+        Fidelity::Exact,
     ));
     if let (Some(text), Some((id, piece))) = (second, &memory) {
         out.push(built(
             BlockLabel::Memory,
             text,
             vec![(id.clone(), piece.as_str())],
+            Fidelity::Exact,
         ));
     }
     out
 }
 
-fn built(label: BlockLabel, text: String, pieces: Vec<(LoadId, &str)>) -> Built {
+pub(super) fn built(
+    label: BlockLabel,
+    text: String,
+    pieces: Vec<(LoadId, &str)>,
+    fidelity: Fidelity,
+) -> Built {
     let total = tokens::count(&text);
     let mut parts: Vec<Part> = Vec::new();
     let mut in_loads = 0u32;
@@ -163,14 +185,14 @@ fn built(label: BlockLabel, text: String, pieces: Vec<(LoadId, &str)>) -> Built 
             label,
             text: text.clone(),
             tokens: total,
-            fidelity: Fidelity::Exact,
+            fidelity,
         },
         block: ContextBlock {
             delivery: Delivery::UserMessage,
             label,
             parts,
             tokens: total,
-            fidelity: Fidelity::Exact,
+            fidelity,
         },
     }
 }
