@@ -1,10 +1,11 @@
 import { useProject } from "../app/project";
-import { Badge, Button, Chip, Empty, Mono, PaneTitle } from "../components/ui";
+import { Badge, Chip, Empty, Mono, PaneTitle } from "../components/ui";
 import type { Hook } from "../gen/Hook";
 import { useI18n } from "../i18n";
 import { say } from "../i18n/types";
 import type { Route } from "../lib/route";
-import { HookStateBadge, toggleText } from "./Detail";
+import { HookStateBadge } from "./Detail";
+import { AddHookButton, HookSwitch } from "../write/hooks";
 
 type Go = (patch: Partial<Route>) => void;
 
@@ -25,6 +26,7 @@ export function HooksView({ route, go }: { route: Route; go: Go }) {
                 <span className="size-2.5 rounded-full" style={{ background: project.color(view.agent) }} aria-hidden />
                 {project.name(view.agent)}
                 <span className="text-[12px] font-normal text-muted tabular-nums">{view.hooks.length}</span>
+                <span className="ml-auto"><AddHookButton agent={view.agent} /></span>
               </h3>
               {view.hooks.length === 0 && <p className="px-3 text-muted">{t.hooks.emptyBody}</p>}
               {events.map((event) => (
@@ -54,7 +56,6 @@ export function HooksView({ route, go }: { route: Route; go: Go }) {
 function HookRow({ hook, agent, selected, go }: { hook: Hook; agent: string; selected: boolean; go: Go }) {
   const { t, d } = useI18n();
   const project = useProject();
-  const enabledToggle = hook.toggle.kind !== "unavailable";
   return (
     <div
       role="button"
@@ -73,14 +74,12 @@ function HookRow({ hook, agent, selected, go }: { hook: Hook; agent: string; sel
         <Chip title={say(t.matcherEval, hook.matcher.eval, d)}>{hook.matcher.raw ?? t.hooks.anyTool}</Chip>
         <Mono className="min-w-0 flex-1 truncate">{hook.handler.summary}</Mono>
         <HookStateBadge hook={hook} />
-        <Button disabled title={enabledToggle ? `${toggleText(hook, project.rule, t)} ${t.hooks.switchDisabled}` : toggleText(hook, project.rule, t)} onClick={(e) => e.stopPropagation()}>
-          {hook.state.kind === "disabled" ? t.hooks.offLabel : t.hooks.on}
-        </Button>
+        <HookSwitch hook={hook} />
       </div>
       <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
         <Mono className="text-[11px]">{project.display(hook.source.file)}</Mono>
         <Badge tone="neutral">{say(t.scope, hook.source.scope, d)}</Badge>
-        <span>{t.toggle[hook.toggle.kind]()}</span>
+        <span>{hook.toggle.kind === "unavailable" ? `${t.toggle.unavailable()}: ${project.rule(hook.toggle.why)}` : t.toggle[hook.toggle.kind]()}</span>
         {hook.state.kind !== "active" && <span className="min-w-0 truncate">{say(t.hookState, hook.state, d)}</span>}
       </div>
     </div>

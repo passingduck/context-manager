@@ -1,8 +1,8 @@
-import { useMemo, type ReactNode } from "react";
-import { useChange, useFile } from "../api/queries";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useChange, useFile, useRevertCheck } from "../api/queries";
 import { useProject } from "../app/project";
-import { CodeEditor, DiffView } from "../components/CodeEditor";
-import { Badge, Button, Chip, ErrorNote, Loading, Mono } from "../components/ui";
+import { CodeEditor, DiffView, EditableEditor } from "../components/CodeEditor";
+import { Badge, Button, Chip, ErrorNote, Loading, Mono, PrimaryButton } from "../components/ui";
 import type { FileEntry } from "../gen/FileEntry";
 import type { Hook } from "../gen/Hook";
 import type { Load } from "../gen/Load";
@@ -11,6 +11,10 @@ import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
 import { activationTone, statusTone, truncationLine } from "../lib/loads";
 import type { Route } from "../lib/route";
+import { isDirty, setBuffer, useBuffer } from "../write/buffers";
+import { useWrite } from "../write/flow";
+import { useTrash } from "../write/trash";
+import { HookActions, HookTest } from "../write/hooks";
 
 type Go = (patch: Partial<Route>) => void;
 
@@ -37,14 +41,11 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function Toolbar({ left }: { left: ReactNode }) {
-  const { t } = useI18n();
+function Toolbar({ left, right }: { left: ReactNode; right?: ReactNode }) {
   return (
     <div className="flex items-center gap-2 border-b border-line bg-subtle px-3 py-1.5">
       <div className="flex min-w-0 flex-1 items-center gap-2">{left}</div>
-      <Button disabled title={t.detail.editsLater}>{t.detail.revert}</Button>
-      <Button disabled title={t.detail.editsLater}>{t.detail.trash}</Button>
-      <Button disabled title={t.detail.editsLater} className="border-accent bg-accent text-bg">{t.detail.save}</Button>
+      {right}
     </div>
   );
 }
@@ -61,11 +62,54 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
   const file = useFile(project.cwd, entry?.state.kind === "present" ? path : null, rev);
   const lead = uses[0];
   const cutLine = lead && file.data?.text ? truncationLine(file.data.text, lead.load.status) : null;
+  const write = useWrite();
+  const trash = useTrash(path);
+  const buffer = useBuffer(path);
+  const [showDiff, setShowDiff] = useState(false);
+  const disk = file.data?.text ?? null;
+  const live = entry?.state.kind === "present" ? entry.state.rev : null;
+  const dirty = isDirty(buffer);
+  const followsDisk = buffer?.base.kind === "rev" && buffer.base.rev === live;
+  const changed = dirty && live !== null && !followsDisk;
+
+  // A buffer without edits follows the disk, so a change from outside reloads it.
+  useEffect(() => {
+    if (buffer && !dirty && live !== null && disk !== null && !followsDisk) setBuffer(path, null);
+  }, [buffer, dirty, live, disk, followsDisk, path]);
 
   if (!entry) {
     return <div className="p-4 text-muted"><Mono>{path}</Mono></div>;
   }
   const state = entry.state;
+  const editable = entry.policy.kind === "editable" && state.kind === "present" && disk !== null;
+  const policyNote = entry.policy.kind === "readOnly" ? say(t.readOnlyWhy, entry.policy.why, d) : undefined;
+
+  const edit = (text: string) => {
+    if (disk === null || live === null) return;
+    setBuffer(path, { base: buffer?.base ?? { kind: "rev", rev: live }, loaded: buffer?.loaded ?? disk, text });
+  };
+  const save = () => {
+    if (!buffer) return;
+    const text = buffer.text;
+    write.propose({
+      edit: { kind: "save", path, base: buffer.base, text },
+      title: t.write.saveTitle(entry.display),
+      mine: text,
+      onApplied: (result) => {
+        const rev = result.files.find(([p]) => p === path)?.[1];
+        setBuffer(path, { base: rev ? { kind: "rev", rev } : buffer.base, loaded: text, text });
+        setShowDiff(false);
+      },
+      onTakeTheirs: () => {
+        setBuffer(path, null);
+        setShowDiff(false);
+      },
+      onOpenBoth: (found, current) => {
+        setBuffer(path, { base: found, loaded: current ?? "", text });
+        setShowDiff(true);
+      },
+    });
+  };
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="max-h-[58%] shrink-0 overflow-y-auto">
@@ -117,16 +161,41 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
               <Chip>{t.format[entry.format]}</Chip>
               {state.kind === "present" && <span className="text-muted">{t.detail.lines(state.lines)}</span>}
               {cutLine && <Badge tone="bad">{t.detail.cutLine(cutLine)}</Badge>}
+              {dirty && <Badge tone="warn">{t.write.unsaved}</Badge>}
+            </>
+          }
+          right={
+            <>
+              <Button disabled={!dirty} onClick={() => { setBuffer(path, null); setShowDiff(false); }}>{t.write.discard}</Button>
+              <Button disabled={!trash.can} title={trash.reason} onClick={trash.run}>{t.detail.trash}</Button>
+              <PrimaryButton disabled={!dirty || !editable || write.blocked !== null} title={write.blocked ?? (editable ? undefined : policyNote)} onClick={save}>{t.detail.save}</PrimaryButton>
             </>
           }
         />
+        {changed && (
+          <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-warn bg-warn-bg px-3 py-1.5 text-warn">
+            <b>{t.write.changedOnDisk}</b>
+            <span className="min-w-0 flex-1 text-fg">{t.write.changedOnDiskBody}</span>
+            <Button disabled={disk === null} onClick={() => setShowDiff(!showDiff)}>{showDiff ? t.write.hideDiff : t.write.showDiff}</Button>
+            <Button onClick={() => { setBuffer(path, null); setShowDiff(false); }}>{t.write.reload}</Button>
+          </div>
+        )}
         <div className="min-h-0 flex-1">
           {state.kind === "absent" && <p className="p-4 text-muted">{t.detail.absent}</p>}
           {state.kind === "unreadable" && <p className="p-4 text-muted">{t.detail.unreadable(state.error)}</p>}
           {state.kind === "tooBig" && <p className="p-4 text-muted">{t.detail.tooBig(fmt.bytes(state.bytes))}</p>}
           {state.kind === "present" && file.isPending && <Loading />}
           {state.kind === "present" && file.isError && <ErrorNote error={file.error} />}
-          {state.kind === "present" && file.data?.text != null && (
+          {state.kind === "present" && disk !== null && showDiff && buffer && (
+            <div className="h-full overflow-auto p-2">
+              <div className="mb-1 grid grid-cols-2 gap-4 text-[11px] text-faint"><span>{t.write.theirs}</span><span>{t.write.mine}</span></div>
+              <DiffView before={disk} after={buffer.text} format={entry.format} />
+            </div>
+          )}
+          {state.kind === "present" && disk !== null && !showDiff && editable && (
+            <EditableEditor key={path} text={buffer?.text ?? disk} format={entry.format} label={t.detail.text} onChange={edit} />
+          )}
+          {state.kind === "present" && file.data?.text != null && !showDiff && !editable && (
             <CodeEditor key={`${path}:${rev}`} text={file.data.text} format={entry.format} cutLine={cutLine} cutTitle={t.detail.cutMarker} revealLine={route.ln} />
           )}
         </div>
@@ -186,7 +255,7 @@ function HookDetail({ id, go }: { id: string; go: Go }) {
   const { t, d } = useI18n();
   const project = useProject();
   const found = project.snapshot.agents.flatMap((view) => view.hooks.map((hook) => ({ agent: view.agent, hook }))).find((item) => item.hook.id === id);
-  if (!found) return <p className="p-4 text-muted">{id}</p>;
+  if (!found) return <p className="p-4 text-muted">{t.hooks.gone}</p>;
   const { agent, hook } = found;
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
@@ -211,12 +280,16 @@ function HookDetail({ id, go }: { id: string; go: Go }) {
           <Field label={t.hooks.switch}>{toggleText(hook, project.rule, t)}</Field>
         </dl>
       </header>
-      <section className="flex min-h-[14rem] flex-1 flex-col" aria-label={t.hooks.raw}>
-        <Toolbar left={<><Chip>JSON</Chip><span className="text-muted">{t.hooks.raw}</span></>} />
+      <section className="flex min-h-[14rem] shrink-0 flex-col" aria-label={t.hooks.raw}>
+        <Toolbar
+          left={<><Chip>JSON</Chip><span className="text-muted">{t.hooks.raw}</span></>}
+          right={<HookActions agent={agent} hook={hook} onTest={() => document.getElementById("hook-test")?.scrollIntoView({ behavior: "smooth" })} />}
+        />
         <div className="min-h-0 flex-1">
           <CodeEditor key={hook.id} text={JSON.stringify(hook.handler.raw, null, 2)} format="json" />
         </div>
       </section>
+      <HookTest key={hook.id} agent={agent} hook={hook} />
     </div>
   );
 }
@@ -242,6 +315,7 @@ function ChangeDetailView({ id }: { id: string }) {
   const { t, lang } = useI18n();
   const project = useProject();
   const change = useChange(id);
+  const write = useWrite();
   if (change.isPending) return <Loading />;
   if (change.isError) return <ErrorNote error={change.error} onRetry={() => void change.refetch()} />;
   const { record, files } = change.data;
@@ -253,9 +327,17 @@ function ChangeDetailView({ id }: { id: string }) {
           <Badge tone={record.state === "sealed" ? "ok" : record.state === "pending" ? "info" : "warn"}>{t.changeState[record.state]}</Badge>
           {record.summary.agent && <Chip>{project.name(record.summary.agent)}</Chip>}
           <span className="text-muted">{fmt.when(record.at, lang)}</span>
-          <Button disabled title={t.history.revertLater} className="ml-auto">{t.detail.revert}</Button>
+          <Button
+            disabled={write.blocked !== null}
+            title={write.blocked ?? undefined}
+            className="ml-auto"
+            onClick={() => write.propose({ edit: { kind: "revert", change: id }, title: t.write.revertTitle(t.changeEdit[record.summary.edit.kind]) })}
+          >
+            {t.detail.revert}
+          </Button>
         </div>
       </header>
+      {record.state !== "sealed" && <Attention id={id} state={record.state} />}
       <div className="space-y-4 p-4">
         {files.map((file) => (
           <section key={file.path}>
@@ -270,5 +352,30 @@ function ChangeDetailView({ id }: { id: string }) {
         ))}
       </div>
     </div>
+  );
+}
+
+/** A change that did not finish, or whose files were edited afterwards, and which files those are. */
+export function Attention({ id, state }: { id: string; state: "pending" | "needsAttention" }) {
+  const { t } = useI18n();
+  const project = useProject();
+  const check = useRevertCheck(project.cwd, id, project.snapshot.fingerprint);
+  const edited = check.data?.conflicts ?? [];
+  return (
+    <section role="alert" className="border-b border-warn bg-warn-bg px-4 py-3">
+      <h3 className="font-semibold text-warn">{state === "pending" ? t.history.pendingTitle : t.history.attentionTitle}</h3>
+      <p className="mt-0.5">{state === "pending" ? t.history.pendingBody : t.history.attentionBody}</p>
+      {check.isPending && <p className="mt-1 text-muted">{t.loading}</p>}
+      {check.isSuccess && (
+        <div className="mt-1.5">
+          <p className="font-semibold">{edited.length > 0 ? t.history.editedBetween : t.history.noneEdited}</p>
+          <ul>
+            {edited.map((conflict) => (
+              <li key={conflict.path}><Mono className="break-all">{project.display(conflict.path)}</Mono></li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }

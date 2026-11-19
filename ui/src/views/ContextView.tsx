@@ -11,6 +11,9 @@ import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
 import { activationTone, buildGroups, GROUPS, statusTone, type Node } from "../lib/loads";
 import type { Route } from "../lib/route";
+import { NewMenu } from "../write/create";
+import { useDirtyPaths } from "../write/buffers";
+import { RowMenu } from "../write/trash";
 
 type Go = (patch: Partial<Route>) => void;
 
@@ -65,6 +68,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
 
   const right = (
     <>
+      <NewMenu go={go} />
       <div role="group" aria-label={t.context.title} className="flex overflow-hidden rounded border border-line text-[12px]">
         {(["tree", "order"] as const).map((mode) => (
           <button key={mode} type="button" aria-pressed={route.mode === mode} onClick={() => go({ mode })} className="px-2 py-0.5 hover:bg-sunken aria-pressed:bg-accent-bg aria-pressed:font-semibold aria-pressed:text-accent">
@@ -260,6 +264,7 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
   const tokensValue = load.delivered?.tokens ?? (entry?.state.kind === "present" ? entry.state.tokens : null);
   const tone = statusTone(load.status);
   const isTabStop = focused === nodeKey;
+  const unsaved = useDirtyPaths().includes(load.file);
 
   const toggle = () => {
     const next = new Set(collapsed);
@@ -303,6 +308,7 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
           <span className="min-w-0 truncate text-[11px] text-faint">{load.via.kind === "import" ? t.context.importedFrom(hostLabel, load.via.line) : load.via.kind === "reference" ? t.context.referencedFrom(hostLabel, load.via.line) : ""}</span>
         )}
       </div>
+      {unsaved && <Badge tone="warn">{t.write.unsaved}</Badge>}
       {fires && <Badge tone="warn">{t.context.firesOnPath}</Badge>}
       {ext && ext.status.kind !== "active" && ext.status.kind !== "shadowed" && <Badge tone={ext.status.kind === "conditional" ? "info" : "neutral"} title={say(t.extStatus, ext.status, d)}>{say(t.extStatusShort, ext.status, d)}</Badge>}
       {tone && (
@@ -314,6 +320,7 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
         {say(t.activation.badge, load.when, d)}
       </Badge>
       <span className={`w-11 shrink-0 text-right tabular-nums ${load.delivered ? "" : "text-faint"}`}>{tokensValue === null ? "–" : fmt.tokens(tokensValue)}</span>
+      {load.via.kind !== "reference" && <RowMenu path={load.file} />}
     </div>
   );
 }

@@ -1,9 +1,11 @@
 import { useProject } from "../app/project";
-import { Badge, Chip, Empty, Mono, PaneTitle } from "../components/ui";
+import { Badge, Button, Chip, Empty, Mono, PaneTitle } from "../components/ui";
 import type { MemoryStore } from "../gen/MemoryStore";
 import { useI18n } from "../i18n";
 import { say } from "../i18n/types";
 import type { Route } from "../lib/route";
+import { AddMemory } from "../write/create";
+import { useWrite } from "../write/flow";
 
 type Go = (patch: Partial<Route>) => void;
 
@@ -35,12 +37,14 @@ export function MemoryView({ route, go }: { route: Route; go: Go }) {
 function Store({ store, agent, route, go }: { store: MemoryStore; agent: string; route: Route; go: Go }) {
   const { t, d } = useI18n();
   const project = useProject();
+  const write = useWrite();
   return (
     <article className="mx-3 mt-2 rounded border border-line">
       <header className="space-y-1 border-b border-line bg-subtle px-3 py-2">
         <div className="flex flex-wrap items-center gap-2">
           <b className="font-mono text-[12px]">{store.id}</b>
           <Badge tone={store.enabled.kind === "on" ? "ok" : "warn"}>{store.enabled.kind === "on" ? t.memory.enabled : t.memory.off}</Badge>
+          <span className="ml-auto"><AddMemory agent={agent} store={store} /></span>
         </div>
         <p className="text-muted">{project.rule(store.label)}</p>
         {store.enabled.kind === "off" && <p>{t.memory.disabled(store.enabled.by)}</p>}
@@ -64,13 +68,15 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
         <ul>
           {store.entries.map((entry) => {
             const selected = route.sel === `file:${entry.file}`;
+            const state = project.snapshot.files[entry.file];
+            const removable = (entry.role === "topic" || entry.role === "note") && state?.policy.kind === "editable" && state.state.kind === "present";
             return (
-              <li key={entry.file}>
+              <li key={entry.file} className="flex items-center hover:bg-subtle">
                 <button
                   type="button"
                   aria-pressed={selected}
                   onClick={() => go({ sel: `file:${entry.file}`, ag: agent, ln: 0 })}
-                  className="flex w-full items-center gap-2 border-l-2 border-transparent px-3 py-1 text-left hover:bg-subtle aria-pressed:border-accent aria-pressed:bg-accent-bg"
+                  className="flex min-w-0 flex-1 items-center gap-2 border-l-2 border-transparent px-3 py-1 text-left aria-pressed:border-accent aria-pressed:bg-accent-bg"
                 >
                   <Chip>{t.memoryRole[entry.role]}</Chip>
                   <span className="min-w-0 flex-1">
@@ -80,6 +86,19 @@ function Store({ store, agent, route, go }: { store: MemoryStore; agent: string;
                   {entry.indexed === true && <Badge tone="ok">{t.memory.indexed}</Badge>}
                   {entry.indexed === false && <Badge tone="warn">{t.memory.notIndexed}</Badge>}
                 </button>
+                {removable && state?.state.kind === "present" && (
+                  <Button
+                    className="mr-3 shrink-0"
+                    disabled={write.blocked !== null}
+                    title={write.blocked ?? undefined}
+                    onClick={() => {
+                      if (state.state.kind !== "present") return;
+                      write.propose({ edit: { kind: "trash", path: entry.file, base: state.state.rev }, title: t.write.deleteMemoryTitle(entry.title) });
+                    }}
+                  >
+                    {t.write.delete}
+                  </Button>
+                )}
               </li>
             );
           })}

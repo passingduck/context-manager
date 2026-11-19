@@ -1,10 +1,11 @@
 import { useProject } from "../app/project";
-import { Badge, Chip, Empty, Mono, PaneTitle } from "../components/ui";
+import { Badge, Button, Empty, Mono, PaneTitle } from "../components/ui";
 import type { Diagnostic } from "../gen/Diagnostic";
 import type { Severity } from "../gen/Severity";
 import { useI18n } from "../i18n";
 import { say } from "../i18n/types";
 import type { Route } from "../lib/route";
+import { useWrite } from "../write/flow";
 
 type Go = (patch: Partial<Route>) => void;
 const SEVERITIES: Severity[] = ["error", "warning", "info"];
@@ -76,6 +77,7 @@ function Row({ diagnostic, route, go }: { diagnostic: Diagnostic; route: Route; 
   const { t, d } = useI18n();
   const project = useProject();
   const target = useTarget(diagnostic);
+  const write = useWrite();
   const selected = target.patch.sel !== "" && route.sel === target.patch.sel;
   const tone = TONE[diagnostic.severity];
   const badgeTone = { bad: "text-bad bg-bad-bg", warn: "text-warn bg-warn-bg", info: "text-info bg-info-bg" }[tone];
@@ -109,7 +111,18 @@ function Row({ diagnostic, route, go }: { diagnostic: Diagnostic; route: Route; 
           >
             <Mono className="text-[11px]">{target.label}</Mono>
           </button>
-          {diagnostic.fix && <Chip title={t.doctor.fixLater}>{t.doctor.fix}</Chip>}
+          {diagnostic.fix && (
+            <Button
+              disabled={write.blocked !== null}
+              title={write.blocked ?? t.doctor.fixHint}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (diagnostic.fix) write.propose({ edit: diagnostic.fix, title: t.doctor.fixTitle });
+              }}
+            >
+              {t.doctor.fix}
+            </Button>
+          )}
         </div>
       </div>
     </li>
