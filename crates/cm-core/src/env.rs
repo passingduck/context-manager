@@ -6,7 +6,20 @@ use crate::model::Os;
 pub use crate::model::{AbsPath, PathError};
 
 /// The environment variables that move things. `ScanEnv::from_process` copies exactly these.
-pub const MOVING_VARS: &[&str] = &["CLAUDE_CONFIG_DIR", "CODEX_HOME", "GEMINI_CLI_HOME", "PATH"];
+pub const MOVING_VARS: &[&str] = &[
+    "CLAUDE_CONFIG_DIR",
+    "CODEX_HOME",
+    "GEMINI_CLI_HOME",
+    "PATH",
+    "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+    "GEMINI_CLI_TRUSTED_FOLDERS_PATH",
+    "GEMINI_CLI_TRUST_WORKSPACE",
+    "GEMINI_RESTRICTED_MODE",
+    "GEMINI_SYSTEM_MD",
+    "GEMINI_WRITE_SYSTEM_MD",
+    "GEMINI_CLI_IDE_WORKSPACE_PATH",
+];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScanEnv {
