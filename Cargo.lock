@@ -512,6 +512,7 @@ dependencies = [
  "globset",
  "ignore",
  "jsonc-parser",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml_ng",

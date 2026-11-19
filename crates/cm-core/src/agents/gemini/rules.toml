@@ -3,3 +3,213 @@ id = "gemini.home"
 en = "Gemini CLI treats GEMINI_CLI_HOME as the home directory and reads its user-level files from the .gemini directory inside it. Without that variable it uses .gemini in the real home directory."
 ko = "Gemini CLI는 GEMINI_CLI_HOME 환경 변수를 홈 디렉터리로 취급하고, 그 안의 .gemini 디렉터리에서 사용자 수준 파일을 읽습니다. 이 변수가 없으면 실제 홈 디렉터리의 .gemini 디렉터리를 사용합니다."
 evidence = "docs/agents/gemini-cli.md section 7"
+
+[[rule]]
+id = "gemini.context.global"
+en = "At session start Gemini CLI reads every configured context file name from the .gemini directory in the home directory, in list order. These files load even when the working folder is untrusted, and they go into the system instruction."
+ko = "Gemini CLI는 세션을 시작할 때 홈 디렉터리의 .gemini 디렉터리에서 설정된 모든 컨텍스트 파일 이름을 목록 순서대로 읽습니다. 작업 폴더를 신뢰하지 않아도 이 파일들을 불러오며, 내용은 시스템 지시문에 들어갑니다."
+evidence = "docs/agents/gemini-cli.md section 1, global row; section 2, context.fileName row"
+
+[[rule]]
+id = "gemini.context.project"
+en = "Gemini CLI walks up from the working directory and from each include directory to the nearest directory that holds a boundary marker, which is .git by default. With no marker it checks only the starting directory. It loads the context files it finds, sorted by the UTF-16 order of their absolute paths, and only when the folder is trusted. Ignore files do not apply."
+ko = "Gemini CLI는 작업 디렉터리와 각 포함 디렉터리에서 위로 올라가며, 경계 표시가 있는 가장 가까운 디렉터리까지 확인합니다. 경계 표시의 기본값은 .git입니다. 경계 표시가 없으면 출발한 디렉터리만 확인합니다. 찾은 컨텍스트 파일은 절대 경로의 UTF-16 순서로 정렬해 불러오고, 폴더를 신뢰할 때만 불러옵니다. 무시 파일은 적용하지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 1, project row and ignore-files row; concatenation order"
+
+[[rule]]
+id = "gemini.context.jit"
+en = "When a tool such as read_file, list_directory, write_file, replace or read_many_files touches a path, Gemini CLI loads the context files between that path and the boundary directory that the session start did not load. Each file loads at most once per session, and only when the folder is trusted."
+ko = "read_file, list_directory, write_file, replace, read_many_files 같은 도구가 어떤 경로를 다루면, Gemini CLI는 그 경로와 경계 디렉터리 사이에 있으면서 세션 시작 때 불러오지 않은 컨텍스트 파일을 불러옵니다. 각 파일은 세션당 한 번만 불러오며, 폴더를 신뢰할 때만 불러옵니다."
+evidence = "docs/agents/gemini-cli.md section 1, subdirectory row"
+
+[[rule]]
+id = "gemini.context.extension"
+en = "Each active extension names its context files in its manifest, and the default is GEMINI.md. Gemini CLI loads the ones that exist inside the extension folder, sorted by path, even when the working folder is untrusted. The context.fileName setting does not apply to them."
+ko = "활성화된 각 확장은 매니페스트에 컨텍스트 파일을 지정하며 기본값은 GEMINI.md입니다. Gemini CLI는 확장 폴더 안에 있는 파일을 경로 순으로 불러오고, 작업 폴더를 신뢰하지 않아도 불러옵니다. context.fileName 설정은 이 파일들에 적용되지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 6, extension context files row"
+
+[[rule]]
+id = "gemini.memory.private"
+en = "Gemini CLI loads the private memory index, MEMORY.md, from the tmp folder that belongs to this project in the .gemini directory, regardless of folder trust. When MEMORY.md is missing it falls back to the configured context file names in the same folder. The slug comes from projects.json, and this tool never creates one."
+ko = "Gemini CLI는 폴더 신뢰와 관계없이 .gemini 디렉터리 안에서 이 프로젝트에 속한 tmp 폴더의 개인 메모리 색인 MEMORY.md를 불러옵니다. MEMORY.md가 없으면 같은 폴더에서 설정된 컨텍스트 파일 이름을 대신 찾습니다. 폴더 이름인 슬러그는 projects.json에서 가져오며, 이 도구는 슬러그를 새로 만들지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 4, private project memory and slug rows"
+
+[[rule]]
+id = "gemini.memory.note"
+en = "Gemini CLI does not load the other Markdown notes next to MEMORY.md. The index is meant to point to them, and the model may open them itself."
+ko = "Gemini CLI는 MEMORY.md 옆에 있는 다른 마크다운 메모를 자동으로 불러오지 않습니다. 색인이 이 메모를 가리키도록 만들어 두면, 모델이 필요할 때 직접 열 수 있습니다."
+evidence = "docs/agents/gemini-cli.md section 4, private project memory row"
+
+[[rule]]
+id = "gemini.memory.private_sandbox"
+en = "Under the macOS sandbox, Gemini CLI keeps its runtime state in .cache/.gemini inside the home directory. A sandboxed session reads private memory from there, so this tool lists that place as a second store that is off outside the sandbox."
+ko = "macOS 샌드박스 안에서 Gemini CLI는 실행 상태를 홈 디렉터리의 .cache/.gemini 에 보관합니다. 샌드박스 세션은 개인 메모리를 그곳에서 읽으므로, 이 도구는 그 위치를 샌드박스 밖에서는 꺼져 있는 두 번째 저장소로 보여 줍니다."
+evidence = "docs/agents/gemini-cli.md section 7, SANDBOX row"
+
+[[rule]]
+id = "gemini.system_md"
+en = "When GEMINI_SYSTEM_MD is 1 or true, Gemini CLI replaces its base prompt with .gemini/system.md in the working directory. Any other value is a path. A missing file stops the session. The memory in the system instruction still follows the file."
+ko = "GEMINI_SYSTEM_MD가 1 또는 true이면 Gemini CLI는 기본 프롬프트를 작업 디렉터리의 .gemini/system.md 로 바꿉니다. 그 밖의 값은 파일 경로로 읽습니다. 파일이 없으면 세션이 시작되지 않습니다. 시스템 지시문의 메모리는 이 파일 뒤에 그대로 붙습니다."
+evidence = "docs/agents/gemini-cli.md section 6, system prompt override row"
+
+[[rule]]
+id = "gemini.untrusted_project"
+en = "The working folder is not trusted, so Gemini CLI skips what comes from the project: context files, the workspace settings file, commands, skills, subagents and settings-file hooks."
+ko = "작업 폴더를 신뢰하지 않으므로 Gemini CLI는 프로젝트에서 오는 항목을 건너뜁니다. 컨텍스트 파일, 작업 영역 설정 파일, 명령, 스킬, 서브에이전트, 설정 파일의 훅이 모두 해당합니다."
+evidence = "docs/agents/gemini-cli.md sections 1, 2, 5 and 6"
+
+[[rule]]
+id = "gemini.settings.workspace"
+en = "Gemini CLI reads only the settings file at .gemini/settings.json in the working directory, never one higher up. It ignores that file when the folder is untrusted or when the working directory is the home directory."
+ko = "Gemini CLI는 작업 디렉터리의 .gemini/settings.json 만 읽고, 상위 디렉터리의 설정 파일은 읽지 않습니다. 폴더를 신뢰하지 않거나 작업 디렉터리가 홈 디렉터리이면 이 파일을 무시합니다."
+evidence = "docs/agents/gemini-cli.md section 2, workspace row"
+
+[[rule]]
+id = "gemini.settings_parse"
+en = "Gemini CLI stops at start when a settings file does not parse. Comments are allowed, but a trailing comma is not, so this tool refuses to save a settings file that would fail to parse."
+ko = "설정 파일을 해석할 수 없으면 Gemini CLI는 시작 단계에서 멈춥니다. 주석은 허용하지만 마지막 쉼표는 허용하지 않으므로, 이 도구는 해석에 실패할 설정 파일의 저장을 거부합니다."
+evidence = "docs/agents/gemini-cli.md section 2, comments row; section 8, settings files row"
+
+[[rule]]
+id = "gemini.state_file"
+en = "Gemini CLI owns this file. Editing it would skip a security prompt, such as hook trust, subagent acknowledgment or folder trust, or the memory service would overwrite the edit, so this tool never writes it."
+ko = "이 파일은 Gemini CLI가 관리합니다. 이 파일을 고치면 훅 신뢰, 서브에이전트 승인, 폴더 신뢰 같은 보안 확인을 건너뛰게 되거나 메모리 서비스가 수정 내용을 덮어쓰게 되므로, 이 도구는 이 파일에 쓰지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 8, CLI-owned state and memory rows"
+
+[[rule]]
+id = "gemini.skill"
+en = "A skill is a folder with a SKILL.md file. At session start only its name, description and location go into the system prompt, and the body loads when the model activates the skill. A later source wins a name clash, in the order extension, home .gemini, home .agents, project .gemini, project .agents."
+ko = "스킬은 SKILL.md 파일이 들어 있는 폴더입니다. 세션을 시작할 때는 이름, 설명, 위치만 시스템 프롬프트에 들어가고, 본문은 모델이 스킬을 활성화할 때 불러옵니다. 이름이 겹치면 확장, 홈의 .gemini, 홈의 .agents, 프로젝트의 .gemini, 프로젝트의 .agents 순서에서 뒤에 있는 것이 이깁니다."
+evidence = "docs/agents/gemini-cli.md section 6, Agent Skills row"
+
+[[rule]]
+id = "gemini.skill.invalid_frontmatter"
+en = "Gemini CLI ignores a skill file whose frontmatter lacks a name or a description that is a string."
+ko = "프론트매터에 문자열 형태의 이름이나 설명이 없는 스킬 파일은 Gemini CLI가 무시합니다."
+evidence = "docs/agents/gemini-cli.md section 6, Agent Skills row"
+
+[[rule]]
+id = "gemini.command"
+en = "A custom command is a TOML file. Its name is its path below the commands folder with separators turned into colons, so gcs/sync.toml becomes gcs:sync. It reaches the model only when the user invokes it. A project command replaces a user command with the same name."
+ko = "사용자 정의 명령은 TOML 파일입니다. 이름은 commands 폴더 아래의 경로에서 구분자를 콜론으로 바꾼 것이어서, gcs/sync.toml 은 gcs:sync 가 됩니다. 사용자가 호출할 때만 모델에 전달됩니다. 이름이 같으면 프로젝트 명령이 사용자 명령을 대체합니다."
+evidence = "docs/agents/gemini-cli.md section 6, custom commands row"
+
+[[rule]]
+id = "gemini.command.invalid"
+en = "Gemini CLI skips a command file that does not parse as TOML or has no prompt string."
+ko = "TOML로 해석되지 않거나 prompt 문자열이 없는 명령 파일은 Gemini CLI가 건너뜁니다."
+evidence = "docs/agents/gemini-cli.md section 6, custom commands row"
+
+[[rule]]
+id = "gemini.agent"
+en = "A subagent is a top-level Markdown file in an agents folder, and its body becomes that agent's system prompt when it is delegated to. Project subagents load only in a trusted folder, and only after the user acknowledges them. Setting experimental.enableAgents to false turns every subagent off."
+ko = "서브에이전트는 agents 폴더 바로 아래에 있는 마크다운 파일이며, 그 본문은 작업이 위임될 때 해당 에이전트의 시스템 프롬프트가 됩니다. 프로젝트 서브에이전트는 신뢰하는 폴더에서, 사용자가 승인한 뒤에만 불러옵니다. experimental.enableAgents 를 false로 두면 모든 서브에이전트가 꺼집니다."
+evidence = "docs/agents/gemini-cli.md section 6, subagents row"
+
+[[rule]]
+id = "gemini.agent.invalid_frontmatter"
+en = "Gemini CLI rejects a subagent file that does not start with frontmatter holding a name and a description."
+ko = "이름과 설명이 들어 있는 프론트매터로 시작하지 않는 서브에이전트 파일은 Gemini CLI가 거부합니다."
+evidence = "docs/agents/gemini-cli.md section 6, subagents row"
+
+[[rule]]
+id = "gemini.agent.unacknowledged"
+en = "The user has not acknowledged this project subagent in its current form. Gemini CLI stores a hash of the file for each acknowledged subagent, so any edit to the file asks for approval again."
+ko = "사용자가 이 프로젝트 서브에이전트의 현재 내용을 아직 승인하지 않았습니다. Gemini CLI는 승인한 서브에이전트마다 파일의 해시를 저장하므로, 파일을 고치면 다시 승인을 받아야 합니다."
+evidence = "docs/agents/gemini-cli.md section 6, subagents row; section 8, commands row"
+
+[[rule]]
+id = "gemini.extension.admin_disabled"
+en = "The admin setting extensions.enabled is false, so Gemini CLI loads no extension."
+ko = "관리자 설정 extensions.enabled 가 false이므로 Gemini CLI는 어떤 확장도 불러오지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 6, extension manifest row"
+
+[[rule]]
+id = "gemini.extension.git_blocked"
+en = "The setting security.blockGitExtensions is on, so Gemini CLI does not load extensions that were installed from git or a GitHub release."
+ko = "security.blockGitExtensions 설정이 켜져 있어서 Gemini CLI는 git이나 GitHub 릴리스에서 설치한 확장을 불러오지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 6, extension manifest row"
+
+[[rule]]
+id = "gemini.extension.not_allowed"
+en = "The setting security.allowedExtensions lists patterns, and the install source of this extension matches none of them, so Gemini CLI does not load it."
+ko = "security.allowedExtensions 설정에 패턴이 지정되어 있고 이 확장의 설치 출처가 어느 패턴과도 맞지 않으므로 Gemini CLI는 이 확장을 불러오지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 6, extension manifest row"
+
+[[rule]]
+id = "gemini.extension.invalid_manifest"
+en = "Gemini CLI skips an extension folder whose gemini-extension.json is missing, is not valid JSON, or lacks a name or a version."
+ko = "gemini-extension.json 파일이 없거나 올바른 JSON이 아니거나 이름이나 버전이 빠져 있는 확장 폴더는 Gemini CLI가 건너뜁니다."
+evidence = "docs/agents/gemini-cli.md section 6, extension manifest row"
+
+[[rule]]
+id = "gemini.hook.run_unsupported"
+en = "Only command hooks can be test-run here. Other handler types need code that JSON cannot hold."
+ko = "여기서는 command 유형의 훅만 시험 실행할 수 있습니다. 다른 유형의 핸들러는 JSON으로 담을 수 없는 코드가 필요합니다."
+evidence = "docs/agents/gemini-cli.md section 5, handler fields row"
+
+[[rule]]
+id = "gemini.hook.windows_unsupported"
+en = "On Windows Gemini CLI runs hooks through PowerShell, and this tool does not build that invocation."
+ko = "Windows에서 Gemini CLI는 훅을 PowerShell로 실행하는데, 이 도구는 그 실행 명령을 만들지 않습니다."
+evidence = "docs/agents/gemini-cli.md section 5, execution row"
+
+[[rule]]
+id = "gemini.import_format_flat"
+en = "The setting context.importFormat is flat, so Gemini CLI replaces each file with a list of file blocks. This tool shows the tree format only, so the text it renders can differ."
+ko = "context.importFormat 설정이 flat이므로 Gemini CLI는 각 파일을 파일 블록 목록으로 바꿉니다. 이 도구는 트리 형식만 보여 주므로 표시한 텍스트가 실제와 다를 수 있습니다."
+evidence = "docs/agents/gemini-cli.md section 3, flat format row"
+
+[[rule]]
+id = "gemini.mcp_instructions"
+en = "MCP servers are configured, and Gemini CLI adds their instructions to the project context in a trusted folder. A static scan cannot see those instructions, so the budget omits them."
+ko = "MCP 서버가 설정되어 있고, Gemini CLI는 신뢰하는 폴더에서 그 서버의 지침을 프로젝트 컨텍스트에 추가합니다. 정적 검사로는 이 지침을 볼 수 없으므로 토큰 예산에 포함하지 않았습니다."
+evidence = "docs/agents/gemini-cli.md section 6, MCP server instructions row"
+
+[[rule]]
+id = "gemini.system_file_ownership"
+en = "Gemini CLI skips a system settings file unless root owns the file and its folder and neither is writable by the group or others. A scan cannot check ownership, so it assumes the file passes."
+ko = "Gemini CLI는 시스템 설정 파일과 그 폴더가 root 소유이고 그룹이나 다른 사용자가 쓸 수 없는 경우가 아니면 그 파일을 건너뜁니다. 검사 단계에서는 소유자를 확인할 수 없으므로 통과한다고 가정합니다."
+evidence = "docs/agents/gemini-cli.md section 2, system rows"
+
+[[rule]]
+id = "gemini.slot.global_context"
+en = "A new global context file goes in the .gemini directory in the home directory. Its name is the first configured context file name, because Gemini CLI writes to that file."
+ko = "새 전역 컨텍스트 파일은 홈 디렉터리의 .gemini 디렉터리에 만듭니다. Gemini CLI가 쓰는 파일이 첫 번째로 설정된 컨텍스트 파일 이름이므로 그 이름을 사용합니다."
+evidence = "docs/agents/gemini-cli.md section 2, context.fileName row; section 8, context files row"
+
+[[rule]]
+id = "gemini.slot.project_context"
+en = "A new project context file goes in the working directory and loads at session start when the folder is trusted."
+ko = "새 프로젝트 컨텍스트 파일은 작업 디렉터리에 만들며, 폴더를 신뢰하면 세션 시작 때 불러옵니다."
+evidence = "docs/agents/gemini-cli.md section 1, project row"
+
+[[rule]]
+id = "gemini.slot.subdir_context"
+en = "A context file in a subdirectory of the project loads the first time a tool touches a path in that subdirectory."
+ko = "프로젝트의 하위 디렉터리에 둔 컨텍스트 파일은 도구가 그 하위 디렉터리의 경로를 처음 다룰 때 불러옵니다."
+evidence = "docs/agents/gemini-cli.md section 1, subdirectory row"
+
+[[rule]]
+id = "gemini.slot.command"
+en = "A new command is a TOML file in a commands folder. Subfolders become colon-separated name parts, and a project command loads only in a trusted folder that is not the home directory."
+ko = "새 명령은 commands 폴더에 만드는 TOML 파일입니다. 하위 폴더는 콜론으로 구분되는 이름의 일부가 되며, 프로젝트 명령은 홈 디렉터리가 아니면서 신뢰하는 폴더에서만 불러옵니다."
+evidence = "docs/agents/gemini-cli.md section 6, custom commands row"
+
+[[rule]]
+id = "gemini.slot.skill"
+en = "A new skill is a folder with a SKILL.md file inside a skills folder, one level deep. A project skill loads only in a trusted folder."
+ko = "새 스킬은 skills 폴더 안에 한 단계 깊이로 만든 폴더와 그 안의 SKILL.md 파일입니다. 프로젝트 스킬은 신뢰하는 폴더에서만 불러옵니다."
+evidence = "docs/agents/gemini-cli.md section 6, Agent Skills row"
+
+[[rule]]
+id = "gemini.slot.subagent"
+en = "A new subagent is a Markdown file directly inside an agents folder. A project subagent needs the user's acknowledgment before it runs."
+ko = "새 서브에이전트는 agents 폴더 바로 아래에 두는 마크다운 파일입니다. 프로젝트 서브에이전트는 실행하기 전에 사용자의 승인이 필요합니다."
+evidence = "docs/agents/gemini-cli.md section 6, subagents row"
+
+[[rule]]
+id = "gemini.slot.memory"
+en = "A new private memory note is a Markdown file in the memory folder of this project. The index MEMORY.md must link to it, because Gemini CLI loads only the index."
+ko = "새 개인 메모리 노트는 이 프로젝트의 memory 폴더에 두는 마크다운 파일입니다. Gemini CLI는 색인만 불러오므로 MEMORY.md 가 이 노트를 연결해야 합니다."
+evidence = "docs/agents/gemini-cli.md section 4, private project memory row"
