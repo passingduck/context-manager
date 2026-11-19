@@ -253,6 +253,7 @@ fn skill_agent(entry: &AbsPath, dir: &AbsPath) -> TestAgent {
             dir: dir.clone(),
             file: "SKILL.md".into(),
         }),
+        skills: vec![entry.clone()],
         ..TestAgent::default()
     }
 }

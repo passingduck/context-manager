@@ -193,3 +193,65 @@ async fn a_hook_of_an_installed_extension_or_plugin_is_never_rewritten() {
         );
     }
 }
+
+/// Gemini's subdirectory context slot is the working directory. With the home directory as the
+/// working directory, `~/.gemini/GEMINI.md` has the shape of an item of that slot, but a
+/// `GEMINI.md` is not an item: a trash of it trashes that file alone, never `~/.gemini`.
+#[tokio::test]
+async fn trashing_a_context_file_never_trashes_the_directory_that_holds_it() {
+    let fx = Fixture::new();
+    let context = fx.home_path(".gemini/GEMINI.md");
+    fx.write(&context, "user context");
+    fx.write(&fx.home_path(".gemini/settings.json"), "{}");
+    let host = host(&fx);
+    let preview = host
+        .plan(PlanReq {
+            cwd: fx.home(),
+            edit: Edit::Trash {
+                path: context.clone(),
+                base: Revision::of(b"user context"),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        preview
+            .change_set
+            .ops
+            .iter()
+            .map(|op| (op.path.clone(), op.action.clone()))
+            .collect::<Vec<_>>(),
+        vec![(context, Action::Trash)]
+    );
+}
+
+/// A directory slot admits the items it lists, not every path below its directory.
+#[tokio::test]
+async fn a_save_below_a_directory_slot_outside_its_items_is_refused() {
+    let fx = Fixture::new();
+    installed(&fx);
+    let existing = fx.home_path("src/main.rs");
+    fx.write(&existing, "fn main() {}");
+    let host = host(&fx);
+    for (path, base) in [
+        (fx.home_path("notes/todo.md"), Base::Absent),
+        (
+            existing.clone(),
+            Base::Rev {
+                rev: Revision::of(b"fn main() {}"),
+            },
+        ),
+    ] {
+        let edit = Edit::Save {
+            path: path.clone(),
+            base,
+            text: "written".into(),
+        };
+        let (planned, applied) = plan_and_apply(&host, &fx.home(), &edit).await;
+        let refused = ApiError::OutsideBoundary { path: path.clone() };
+        assert_eq!(planned.unwrap_err(), refused);
+        assert_eq!(applied.unwrap_err(), refused);
+    }
+    assert!(!fx.home_path("notes/todo.md").as_path().exists());
+    assert_eq!(bytes(&existing), b"fn main() {}");
+}

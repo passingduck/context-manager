@@ -546,18 +546,23 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// The entry file of `dir` when `dir` is one item of a directory slot, such as
+    /// `skills/<name>`, that the snapshot lists as an item of the slot's kind.
+    fn item_entry(&self, dir: &AbsPath) -> Option<AbsPath> {
+        self.scanned.snapshot.agents.iter().find_map(|view| {
+            view.slots.iter().find_map(|slot| match &slot.place {
+                Place::NamedDir { dir: parent, file } if dir.parent().as_ref() == Some(parent) => {
+                    let entry = dir.join(file);
+                    is_listed_item(view, slot, &entry).then_some(entry)
+                }
+                _ => None,
+            })
+        })
+    }
+
+    /// Only a listed item of a directory slot goes to the trash whole.
     fn check_dir(&self, dir: &AbsPath, mode: Mode) -> Result<(), ApiError> {
-        let in_slot = self
-            .scanned
-            .snapshot
-            .agents
-            .iter()
-            .flat_map(|view| &view.slots)
-            .any(|slot| match &slot.place {
-                Place::NamedDir { dir: parent, .. } => dir.parent().as_ref() == Some(parent),
-                _ => false,
-            });
-        if in_slot || mode == Mode::Revert {
+        if self.item_entry(dir).is_some() || mode == Mode::Revert {
             Ok(())
         } else {
             Err(ApiError::OutsideBoundary { path: dir.clone() })
@@ -671,8 +676,9 @@ impl<'a> Planner<'a> {
         )
     }
 
-    /// A file that is the entry file of a directory slot (`skills/<name>/SKILL.md`) trashes the
-    /// whole directory, with the hash of its tree as the base of the operation.
+    /// The entry file of a listed item of a directory slot (`skills/<name>/SKILL.md`) trashes the
+    /// whole directory, with the hash of its tree as the base of the operation. Any other file,
+    /// such as a `GEMINI.md` in a subdirectory, is trashed alone.
     fn trash(&self, path: &AbsPath, base: &Revision) -> Result<Preview, ApiError> {
         self.check_path(path, Mode::Client, &[])?;
         let summary = self.summary(ChangeEdit::Trash, vec![path.clone()]);
@@ -689,20 +695,10 @@ impl<'a> Planner<'a> {
                 });
             }
         };
-        let is_dir_entry = self
-            .scanned
-            .snapshot
-            .agents
-            .iter()
-            .flat_map(|view| &view.slots)
-            .any(|slot| match &slot.place {
-                Place::NamedDir { dir, file } => {
-                    path.file_name() == Some(file.as_str())
-                        && path.parent().and_then(|d| d.parent()).as_ref() == Some(dir)
-                }
-                _ => false,
-            });
-        if !is_dir_entry {
+        let item = path
+            .parent()
+            .filter(|dir| self.item_entry(dir).as_ref() == Some(path));
+        let Some(dir) = item else {
             return self.finish(
                 Mode::Client,
                 Draft {
@@ -717,8 +713,7 @@ impl<'a> Planner<'a> {
                     conflicts: Vec::new(),
                 },
             );
-        }
-        let dir = path.parent().expect("an entry file has a directory");
+        };
         let tree = self.tree(&dir);
         let total: u64 = tree.files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
         let all_text = tree
@@ -1102,17 +1097,43 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_file_name_outside_a_listed_item_trashes_only_that_file() {
+        let fx = Fixture::new();
+        let entry = fx.project_path(".claude/skills/src/SKILL.md");
+        fx.write(&entry, "not a skill the agent lists");
+        fx.write(
+            &fx.project_path(".claude/skills/src/main.rs"),
+            "fn main() {}",
+        );
+        let a = writer(&fx, &[], &[]);
+        let preview = plan_with(
+            &a,
+            &fx,
+            &Edit::Trash {
+                path: entry.clone(),
+                base: Revision::of(b"not a skill the agent lists"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            preview
+                .change_set
+                .ops
+                .iter()
+                .map(|op| (op.path.clone(), op.action.clone()))
+                .collect::<Vec<_>>(),
+            vec![(entry, Action::Trash)]
+        );
+    }
+
+    #[test]
     fn trashing_an_entry_file_trashes_its_directory_and_its_tree_hash_moves_with_the_siblings() {
         let fx = Fixture::new();
         let dir = fx.project_path(".claude/skills");
         let entry = dir.join("deploy/SKILL.md");
         fx.write(&entry, "skill");
         fx.write(&dir.join("deploy/notes.md"), "n");
-        let mut a = agent(&[&entry]);
-        a.slot = Some(Place::NamedDir {
-            dir: dir.clone(),
-            file: "SKILL.md".into(),
-        });
+        let a = writer(&fx, &[], &["deploy/SKILL.md"]);
         let edit = Edit::Trash {
             path: entry.clone(),
             base: Revision::of(b"skill"),
