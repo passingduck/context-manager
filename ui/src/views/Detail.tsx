@@ -190,13 +190,13 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
           right={
             <>
               <Button disabled={!dirty} onClick={() => { setBuffer(path, null); setShowDiff(false); }}>{t.write.discard}</Button>
-              <Button disabled={!trash.can} title={trash.reason} onClick={trash.run}>{t.detail.trash}</Button>
-              <PrimaryButton disabled={!dirty || !editable || write.blocked !== null} title={write.blocked ?? (editable ? undefined : policyNote)} onClick={save}>{t.detail.save}</PrimaryButton>
+              <Button data-testid="file-trash" disabled={!trash.can} title={trash.reason} onClick={trash.run}>{t.detail.trash}</Button>
+              <PrimaryButton data-testid="file-save" disabled={!dirty || !editable || write.blocked !== null} title={write.blocked ?? (editable ? undefined : policyNote)} onClick={save}>{t.detail.save}</PrimaryButton>
             </>
           }
         />
         {changed && (
-          <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-warn bg-warn-bg px-3 py-1.5 text-warn">
+          <div role="alert" data-testid="changed-on-disk" className="flex flex-wrap items-center gap-2 border-b border-warn bg-warn-bg px-3 py-1.5 text-warn">
             <b>{t.write.changedOnDisk}</b>
             <span className="min-w-0 flex-1 text-fg">{t.write.changedOnDiskBody}</span>
             <Button disabled={disk === null} onClick={() => setShowDiff(!showDiff)}>{showDiff ? t.write.hideDiff : t.write.showDiff}</Button>
@@ -351,6 +351,7 @@ function ChangeDetailView({ id }: { id: string }) {
           {record.summary.agent && <Chip>{project.name(record.summary.agent)}</Chip>}
           <span className="text-muted">{fmt.when(record.at, lang)}</span>
           <Button
+            data-testid="change-revert"
             disabled={write.blocked !== null}
             title={write.blocked ?? undefined}
             className="ml-auto"

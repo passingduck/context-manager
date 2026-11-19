@@ -23,8 +23,6 @@ export type Applied = Extract<ApplyResult, { kind: "applied" }>;
 export interface Proposal {
   edit: Edit;
   title: string;
-  /** One line shown above the diff, such as "the whole skill directory goes". */
-  notice?: string;
   /** The text of an editor, for the conflict view to set beside the disk text. */
   mine?: string;
   /** Explained once, before the first plan, and not again. */
@@ -183,6 +181,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
         <>
           <Button onClick={cancel}>{t.write.cancel}</Button>
           <PrimaryButton
+            data-testid="apply-continue"
             onClick={() => {
               markSeen(intro.key);
               setPhase({ kind: "planning" });
@@ -208,14 +207,14 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
       const empty = preview.changeSet.ops.length === 0;
       const refused = preview.conflicts.length > 0;
       body = (
-        <ReviewBody preview={preview} stale={phase.stale} overwrite={overwrite} notice={proposal.notice} acks={acks} setAcks={setAcks} warnings={warnings} onOpenFile={(path) => { onClose(); go({ sel: `file:${path}`, ag: "", ln: 0 }); }} />
+        <ReviewBody preview={preview} stale={phase.stale} overwrite={overwrite} acks={acks} setAcks={setAcks} warnings={warnings} onOpenFile={(path) => { onClose(); go({ sel: `file:${path}`, ag: "", ln: 0 }); }} />
       );
       footer = (
         <>
           {!refused && !ready && !empty && <span className="mr-auto text-warn">{t.write.tickFirst}</span>}
           <Button onClick={cancel}>{t.write.cancel}</Button>
           {!refused && (
-            <PrimaryButton disabled={!ready || empty} onClick={() => void confirm(preview)}>
+            <PrimaryButton data-testid="apply-confirm" disabled={!ready || empty} onClick={() => void confirm(preview)}>
               {t.write.confirmBy[preview.changeSet.summary.edit.kind]}
             </PrimaryButton>
           )}
@@ -294,14 +293,13 @@ interface ReviewProps {
   preview: Preview;
   stale: boolean;
   overwrite: boolean;
-  notice: string | undefined;
   acks: ReadonlySet<string>;
   setAcks: (next: ReadonlySet<string>) => void;
   warnings: { warning: Warning; key: string; tick: boolean }[];
   onOpenFile: (path: AbsPath) => void;
 }
 
-function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings, onOpenFile }: ReviewProps) {
+function ReviewBody({ preview, stale, overwrite, acks, setAcks, warnings, onOpenFile }: ReviewProps) {
   const { t, d } = useI18n();
   const project = useProject();
   const toggle = (key: string) => {
@@ -325,7 +323,9 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
           <b>{t.write.overwriteTitle}</b> {t.write.overwriteBody}
         </p>
       )}
-      {notice && <p className="rounded border border-warn bg-warn-bg p-2.5 text-warn">{notice}</p>}
+      {preview.changeSet.ops.flatMap((op) =>
+        op.action.kind === "trashDir" ? [<p key={op.path} data-testid="dir-notice" className="rounded border border-warn bg-warn-bg p-2.5 text-warn">{t.write.dirGoes(d(op.path))}</p>] : [],
+      )}
       {empty && preview.conflicts.length === 0 && <p className="rounded border border-info bg-info-bg p-2.5 text-info">{t.write.nothingChanges}</p>}
 
       {preview.conflicts.length > 0 && (
@@ -384,7 +384,7 @@ function ReviewBody({ preview, stale, overwrite, notice, acks, setAcks, warnings
 function Tick({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return (
     <label className="mt-1.5 flex cursor-pointer items-center gap-2 font-semibold">
-      <input type="checkbox" checked={checked} onChange={onChange} className="size-4 accent-[var(--accent)]" />
+      <input data-testid="apply-tick" type="checkbox" checked={checked} onChange={onChange} className="size-4 accent-[var(--accent)]" />
       {label}
     </label>
   );
@@ -451,7 +451,7 @@ function ConflictView({ error, mine }: { error: Conflicted; mine: string | null 
   const format = guessFormat(error.path, project.snapshot.files[error.path]?.format);
   return (
     <div className="space-y-3">
-      <section role="alert" className="rounded border border-bad bg-bad-bg p-3">
+      <section role="alert" data-testid="conflict" className="rounded border border-bad bg-bad-bg p-3">
         <h3 className="font-semibold text-bad">{t.write.conflictTitle}</h3>
         <p className="mt-0.5">
           <Mono className="break-all font-semibold">{project.display(error.path)}</Mono> {t.write.conflictBody}

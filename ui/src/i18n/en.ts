@@ -221,7 +221,7 @@ export const en = {
     reload: "Reload (drops my text)",
     saveTitle: (name: string) => `Save ${name}`,
     trashTitle: (name: string) => `Move ${name} to the trash`,
-    skillDirGoes: (skill: string, dir: string) => `The skill ${skill} is a directory. Its whole directory ${dir} goes to the trash, not only SKILL.md.`,
+    dirGoes: (dir: string) => `${dir} is a directory. All of it goes to the trash, not only the one file you chose.`,
     notPresent: "The file does not exist.",
     rowMenu: "Actions for this file",
     revertTitle: (what: string) => `Revert: ${what}`,

@@ -19,7 +19,6 @@ export function useTrash(path: AbsPath): Trash {
   const write = useWrite();
   const entry = project.snapshot.files[path];
   const state = entry?.state;
-  const skill = project.snapshot.agents.flatMap((view) => view.extensions).find((ext) => ext.file === path && ext.extKind === "skill");
   const reason = write.blocked ?? (entry?.policy.kind === "readOnly" ? say(t.readOnlyWhy, entry.policy.why, d) : state?.kind !== "present" ? t.write.notPresent : undefined);
   return {
     can: reason === undefined,
@@ -29,7 +28,6 @@ export function useTrash(path: AbsPath): Trash {
       write.propose({
         edit: { kind: "trash", path, base: state.rev },
         title: t.write.trashTitle(entry.display),
-        notice: skill ? t.write.skillDirGoes(skill.name, d(path.slice(0, path.lastIndexOf("/")))) : undefined,
       });
     },
   };
@@ -42,7 +40,7 @@ export function RowMenu({ path }: { path: AbsPath }) {
   const [open, setOpen] = useState(false);
   return (
     <span className="relative shrink-0" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
-      <button type="button" tabIndex={-1} aria-haspopup="menu" aria-expanded={open} aria-label={t.write.rowMenu} onClick={() => setOpen(!open)} className="rounded px-1 text-muted hover:bg-sunken">
+      <button type="button" data-testid="row-menu" tabIndex={-1} aria-haspopup="menu" aria-expanded={open} aria-label={t.write.rowMenu} onClick={() => setOpen(!open)} className="rounded px-1 text-muted hover:bg-sunken">
         ...
       </button>
       {open && (
@@ -52,6 +50,7 @@ export function RowMenu({ path }: { path: AbsPath }) {
             <button
               type="button"
               role="menuitem"
+              data-testid="row-trash"
               disabled={!trash.can}
               title={trash.reason}
               onClick={() => {

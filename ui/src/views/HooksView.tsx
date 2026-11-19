@@ -63,6 +63,10 @@ function HookRow({ hook, agent, selected, go, previous }: { hook: Hook; agent: s
   const showFile = previous === undefined || previous.source.file !== hook.source.file;
   return (
     <div
+      data-testid="hook-row"
+      data-hook-id={hook.id}
+      data-event={hook.event}
+      data-state={hook.state.kind}
       role="button"
       tabIndex={0}
       aria-pressed={selected}
