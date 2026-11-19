@@ -1,5 +1,6 @@
 import type { Activation } from "../gen/Activation";
 import type { AgentView } from "../gen/AgentView";
+import type { BlockLabel } from "../gen/BlockLabel";
 import type { Load } from "../gen/Load";
 import type { LoadStatus } from "../gen/LoadStatus";
 import type { Skip } from "../gen/Skip";
@@ -77,3 +78,12 @@ export function truncationLine(text: string, status: LoadStatus): number | null 
       return count(text.slice(0, Math.round((text.length * kept) / Math.max(total, 1))));
   }
 }
+
+/** Colour of each session-start block label, shared by the header bar and the prefix map. */
+export const LABEL_COLOR: Record<BlockLabel, string> = {
+  instructions: "var(--c2)",
+  memory: "var(--c4)",
+  skillCatalog: "var(--c3)",
+  agentCatalog: "var(--c1)",
+  commandCatalog: "var(--c0)",
+};
