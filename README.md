@@ -14,7 +14,7 @@ scripts/install.sh --headless    # no window; only --serve works (about 13.5 MB)
 PREFIX=$HOME/bin scripts/install.sh --headless
 ```
 
-The headless build needs no GUI libraries, so it is the one to put on a Linux server. To check that the code still compiles for Linux, run `scripts/check-linux.sh`. To run every check the project has, run `scripts/check.sh`. To drive the real UI in headless Chrome against a release build on a throwaway home, run `scripts/e2e.sh`. It needs Node 24 and Chrome or Chromium, and it is not part of `check.sh`.
+The headless build needs no GUI libraries, so it is the one to put on a Linux server. To run clippy for Linux with warnings denied, run `scripts/check-linux.sh`. To run every check the project has, run `scripts/check.sh`, which also runs the Linux step when that target is installed. To drive the real UI in headless Chrome against a release build on a throwaway home, run `scripts/e2e.sh`. It needs Node 24 and Chrome or Chromium, and it is not part of `check.sh`.
 
 ## Run
 
