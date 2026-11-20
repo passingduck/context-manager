@@ -14,7 +14,7 @@ pub struct Stripped {
 pub fn strip(text: &str) -> Stripped {
     let fm = frontmatter::parse(text);
     let body = &text[fm.body.clone()];
-    let comments = spans::scan(body).comments;
+    let comments = spans::regions(body).comments;
     let mut out = String::with_capacity(body.len());
     let mut at = 0;
     for comment in &comments {

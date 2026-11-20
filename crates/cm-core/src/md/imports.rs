@@ -436,7 +436,7 @@ impl Expander<'_> {
             Protect::Nothing => Vec::new(),
             Protect::BacktickRuns => spans::backtick_regions(text),
             Protect::MarkdownAndInlineComments => {
-                let s = spans::scan(text);
+                let s = spans::regions(text);
                 let mut regions: Vec<Range<usize>> = s
                     .fences
                     .iter()
@@ -457,7 +457,7 @@ impl Expander<'_> {
                 regions
             }
             Protect::Markdown => {
-                let s = spans::scan(text);
+                let s = spans::regions(text);
                 s.fences
                     .iter()
                     .chain(&s.code_spans)
