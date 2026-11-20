@@ -67,6 +67,12 @@ const perProc = (text) => {
   return map;
 };
 
+// The text of process p's entry in `(p1 :> ... @@ p2 :> ...)`.
+const entryOf = (text, p) => {
+  const parts = (text ?? "").replace(/^\(|\)$/g, "").split(/\s@@\s(?=\w+ :>)/);
+  return parts.find((part) => part.trimStart().startsWith(`${p} :>`));
+};
+
 const shown = ["disk", "temps", "pend", "closed", "blobs", "lock"];
 console.log(`      Trace: ${states.length - 1} steps to a state that breaks ${invariant}.`);
 console.log(`      0. start: disk = ${states[0].vars.disk}`);
@@ -80,8 +86,11 @@ for (let n = 1; n < states.length; n++) {
   if (name === "OutsideEdit") who = "operator";
   else if (name === "DayPasses") who = "clock";
   else if (!who) {
-    const actA = perProc(before.act);
-    who = Object.keys(perProc(after.pc)).find((p) => before.act !== after.act && actA[p] !== perProc(after.act)[p]) ?? "?";
+    // The pc stayed, as in a loop over operations: the process whose act or rec changed.
+    who =
+      Object.keys(pcB).find((p) =>
+        ["act", "rec"].some((v) => entryOf(before[v], p) !== entryOf(after[v], p)),
+      ) ?? "?";
   }
   const info = actions.get(name) ?? { what: "", code: "" };
   console.log(`      ${n}. ${who} ${name}: ${info.what}`);

@@ -18,7 +18,7 @@ CONSTANTS
     MaxCrashes,       \* how many times an instance may die
     MaxFailures,      \* how many file operations may return an error
     MaxOutside,       \* how many times the operator may edit a file
-    Lock,             \* TRUE: the data-directory lock of design section 4
+    Lock,             \* TRUE: the lock on apply.lock in the data directory
     InPlace,          \* files with more than one hard link, written in place
     EditInWindow,     \* TRUE: the operator may edit a file between a hash check and the write
     ChartScript,      \* TRUE: one save, then reverts of it while a change id is left
@@ -277,8 +277,9 @@ Crash(p) ==
 
 \* apply holds the lock from step 2 to step 5, and waits while another instance holds
 \* it. An instance that waits does nothing else, so the model starts the apply at the
-\* moment it gets the lock.
-\*   code: design section 4, "The apply pipeline" (the lock on a file in the data directory)
+\* moment it gets the lock. The lock is flock on apply.lock: the OS releases it when
+\* the process exits, and a second open file in the same process cannot take it either.
+\*   code: crates/cm-host/src/apply.rs Ctx::apply, `lock.lock()` on Ctx::lock_file
 TakeLock(p) ==
     IF Lock THEN lock = "free" /\ lock' = p ELSE UNCHANGED lock
 
@@ -450,17 +451,25 @@ Rename(p) ==
     /\ UNCHANGED <<histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
 
-\* Step 4, Write of a file with more than one hard link: open it truncated ...
-\*   code: design section 4, step 4 ("written in place instead")
+\* Step 4, Write of a file with more than one hard link: open it truncated. An open
+\* that fails leaves the file as it was, and the run undoes what it did ...
+\*   code: crates/cm-host/src/apply.rs Effects::write, `has_other_names`,
+\*   fsio.rs write_in_place, `OpenOptions::new().write(true).truncate(true).open`
 Truncate(p) ==
     /\ pc[p] = "a_trunc"
-    /\ ToolWrite(p, CurOp(p).file, Torn, act[p].id, "do", FALSE)
-    /\ Goto(p, "a_inplace")
-    /\ UNCHANGED <<temps, histVars, act, rec, lock, nextId, boundVars, planned, fate,
+    /\ \/ /\ ToolWrite(p, CurOp(p).file, Torn, act[p].id, "do", FALSE)
+          /\ Goto(p, "a_inplace")
+          /\ UNCHANGED <<act, failures>>
+       \/ /\ Fail(p)
+          /\ StartUndo(p)
+          /\ UNCHANGED <<disk, writeGhosts>>
+    /\ UNCHANGED <<temps, histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
 
-\* ... then write the new text into it. A failure leaves the file half written.
-\*   code: design section 4, step 4 ("written in place instead")
+\* ... then write the new text into it and sync it. A failed write leaves the file half
+\* written. (A failed sync after a full write leaves the new text, which the undo finds
+\* at after and restores. The model leaves that case out.)
+\*   code: crates/cm-host/src/fsio.rs write_in_place, `file.write_all(bytes)?`, `file.sync_all()`
 WriteInPlace(p) ==
     /\ pc[p] = "a_inplace"
     /\ \/ /\ ToolWrite(p, CurOp(p).file, CurOp(p).after, act[p].id, "do", TRUE)
@@ -593,7 +602,7 @@ UndoRename(p) ==
                    cleanRun, revertBroken>>
 
 \* Restore a file with more than one hard link in place: truncate ...
-\*   code: design section 4, step 4 ("written in place instead")
+\*   code: crates/cm-host/src/apply.rs Ctx::restore, Effects::write, fsio.rs write_in_place
 UndoTruncate(p) ==
     /\ pc[p] = "u_trunc"
     /\ ToolWrite(p, UndoOp(p).file, Torn, act[p].id, "undo", FALSE)
@@ -602,6 +611,7 @@ UndoTruncate(p) ==
                    cleanRun, revertBroken>>
 
 \* ... and write.
+\*   code: crates/cm-host/src/fsio.rs write_in_place
 UndoInPlace(p) ==
     /\ pc[p] = "u_inplace"
     /\ \/ /\ ToolWrite(p, UndoOp(p).file, UndoOp(p).before, act[p].id, "undo", TRUE)
@@ -665,7 +675,8 @@ UndoAttention(p) ==
 \* An idle instance reads the history (or the change detail), which runs recovery
 \* first. Recovery takes the lock without waiting; a round that finds it held does
 \* nothing, so the model leaves that round out.
-\*   code: crates/cm-host/src/host.rs Host::history and Host::change
+\*   code: crates/cm-host/src/host.rs Host::history and Host::change,
+\*   recovery.rs recover, `file.try_lock()`
 StartRecovery(p) ==
     /\ pc[p] = "idle"
     /\ TakeLock(p)
@@ -675,7 +686,7 @@ StartRecovery(p) ==
 
 \* After a restart, recovery takes the lock without waiting. When another instance
 \* holds it, that instance is applying a change, and recovery skips this round.
-\*   code: design section 4, "The apply pipeline" ("Recovery takes the same lock without waiting")
+\*   code: crates/cm-host/src/recovery.rs recover, `file.try_lock()`, `Some(_) => return report`
 RecoveryLock(p) ==
     /\ pc[p] = "r_lock"
     /\ IF lock = "free"

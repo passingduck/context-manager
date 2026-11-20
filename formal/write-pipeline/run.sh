@@ -81,10 +81,11 @@ if [ ! -x "$java" ]; then
 fi
 
 # Each configuration and the result it must have: `pass`, or the invariant it must break.
+# A model (WritePipeline.cfg, models/) describes the code at the sync commit and must pass.
 # A variant mirrors a break of the code and must fail. A finding is a case where the code
 # at the sync commit breaks a property; it fails until the code is fixed.
 configs=("model:WritePipeline.cfg:pass")
-for kind in variant finding; do
+for kind in model variant finding; do
   for cfg in "$model/${kind}s"/*.cfg; do
     [ -e "$cfg" ] || continue
     expect="$(sed -n 's/^\\\* expect: *//p' "$cfg" | head -n 1)"
@@ -118,9 +119,10 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# Actions that only a broken variant, the missing lock or an in-place write can take. Every
-# other action must fire in the model, or a pass would say nothing about it.
-variant_only="ApplyReturn RecoveryRoll RecoveryGcRemove Truncate WriteInPlace UndoTruncate UndoInPlace"
+# Actions that only a broken variant or the missing lock can take. Every other action must
+# fire in each model, or a pass would say nothing about it, unless the model's configuration
+# names it on a `\* not exercised:` line.
+variant_only="ApplyReturn RecoveryRoll RecoveryGcRemove"
 
 # The model runs on up to four workers. A run that breaks an invariant runs again on one,
 # because only a breadth-first search on one worker gives the shortest trace.
@@ -177,6 +179,15 @@ result_of() {
   fi
 }
 
+# verdict GOT: the words for a result.
+verdict() {
+  case "$1" in
+    pass) echo passes ;;
+    error) echo "no result" ;;
+    *) echo "breaks $1" ;;
+  esac
+}
+
 errors=0
 total_start=$(date +%s)
 total_peak_kb=0
@@ -185,7 +196,7 @@ for entry in "${configs[@]}"; do
   selected "$name" || continue
   start=$(date +%s)
   out="$tmp/$name/tlc.out"
-  if [ "$name" = model ]; then
+  if [ "$expect" = pass ]; then
     run_tlc "$name" "$cfg" -workers "$workers" -coverage 600
     result_of "$out"
     if [ "$got" != pass ] && [ "$got" != error ] && [ "$workers" -gt 1 ]; then
@@ -198,16 +209,17 @@ for entry in "${configs[@]}"; do
   secs=$(( $(date +%s) - start ))
   [ "$peak_kb" -gt "$total_peak_kb" ] && total_peak_kb=$peak_kb
   never=""
-  if [ "$name" = model ] && [ "$got" = pass ]; then
+  if [ "$expect" = pass ] && [ "$got" = pass ]; then
+    allowed=" $variant_only $(sed -n 's/^\\\* not exercised: *//p' "$model/$cfg") "
     for action in $(sed -n 's/^<\([A-Za-z]*\) line .*>: 0:0$/\1/p' "$out" | sort -u); do
-      case " $variant_only " in *" $action "*) ;; *) never="$never $action" ;; esac
+      case "$allowed" in *" $action "*) ;; *) never="$never $action" ;; esac
     done
     [ -n "$never" ] && got="error"
   fi
   label="$name"
   [ "$cfg" = "WritePipeline.cfg" ] || label="${cfg%%s/*} $name"
   summary="$(printf '%-30s %-32s %9s states %4ss %5s MB' "$label" \
-    "$([ "$got" = pass ] && echo passes || echo "breaks $got")" "${states:-?}" "$secs" \
+    "$(verdict "$got")" "${states:-?}" "$secs" \
     "$(( peak_kb / 1024 ))")"
   if [ "$got" = "$expect" ]; then
     echo "ok    $summary"
