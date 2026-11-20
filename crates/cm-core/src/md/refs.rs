@@ -45,7 +45,7 @@ pub struct RefTree {
 /// Follows the references of `doc`. `claimed` holds byte ranges of `text` that an adapter
 /// already treats as imports. A target resolves against the referring file's directory first,
 /// then against `project_root`, and must be an existing `.md` file inside `project_root`. A file
-/// appears once in the tree.
+/// appears once in the tree, under the first name that reaches it: links to one file are one file.
 pub fn follow(
     doc: &AbsPath,
     text: &str,
@@ -56,10 +56,11 @@ pub fn follow(
     let mut run = Run {
         root: project_root,
         fs,
-        visited: HashSet::from([doc.clone()]),
+        visited: HashSet::new(),
         count: 0,
         capped: false,
     };
+    run.visited.insert(run.identity(doc));
     let nodes = run.refs_of(doc, text, claimed, 1);
     RefTree {
         root: doc.clone(),
@@ -107,7 +108,7 @@ impl Run<'_> {
             let Some(path) = self.resolve(&dir, &written) else {
                 continue;
             };
-            if !self.visited.insert(path.clone()) {
+            if !self.visited.insert(self.identity(&path)) {
                 continue;
             }
             if self.count >= MAX_NODES {
@@ -140,6 +141,11 @@ impl Run<'_> {
             }
         }
         out
+    }
+
+    /// The real path of `path`, so that every name of one file is one file.
+    fn identity(&self, path: &AbsPath) -> AbsPath {
+        self.fs.real_path(path).unwrap_or_else(|_| path.clone())
     }
 
     fn resolve(&self, dir: &AbsPath, written: &str) -> Option<AbsPath> {
@@ -252,6 +258,24 @@ mod tests {
         assert_eq!((l1.depth, l3.depth), (1, 3));
         assert!(l3.children.is_empty());
         assert_eq!(l1.children.len(), 1);
+    }
+
+    #[test]
+    fn links_to_one_file_are_one_file_under_the_first_name() {
+        let f = Fixture::new();
+        f.write(&f.project_path("big.md"), "");
+        for n in 0..3 {
+            f.symlink(
+                &f.project_path(&format!("l{n}.md")),
+                &f.project_path("big.md"),
+            );
+        }
+        f.write(
+            &f.project_path("r.md"),
+            "[0](l0.md) [1](l1.md) [b](big.md) [2](l2.md)\n",
+        );
+        let t = tree(&f, "r.md", &[]);
+        assert_eq!(paths(&t.nodes, &f.project()), ["/l0.md"]);
     }
 
     #[test]

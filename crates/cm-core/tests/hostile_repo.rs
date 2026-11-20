@@ -602,3 +602,27 @@ fn a_hundred_gemini_md_files_that_import_one_1_mib_file_stop_at_the_scan_expansi
         .count();
     assert_eq!(imports, 8, "Gemini expands big.md eight times in all");
 }
+
+#[test]
+fn a_claude_md_that_links_500_links_to_one_8_mib_file_follows_the_file_once() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 500);
+    root_file(&fx, "CLAUDE.md", 500, |n| format!("[part {n}](l{n}.md)"));
+    let scanned = scan_within(
+        fx.env(),
+        "CLAUDE.md that links 500 links to an 8 MiB file",
+        3,
+    );
+
+    let references: Vec<&AbsPath> = view(&scanned, "claude")
+        .loads
+        .iter()
+        .filter(|load| matches!(load.via, Via::Reference { .. }))
+        .map(|load| &load.file)
+        .collect();
+    assert_eq!(
+        references,
+        [&fx.project_path("l0.md")],
+        "Claude references the one file behind 500 links once"
+    );
+}
