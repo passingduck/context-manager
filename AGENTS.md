@@ -6,6 +6,7 @@ Read these before you change code:
 
 - `docs/design.md` is the contract: the shape, the core types, the write pipeline, the build sequence.
 - `docs/agents/claude-code.md`, `docs/agents/codex.md` and `docs/agents/gemini-cli.md` specify the rules each adapter implements. Each rule has evidence and a status. Cite the section you implement in the code that implements it.
+- `docs/agents/claude-code-sessions.md` specifies the record Claude Code keeps of a session. Read it before you change the code that reads past sessions.
 
 ## Layout
 
