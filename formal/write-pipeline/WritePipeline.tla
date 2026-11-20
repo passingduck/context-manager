@@ -21,6 +21,7 @@ CONSTANTS
     Lock,             \* TRUE: the data-directory lock of design section 4
     InPlace,          \* files with more than one hard link, written in place
     EditInWindow,     \* TRUE: the operator may edit a file between a hash check and the write
+    ChartScript,      \* TRUE: one save, then reverts of it while a change id is left
     \* Broken variants. Each mirrors one concrete break of the code (see variants/).
     RollForward,          \* recovery writes the after text, as before commit 75fa028 (F4)
     ExecuteBeforeJournal, \* step 4 runs before the pending record is written
@@ -286,6 +287,7 @@ TakeLock(p) ==
 \*   code: crates/cm-host/src/host.rs Host::apply, then apply.rs Ctx::apply
 StartSave(p) ==
     /\ pc[p] = "idle"
+    /\ ChartScript => nextId = 1
     /\ TakeLock(p)
     /\ SetAct(p, [NoAct EXCEPT !.kind = "save"])
     /\ Goto(p, "a_plan")
@@ -297,6 +299,7 @@ StartRevert(p) ==
     /\ pc[p] = "idle"
     /\ \E r \in Ids :
          /\ Vis(r) # "none"
+         /\ ChartScript => r = 1 /\ nextId <= MaxIds
          /\ SetAct(p, [NoAct EXCEPT !.kind = "revert", !.target = r])
     /\ TakeLock(p)
     /\ Goto(p, "a_plan")
@@ -763,29 +766,43 @@ RecoveryRoll(p) ==
     /\ UNCHANGED <<temps, histVars, act, lock, nextId, boundVars, planned, fate,
                    cleanRun, revertBroken>>
 
-RecCloseWrite(p, label, state, then) ==
-    /\ pc[p] = label
+\* Write changes/<id>.json as `state`, and go to `then`.
+RecClose(p, state, then) ==
     /\ closed' = [closed EXCEPT ![RecId(p)] = state]
     /\ Goto(p, then)
     /\ UNCHANGED <<diskVars, blobs, pend, journal, act, rec, lock, nextId, boundVars,
                    writeGhosts, runGhosts>>
 
-RecCloseRemove(p, label) ==
-    /\ pc[p] = label
+\* Remove changes/<id>.pending.json, and go to the next record.
+RecRemovePending(p) ==
     /\ pend' = [pend EXCEPT ![RecId(p)] = "none"]
     /\ RecoveryNext(p)
     /\ UNCHANGED <<diskVars, blobs, closed, journal, act, lock, nextId, boundVars,
                    writeGhosts, runGhosts>>
 
-\* Seal: write changes/<id>.json as Sealed, then remove the pending record.
-\*   code: crates/cm-host/src/recovery.rs recover, history.rs History::seal
-RecoverySealWrite(p) == RecCloseWrite(p, "r_seal_write", "Sealed", "r_seal_remove")
-RecoverySealRemove(p) == RecCloseRemove(p, "r_seal_remove")
+\* Seal: write changes/<id>.json as Sealed ...
+\*   code: crates/cm-host/src/recovery.rs recover, history.rs History::seal and History::close
+RecoverySealWrite(p) ==
+    /\ pc[p] = "r_seal_write"
+    /\ RecClose(p, "Sealed", "r_seal_remove")
 
-\* Abort: write changes/<id>.json as Aborted, then remove the pending record.
-\*   code: crates/cm-host/src/recovery.rs recover, history.rs History::abort
-RecoveryAbortWrite(p) == RecCloseWrite(p, "r_abort_write", "Aborted", "r_abort_remove")
-RecoveryAbortRemove(p) == RecCloseRemove(p, "r_abort_remove")
+\* ... then remove the pending record.
+\*   code: crates/cm-host/src/history.rs History::close, `fs::remove_file`
+RecoverySealRemove(p) ==
+    /\ pc[p] = "r_seal_remove"
+    /\ RecRemovePending(p)
+
+\* Abort: write changes/<id>.json as Aborted ...
+\*   code: crates/cm-host/src/recovery.rs recover, history.rs History::abort and History::close
+RecoveryAbortWrite(p) ==
+    /\ pc[p] = "r_abort_write"
+    /\ RecClose(p, "Aborted", "r_abort_remove")
+
+\* ... then remove the pending record.
+\*   code: crates/cm-host/src/history.rs History::close, `fs::remove_file`
+RecoveryAbortRemove(p) ==
+    /\ pc[p] = "r_abort_remove"
+    /\ RecRemovePending(p)
 
 \* Needs attention: write the pending record again with that state.
 \*   code: crates/cm-host/src/recovery.rs recover, `ctx.history.write_pending(&record)`
@@ -929,6 +946,7 @@ UndisturbedApplySeals ==
 \* from before and leaves the record closed.
 \* Harm: the operator cannot undo a change, or the change stays marked unfinished.
 RevertRestoresAndCloses == ~revertBroken
+
 
 \* Every variable stays in its type. A failure here is a modelling error.
 TypeOK ==
