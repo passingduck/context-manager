@@ -67,6 +67,9 @@ pub struct Tree {
     pub entries: Vec<Listed>,
     /// True when the listing stopped at a limit, so entries below the root can be missing.
     pub capped: bool,
+    /// True when a directory it meant to list, the root among them, could not be listed, or held
+    /// a name that is not UTF-8 and so has no entry. Entries can be missing there too.
+    pub partial: bool,
 }
 
 /// The entries of `dir`, in name order, at most [`MAX_TREE_ENTRIES`] of them.
@@ -87,7 +90,7 @@ pub fn list_tree(
 /// name order, and the entries of a directory right after the directory. It lists each real
 /// directory once, whatever number of links reaches it, and stops at `limits`, the listed
 /// directory being depth 0. [`ProbeFs::exceeded`] records each stop. A root that cannot be
-/// listed yields nothing.
+/// listed yields nothing, and the tree is `partial`.
 pub fn list_tree_with(
     fs: &ProbeFs,
     root: &AbsPath,
@@ -102,17 +105,19 @@ pub fn list_tree_with(
     }
     let mut out = Vec::new();
     let mut capped = false;
-    let (Ok(real_root), Ok(entries)) = (fs.real_path(root), fs.list(root)) else {
+    let (Ok(real_root), Ok(listing)) = (fs.real_path(root), fs.listing(root)) else {
         return Tree {
             entries: out,
             capped,
+            partial: true,
         };
     };
+    let mut partial = listing.not_utf8 > 0;
     let mut visited: HashSet<AbsPath> = HashSet::from([real_root]);
     let mut stack = vec![Frame {
         dir: root.clone(),
         rel: Vec::new(),
-        entries,
+        entries: listing.entries,
         next: 0,
     }];
     while let Some(frame) = stack.last_mut() {
@@ -143,6 +148,7 @@ pub fn list_tree_with(
             continue;
         };
         let Ok(real) = fs.real_path(&dir) else {
+            partial = true;
             continue;
         };
         if visited.contains(&real) {
@@ -157,18 +163,23 @@ pub fn list_tree_with(
             continue;
         }
         visited.insert(real);
-        if let Ok(entries) = fs.list(&dir) {
-            stack.push(Frame {
-                dir,
-                rel,
-                entries,
-                next: 0,
-            });
+        match fs.listing(&dir) {
+            Ok(listing) => {
+                partial |= listing.not_utf8 > 0;
+                stack.push(Frame {
+                    dir,
+                    rel,
+                    entries: listing.entries,
+                    next: 0,
+                });
+            }
+            Err(_) => partial = true,
         }
     }
     Tree {
         entries: out,
         capped,
+        partial,
     }
 }
 
@@ -239,7 +250,7 @@ pub fn walk(root: &AbsPath, fs: &ProbeFs) -> WalkIndex {
     let mut entries = 0usize;
 
     'walk: while let Some((dir, inherited)) = queue.pop_front() {
-        let Ok(listing) = fs.list(&dir) else {
+        let Ok(listing) = fs.listing(&dir).map(|listing| listing.entries) else {
             continue;
         };
         let mut rules = inherited;
@@ -516,10 +527,10 @@ mod tests {
         );
     }
 
-    /// Design section 5: no adapter lists a directory by itself. Each listing goes through
-    /// [`list_tree`], which is what bounds it.
+    /// Design section 5: no code lists a directory by itself. Each listing goes through this
+    /// module, which is what bounds it.
     #[test]
-    fn no_adapter_calls_the_raw_directory_listing() {
+    fn only_the_walk_module_calls_the_raw_directory_listing() {
         fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -530,23 +541,29 @@ mod tests {
                 }
             }
         }
-        let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agents");
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut files = Vec::new();
-        rust_files(&agents, &mut files);
+        rust_files(&src, &mut files);
         let offenders: Vec<String> = files
             .iter()
+            .filter(|file| !file.ends_with("src/walk.rs") && !file.ends_with("src/probe_fs.rs"))
             .flat_map(|file| {
                 let text = std::fs::read_to_string(file).unwrap();
                 text.lines()
                     .enumerate()
-                    .filter(|(_, line)| line.contains(".list("))
+                    .filter(|(_, line)| line.contains(".listing("))
                     .map(|(n, _)| format!("{}:{}", file.display(), n + 1))
                     .collect::<Vec<_>>()
             })
             .collect();
         assert!(
+            files.len() > 50,
+            "the scan found only {} files",
+            files.len()
+        );
+        assert!(
             offenders.is_empty(),
-            "list directories with walk::list_tree or walk::list_dir, not ProbeFs::list: {offenders:?}"
+            "list directories with walk::list_tree, walk::list_dir or walk::list_tree_with, not ProbeFs::listing: {offenders:?}"
         );
     }
 }

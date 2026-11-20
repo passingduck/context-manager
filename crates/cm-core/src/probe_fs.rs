@@ -240,14 +240,10 @@ impl ProbeFs {
         result
     }
 
-    /// Entries sorted by name. A name that is not UTF-8 is left out: [`ProbeFs::listing`] counts
-    /// them.
-    pub fn list(&self, path: &AbsPath) -> Cached<Arc<Vec<DirEntry>>> {
-        self.listing(path).map(|listing| listing.entries)
-    }
-
-    /// The entries of `list`, with the count of names it left out.
-    pub fn listing(&self, path: &AbsPath) -> Cached<Listing> {
+    /// The entries of one directory, sorted by name, with the count of names that are not UTF-8
+    /// and have no entry. Only the listers in [`crate::walk`] call it: they bound what a listing
+    /// yields and visit each real directory once.
+    pub(crate) fn listing(&self, path: &AbsPath) -> Cached<Listing> {
         let mut state = self.state.lock().expect("probe state");
         if let Some(cached) = state.lists.get(path) {
             return cached.clone();
@@ -548,15 +544,16 @@ mod tests {
     }
 
     #[test]
-    fn list_is_sorted_and_real_path_resolves_symlinks() {
+    fn a_listing_is_sorted_and_real_path_resolves_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(abs(&dir, "b").as_path(), "").unwrap();
         std::fs::write(abs(&dir, "a").as_path(), "").unwrap();
         std::os::unix::fs::symlink(abs(&dir, "a").as_path(), abs(&dir, "link").as_path()).unwrap();
         let fs = ProbeFs::new();
         let names: Vec<_> = fs
-            .list(&abs(&dir, ""))
+            .listing(&abs(&dir, ""))
             .unwrap()
+            .entries
             .iter()
             .map(|e| e.name.clone())
             .collect();
