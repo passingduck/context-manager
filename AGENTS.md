@@ -6,6 +6,7 @@ Read these before you change code:
 
 - `docs/design.md` is the contract: the shape, the core types, the write pipeline, the build sequence.
 - `docs/agents/claude-code.md`, `docs/agents/codex.md` and `docs/agents/gemini-cli.md` specify the rules each adapter implements. Each rule has evidence and a status. Cite the section you implement in the code that implements it.
+- `docs/agents/claude-code-sessions.md` specifies the record Claude Code keeps of a session. Read it before you change the code that reads past sessions.
 
 ## Layout
 
@@ -43,6 +44,8 @@ Use pnpm for the UI. Run a single crate's tests with `cargo test -p cm-core`.
 Test what a caller can observe: the snapshot a scan returns for a fixture tree, the bytes on disk after an apply, the HTTP status of a request. Derive the expected value from the spec, not from the code under test.
 
 Where a real CLI can answer, compare with it. `tools/oracle/` holds the scripts. An oracle test skips when the CLI is not installed and says so in its output.
+
+A change to the write pipeline (`apply.rs`, `recovery.rs`, `history.rs`, `fsio.rs` in `crates/cm-host`, or `Planner::revert`) is checked against its TLA+ model: follow `.claude/skills/write-pipeline/SKILL.md`.
 
 ## Text
 

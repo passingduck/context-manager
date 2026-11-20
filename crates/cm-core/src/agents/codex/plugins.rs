@@ -4,6 +4,7 @@ use super::setup::{Setup, get_bool};
 use crate::agents::ScanCx;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 const MANIFESTS: [&str; 3] = [
     ".codex-plugin/plugin.json",
@@ -87,13 +88,11 @@ pub(super) fn installed(cx: &ScanCx, setup: &Setup) -> Vec<Plugin> {
     for id in ids {
         let (name, marketplace) = id.split_once('@').expect("checked");
         let pdir = cache.join(marketplace).join(name);
-        let Ok(versions) = cx.fs.list(&pdir) else {
-            continue;
-        };
+        let versions = walk::list_dir(cx.fs, &pdir);
         let dirs: Vec<&str> = versions
             .iter()
             .filter(|e| e.kind == EntryKind::Dir)
-            .map(|e| e.name.as_str())
+            .map(|e| e.name())
             .filter(|v| valid_version(v))
             .collect();
         let active = if dirs.contains(&LOCAL_VERSION) {

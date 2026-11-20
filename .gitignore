@@ -10,3 +10,4 @@ CLAUDE.local.md
 .omc/
 ui/screenshots/
 __pycache__/
+/.cache/

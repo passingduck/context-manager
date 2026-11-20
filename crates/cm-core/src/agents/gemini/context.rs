@@ -7,7 +7,7 @@ use super::util::{
     accessible, cmp_utf16, collapse_newlines, fold, js_trim, kind, read_lossy, real, rule,
 };
 use super::world::World;
-use crate::md::imports::{ImportNode, ImportOutcome, ImportRules, expand};
+use crate::md::imports::{ImportCap, ImportNode, ImportOutcome, ImportRules, expand};
 use crate::model::*;
 use crate::probe_fs::EntryKind;
 use crate::tokens;
@@ -120,13 +120,13 @@ impl<'w, 'a> Builder<'w, 'a> {
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let dir = path.parent().unwrap_or_else(AbsPath::root);
         let tree = expand(path, &ImportRules::gemini(self.w.import_root(&dir)), cx.fs);
-        if let Some(max) = tree.capped {
+        if let Some(problem) = tree.capped.and_then(ImportCap::problem) {
             self.diagnose(
                 Subject::File {
                     path: path.clone(),
                     line: None,
                 },
-                Problem::ImportBudgetExhausted { max },
+                problem,
             );
         }
         let inlined = inline(&text, &tree.nodes, &|p| read_lossy(cx, p));

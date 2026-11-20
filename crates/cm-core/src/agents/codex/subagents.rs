@@ -5,6 +5,7 @@ use super::setup::{Layer, LayerKind, Setup, get_path, read_lossy};
 use crate::agents::ScanCx;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 pub(super) const RULE_FILE: &str = "codex.agents.file";
 pub(super) const RULE_ENTRY: &str = "codex.agents.config_entry";
@@ -30,16 +31,12 @@ fn ext_id(file: &AbsPath, name: &str) -> ExtId {
 }
 
 /// Recursive `.toml` files, sorted (spec 5.3).
-fn toml_files(cx: &ScanCx, dir: &AbsPath, files: &mut Vec<AbsPath>, depth: usize) {
-    let Ok(entries) = cx.fs.list(dir) else { return };
-    for entry in entries.iter() {
-        let path = dir.join(&entry.name);
-        match entry.kind {
-            EntryKind::File if entry.name.ends_with(".toml") => files.push(path),
-            EntryKind::Dir if depth < 8 => toml_files(cx, &path, files, depth + 1),
-            _ => {}
-        }
-    }
+fn toml_files(cx: &ScanCx, dir: &AbsPath) -> Vec<AbsPath> {
+    walk::list_tree(cx.fs, dir, |_| true)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(".toml"))
+        .map(|e| e.path)
+        .collect()
 }
 
 fn parse_role(
@@ -168,9 +165,7 @@ fn layer_roles(cx: &ScanCx, setup: &Setup, layer: &Layer, claimed: &mut Vec<AbsP
         }
     }
     let dir = layer.folder.join("agents");
-    let mut files = Vec::new();
-    toml_files(cx, &dir, &mut files, 0);
-    for file in files {
+    for file in toml_files(cx, &dir) {
         if claimed.contains(&file) {
             continue;
         }

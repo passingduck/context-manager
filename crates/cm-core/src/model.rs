@@ -376,6 +376,8 @@ choices! {
     pub enum LimitKind {
         ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, MaxFileBytes,
         SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth,
+        /// The bytes one scan reads (`probe_fs::MAX_SCAN_READ_BYTES`).
+        ScanReadBytes,
     }
 }
 
@@ -388,6 +390,8 @@ variants! {
         Unreadable { error: String },
         /// Over 8 MiB: listed, never read.
         TooBig { bytes: u64 },
+        /// The scan had spent `limit` before it reached the file, so it did not read it.
+        BudgetExhausted { limit: Limit },
     }
 
     pub enum ReadOnlyWhy {
@@ -777,6 +781,9 @@ variants! {
         /// The scan stopped expanding the imports of this root file after `max` import nodes,
         /// so what it shows for the file is less than the agent loads.
         ImportBudgetExhausted { max: u32 },
+        /// The scan stopped expanding the imports of this root file before they passed `max`
+        /// bytes, so what it shows for the file is less than the agent loads.
+        ImportBytesExhausted { max: u64 },
         ImportCycle { path: AbsPath },
         ImportNeedsApproval { raw: String },
         AccidentalImport { raw: String },
@@ -803,6 +810,22 @@ variants! {
         ProjectUntrusted { skipped: Vec<RuleRef> },
         GlobMatchesNothing { glob: String },
         WalkCapped { entries: u32 },
+        /// A listing of this directory stopped after `max` entries, so the scan can miss files
+        /// below it that the agent loads.
+        ListingCapped { max: u32 },
+        /// A listing of this directory went no deeper than `max` levels, so the scan can miss
+        /// files below that depth that the agent loads.
+        ListingTooDeep { max: u32 },
+        /// The scan read `max` bytes and then stopped reading files, so the files it did not read
+        /// are shown as not read.
+        ReadBudgetExhausted { max: u64 },
+        /// The imports of the whole scan added `max` bytes, and the scan expanded no more, so the
+        /// files it expanded after that show fewer imports than the agent loads.
+        ScanExpansionExhausted { max: u64 },
+        /// The text of this file is over `max` bytes, on disk or where it reaches the model. The
+        /// scan counted the tokens of its first `max` bytes and estimated the rest, and it looked
+        /// for links only in those first bytes.
+        TextPartlyAnalyzed { max: u64 },
         /// A skill, command or subagent whose body also loads at session start, because `line`
         /// of `host` imports its file. The body then reaches the model in every session, and
         /// again when the item is invoked.

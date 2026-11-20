@@ -22,6 +22,7 @@ const limitKind: Record<LimitKind, string> = {
   listingEntryChars: "목록 항목 길이 한도",
   listingBudgetChars: "목록 예산",
   importDepth: "가져오기 깊이 한도",
+  scanReadBytes: "스캔 읽기 예산",
 };
 const unit: Record<Unit, string> = { bytes: "바이트", chars: "글자", lines: "줄", tokens: "토큰", hops: "단계" };
 /** Appends the object particle that fits the last syllable of a Korean word. */
@@ -404,6 +405,7 @@ export const ko: typeof en = {
     absent: "이 파일은 아직 없습니다.",
     unreadable: (error) => `이 파일을 읽을 수 없습니다(${error}).`,
     tooBig: (size) => `이 파일은 ${size}로 너무 커서 열 수 없습니다.`,
+    budgetExhausted: (l) => `스캔이 이 파일보다 앞에서 ${eul(limit(l))} 다 써서 이 파일을 읽지 않았습니다.`,
     symlink: (target) => `이 경로는 심볼릭 링크입니다. 쓰기는 ${target}에 적용됩니다.`,
     save: "저장",
     revert: "되돌리기",
@@ -614,6 +616,7 @@ export const ko: typeof en = {
     importOutsideRoot: (v) => `허용된 범위 밖을 가리키는 가져오기가 있습니다. 대상은 ${v.raw}입니다.`,
     importTooDeep: (v) => `가져오기가 한도인 ${v.max}단계보다 깊게 이어집니다.`,
     importBudgetExhausted: (v) => `스캔이 이 파일의 가져오기를 처음 ${v.max.toLocaleString("ko-KR")}개까지만 읽었습니다. 그래서 이 파일에 표시된 크기는 에이전트가 실제로 불러오는 양보다 작을 수 있습니다.`,
+    importBytesExhausted: (v) => `스캔이 이 파일과 이 파일이 가져오는 파일을 합쳐 ${v.max.toLocaleString("ko-KR")}바이트까지만 읽었습니다. 그래서 이 파일에 표시된 크기는 에이전트가 실제로 불러오는 양보다 작을 수 있습니다.`,
     importCycle: (v, d) => `가져오기가 ${d(v.path)}에서 순환합니다.`,
     importNeedsApproval: (v) => `에이전트가 이 가져오기를 불러오려면 사용자의 승인이 필요합니다. 대상은 ${v.raw}입니다.`,
     accidentalImport: (v) => `가져오기처럼 보이지만 의도한 것이 아닐 가능성이 큰 텍스트가 있습니다. 해당 텍스트는 ${v.raw}입니다.`,
@@ -640,6 +643,11 @@ export const ko: typeof en = {
     projectUntrusted: (v) => `폴더를 신뢰하지 않아서 에이전트가 프로젝트 설정 ${v.skipped.length}개를 건너뜁니다.`,
     globMatchesNothing: (v) => `패턴 ${v.glob}에 맞는 파일이 없습니다.`,
     walkCapped: (v) => `프로젝트 훑기가 항목 ${v.entries.toLocaleString("ko-KR")}개에서 멈춰서 일부 파일이 빠졌을 수 있습니다.`,
+    listingCapped: (v) => `스캔이 이 디렉터리의 항목을 처음 ${v.max.toLocaleString("ko-KR")}개까지만 나열했습니다. 그래서 에이전트가 불러오는 파일 가운데 일부가 여기에 빠졌을 수 있습니다.`,
+    scanExpansionExhausted: (v) => `스캔이 모든 파일의 가져오기를 합쳐 ${v.max.toLocaleString("ko-KR")}바이트까지만 읽었습니다. 그래서 그 뒤에 읽은 파일에는 에이전트가 실제로 불러오는 것보다 적은 가져오기가 표시됩니다.`,
+    readBudgetExhausted: (v) => `스캔이 파일을 ${v.max.toLocaleString("ko-KR")}바이트까지 읽은 뒤에 더 읽지 않았습니다. 그래서 그 뒤의 파일은 읽지 않은 파일로 표시됩니다.`,
+    listingTooDeep: (v) => `스캔이 이 디렉터리를 ${v.max}단계 깊이까지만 나열했습니다. 그래서 그보다 깊은 곳에서 에이전트가 불러오는 파일이 여기에 빠졌을 수 있습니다.`,
+    textPartlyAnalyzed: (v) => `이 파일의 텍스트가 ${v.max.toLocaleString("ko-KR")}바이트를 넘습니다. 그래서 스캔이 앞의 ${v.max.toLocaleString("ko-KR")}바이트에서만 토큰을 세고 링크를 찾았으며, 나머지 부분의 토큰 수는 어림잡았습니다.`,
     bodyAlsoImported: (v, d) => `${d(v.host)}의 ${v.line}번째 줄이 이 본문을 가져옵니다. 그래서 모델은 세션마다 이 본문을 받습니다. 호출하면 같은 본문을 한 번 더 받습니다. 가져오기 줄을 지우세요. 아니면 이 내용을 스킬이 아닌 지침 파일에 두세요.`,
   },
   hookBlock,

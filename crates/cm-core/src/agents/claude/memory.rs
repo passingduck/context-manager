@@ -13,6 +13,7 @@ use crate::md::frontmatter;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
 use crate::tokens;
+use crate::walk;
 
 /// Spec 2.4: `HW = 200`, `Rce = 25000`.
 pub(super) const INDEX_MAX_LINES: u64 = 200;
@@ -505,14 +506,12 @@ fn build_store(
     // decides to.
     let linked = index_text.as_deref().map(link_targets).unwrap_or_default();
     let mut topic_names = BTreeSet::new();
-    if let Ok(list) = cx.fs.list(&spec.dir) {
-        for entry in list.iter() {
-            if entry.kind == EntryKind::File
-                && entry.name.ends_with(".md")
-                && entry.name != "MEMORY.md"
-            {
-                topic_names.insert(entry.name.clone());
-            }
+    for entry in walk::list_dir(cx.fs, &spec.dir) {
+        if entry.kind == EntryKind::File
+            && entry.name().ends_with(".md")
+            && entry.name() != "MEMORY.md"
+        {
+            topic_names.insert(entry.name().to_owned());
         }
     }
     for name in &topic_names {

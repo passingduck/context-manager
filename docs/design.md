@@ -12,13 +12,14 @@ In scope for the first version:
 - **What it shows.** Markdown each agent loads at session start. Markdown the model may see later: files the CLI loads on a condition, plus the reference graph (markdown that an included document names by link or path, followed recursively). Hooks. Each agent's local memory. Skills, custom commands, subagents.
 - **What it edits.** Add, edit and delete for all of the above. Hooks also get an on/off switch and a test run.
 - **Analysis.** A token budget, a doctor, a path simulator, and search.
+- **Past sessions.** For a session an agent recorded, what the model received in each call, piece by piece, with the token counts the API reported (section 14). Claude Code first.
 - **Safety.** OS trash for deletes, a diff before every save, a conflict instead of an overwrite when the file changed on disk, and the tool's own change history with revert.
 - **Shells.** A Tauri window by default. `--serve` serves the same UI over HTTP, also on a remote Linux host without GUI libraries. `--path <dir>` selects the project; the default is the current directory. The UI can switch to projects the agents have records of.
 - **Languages.** Korean and English.
 
 Out of scope: MCP servers, general settings and permissions, duplicate detection across agents, terminal-output subcommands.
 
-The rules each adapter implements are specified in `docs/agents/claude-code.md`, `docs/agents/codex.md` and `docs/agents/gemini-cli.md`. Each rule there carries its evidence and a status. This document refers to them as "the specs".
+The rules each adapter implements are specified in `docs/agents/claude-code.md`, `docs/agents/codex.md` and `docs/agents/gemini-cli.md`. Each rule there carries its evidence and a status. This document refers to them as "the specs". `docs/agents/claude-code-sessions.md` specifies the record Claude Code keeps of a session, in the same form. Section 14 calls it "the session spec".
 
 ## 2. Shape
 
@@ -92,6 +93,7 @@ pub enum FileState {
     Absent,                                    // a probed location, or the target of a broken import
     Unreadable { error: String },
     TooBig { bytes: u64 },                     // over 8 MiB: listed, never read
+    BudgetExhausted { limit: Limit },          // the scan read budget was spent before this file
 }
 pub enum EditPolicy { Editable, ReadOnly(ReadOnlyWhy) }
 pub enum ReadOnlyWhy { Managed, PluginCache { plugin: String }, Generated, AgentState, Synced, NotUtf8 }
@@ -168,7 +170,7 @@ pub enum Skip {
 }
 pub struct Limit { pub kind: LimitKind, pub value: u64, pub unit: Unit }   // Unit: Bytes | Chars | Lines | Tokens | Hops
 pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, MaxFileBytes,
-                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth }
+                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth, ScanReadBytes }
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
 /// `parts` count the same pieces `render` returns, in the same order, and `tokens` is their sum.
@@ -262,6 +264,8 @@ pub enum Problem {
     ParseError { format: Format, detail: String, fatal_for_agent: bool },
     FrontmatterInvalid { field: String }, LegacyLocation { why: RuleRef }, ProjectUntrusted { skipped: Vec<RuleRef> },
     GlobMatchesNothing { glob: String }, WalkCapped { entries: u32 },
+    ImportBudgetExhausted { max: u32 }, ImportBytesExhausted { max: u64 }, ScanExpansionExhausted { max: u64 },
+    ListingCapped { max: u32 }, ListingTooDeep { max: u32 }, ReadBudgetExhausted { max: u64 }, TextPartlyAnalyzed { max: u64 },
     BodyAlsoImported { import: LoadId, host: AbsPath, line: u32 },   // a listed item whose body an import also loads at session start
 }
 
@@ -372,7 +376,7 @@ A revert of an unfinished record restores the files that are at after, leaves th
 
 **Revert** is an `Edit`. Its plan restores each file's before blob with `expect` set to the after revision. A file that is already at before is skipped. A file at neither becomes a conflict in the preview. A trashed file comes back from its blob, so emptying the OS trash does not break revert.
 
-The window between the hash in step 4 and the rename is microseconds. POSIX has no compare-and-swap on files, and the agents do not lock either. The before blob is already stored by then, so nothing is lost for good.
+The window between the hash in step 4 and the rename is microseconds. POSIX has no compare-and-swap on files, and the agents do not lock either. The before blob holds the text the operator previewed. It does not hold an edit that lands inside that window: the rename overwrites such an edit, and no blob keeps it. The model of the write pipeline (section 11) records this as the finding `edit-in-window`. An atomic exchange of the two names (`renamex_np` with `RENAME_SWAP` on macOS, `renameat2` with `RENAME_EXCHANGE` on Linux) would hand back the text that was replaced and close the window. The first version does not do that.
 
 ### What the tool owns on disk
 
@@ -400,6 +404,8 @@ pub trait Agent: Sync {
     fn guard(&self, path: &AbsPath, before: Option<&str>, after: Option<&str>) -> Result<(), ApiError>;   // run on every planned write
     fn exec_spec(&self, hook: &Hook, input: &serde_json::Value, cx: &ScanCx) -> Result<ExecSpec, RuleRef>;
     fn sample_input(&self, event: &str, cx: &ScanCx) -> serde_json::Value;
+    fn traces(&self, cx: &ScanCx) -> Vec<TraceInfo>;                      // recorded sessions that started in cwd or below; default: none
+    fn trace(&self, cx: &ScanCx, id: &TraceId, part: Option<&str>) -> Result<TraceData, ApiError>;   // one session or one subagent of it; default: NotFound
 }
 pub fn registry() -> &'static [&'static dyn Agent];
 ```
@@ -458,6 +464,10 @@ api! {
     change(ChangeReq { id })                                 -> ChangeDetail;   // the record plus before and after text per file
     hook_sample(SampleReq { cwd, agent, event })             -> serde_json::Value;
     run_hook(RunReq { cwd, hook: HookId, input })            -> HookRun;        // ExecSpec, exit code, stdout, stderr, ms, timed_out
+    traces(TracesReq { cwd })                                -> Vec<TraceInfo>; // every agent's recorded sessions that started in cwd or below, newest first
+    trace(TraceReq { cwd, key: TraceKey })                   -> Trace;          // the calls of one session, or of one subagent of it
+    trace_step(TraceStepReq { cwd, key, read, step })        -> StepPieces;     // the pieces of one request; Stale when the record changed under the trace
+    trace_piece(TracePieceReq { cwd, key, read, step, piece: PieceRef }) -> PieceText;   // the text of one piece, at most 1 MiB
 }
 ```
 
@@ -474,6 +484,7 @@ Cargo.toml                 workspace
 crates/cm-core/            reads only. model.rs, api.rs, env.rs, probe_fs.rs, walk.rs, tokens.rs,
                            md/{frontmatter,spans,imports,refs}.rs, cfg/{jsonc,toml}.rs,
                            scan.rs, doctor.rs, simulate.rs, search.rs, edit.rs (Edit to ChangeSet, revert planning),
+                           trace.rs (TraceData and its projections; an adapter's reader lives in its own directory),
                            agents/{mod.rs, claude/, codex/, gemini/}   each with discovery, hooks, memory, extensions, plan, rules.toml
 crates/cm-host/            effects. apply.rs, history.rs, recovery.rs, parked.rs, runner.rs, watch.rs, host.rs (implements Api)
 crates/app/                the binary `context-manager`. cli.rs, serve.rs (axum, auth, embedded assets), desktop.rs (feature `desktop`)
@@ -514,6 +525,8 @@ Hooks are commands, so write access to this tool is command execution on the hos
 | hostile repository content | file text renders as text. The markdown preview has raw HTML off. CSP `default-src 'self'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'` |
 | the operator only wants to look | `--read-only` rejects `apply` and `run_hook` in one place |
 | resource exhaustion by a client | request body limit 8 MiB, search returns at most 500 hits |
+| a token holder reads past sessions | the trace operations are reads behind the same token as every other operation. A session record holds what the operator typed and every tool output, so the README says that `--serve` exposes them. The fields of a record that identify an account, an organisation or a host are never parsed into the model |
+| resource exhaustion by a session record | the line reader stops at 512 MiB per record and 64 MiB per line, and one piece's text is returned up to 1 MiB |
 | resource exhaustion by repository content | `ProbeFs::read` reads regular files only and at most 8 MiB, so a link to a device or a named pipe is refused before it is opened. The walk stops at 20,000 entries. A scan as a whole has a read budget, and directory listings have an entry budget and visit each real directory once, so links that loop or that all point at one large file cannot multiply the work. Brace expansion, frontmatter nesting and import expansion each have a budget that is enforced while the work runs, never after it. Token counts stay exact for a text of ordinary size, and a text over the counting bound gets an estimate and a diagnostic that says so. An exceeded budget is a diagnostic or a skip reason on that file, and the scan goes on |
 
 There is no TLS in the first version. The documented path to a remote host is an SSH tunnel to a loopback bind.
@@ -543,7 +556,7 @@ The layout is the explorer variant from the layout prototype: a rail of sections
 - **Navigation state** lives in the URL hash (project, view, selection), so reload and the back button work in a browser. A file selection may name one place the file loads: `at` holds the load's key, made from its kind, its activation and how it got there (rule, catalog entry, or host file and line). A `LoadId` never goes in the URL, because a rescan renumbers loads. Without `at`, or when no load matches it, the selection means every place of the file.
 - **Editor state** is one reducer per open file: `{ path, base, loaded, text }`. Dirty is computed, never stored.
 - **No agent-specific code.** Trees, forms and menus render from `AgentInfo`, `Load`, `Hook`, `Extension`, `Slot` and `Diagnostic`.
-- **Views.** Context (tree grouped by agent: session start, on access, on invoke, may read; a second mode lists the session-start blocks in the order the model receives them, with the literal text from `render` and the selected load's piece marked). The detail pane shows one card per load of the file, the selected one first, each with the text `load_texts` returns for it. Memory. Hooks (list by event, switch, form generated from `HookSchema` with a raw JSON tab, test run). Doctor (rows link to their subject; a row with a `fix` offers it through the normal preview). History (diff, revert, pending changes on top). Search and the path simulator sit in the top bar and act on the tree.
+- **Views.** Context (tree grouped by agent: session start, on access, on invoke, may read; a second mode lists the session-start blocks in the order the model receives them, with the literal text from `render` and the selected load's piece marked). The detail pane shows one card per load of the file, the selected one first, each with the text `load_texts` returns for it. Memory. Hooks (list by event, switch, form generated from `HookSchema` with a raw JSON tab, test run). Doctor (rows link to their subject; a row with a `fix` offers it through the normal preview). History (diff, revert, pending changes on top). Sessions (the project's recorded sessions; one bar per call of the model with the cache read, the cache write and the uncached input the API reported, and a mark at each compaction; a selected call shows its pieces in the order the model received them, each with its kind, its estimate, whether the previous call already sent it, and the cache marks; a piece opens its text; a list ranks the largest pieces). Search and the path simulator sit in the top bar and act on the tree.
 - **Two languages.** `ui/src/i18n/en.ts` defines the key set. `ko.ts` is typed `typeof en`, so a missing key fails the type check. Messages for `Skip`, `Problem`, `Warning` and `HookBlock` are functions of their typed fields. Rule explanations come from `RuleSpec.en` or `.ko`. The locale comes from local storage, then the browser language.
 - **Editor.** CodeMirror 6 with Markdown, JSON and TOML modes, a gutter mark at a truncation point, and `@codemirror/merge` for the save diff, the conflict view and the history diff.
 
@@ -560,6 +573,7 @@ Every check runs on this machine against the real artifact. Agent homes are only
 | Claude adapter | **oracle**: the capture scripts in `tools/oracle/claude` run the real binary against a local sink at no cost. The instruction files in the captured request body, and their order, equal our session-start loads. The comparison uses the request body, because `InstructionsLoaded` does not fire for `AGENTS.md`. Fixtures sit outside scratchpad-shaped paths, which Claude Code refuses to load from |
 | Gemini adapter | fixtures only, one per confirmed rule in its spec, because the CLI is not installed. This gap is stated in the UI as `Fidelity::Approximate` |
 | write pipeline | temp-directory tests: a conflict after an outside edit, a second apply returns `AlreadyApplied`, an outside edit between preview and apply returns `Stale`, a failure injected after each step followed by recovery, a symlink survives, comments survive, revert twice ends at before. Trash: the original path is gone, the trash call succeeded, and revert restores the file from its blob (macOS does not let a terminal list `~/.Trash`) |
+| write pipeline, every order of steps | a TLA+ model of apply, its undo, recovery, revert and the data-directory lock, checked with TLC for two instances, two files, one crash, one failed operation and two outside edits. Seven invariants, each with a broken variant of the model that must fail on it. `formal/write-pipeline/run.sh` runs it in about four minutes, and `.claude/skills/write-pipeline/SKILL.md` says which code it covers and how to read a failure. `scripts/check.sh` prints a notice when covered code changed after the commit the model was confirmed against. Two findings are open: `in-place-torn` (a failed in-place write of a hard-linked file is recorded as aborted) and `edit-in-window` (section 4) |
 | hook planners | round trips keep comments and unknown keys. A Codex toggle leaves `trustStatus` unchanged in `hooks/list`. Park then unpark restores a Claude settings file byte for byte. A change to `trusted_hash` is refused |
 | serve hardening | no token 401, wrong token 401, foreign `Origin` 403, oversized body 413, assets 200 without a token |
 | UI | a browser drives `--serve` on fixtures: open, edit, diff, save, conflict, revert, hook toggle, hook test run, simulator, language switch. A screenshot per view |
@@ -583,6 +597,7 @@ Each unit ends in a check and a local commit.
 5. **Integration.** Scan passes, doctor, simulate, search, projects, watch, hook planners, hook runner.
 6. **UI write flows.** Diff, apply, conflict, hooks, memory, history.
 7. **Finish.** README in both languages, install script, a run on a Linux host.
+8. **Past sessions.** The session spec and its oracle, then the reader and the trace operations, then the view.
 
 ## 13. Risks
 
@@ -597,6 +612,122 @@ Each unit ends in a check and a local commit.
 | plain HTTP on a non-loopback bind | ask how the operator reaches dev servers; add `--tls-cert` and `--tls-key` if a tunnel is not an option |
 | a desktop app started from Finder has no shell environment | `CODEX_HOME` and similar are then unset; show `homes[].from_env` so the difference is visible |
 | frontmatter hooks | edited as text in the first version, because no Rust YAML editor keeps comments |
+
+## 14. Past sessions
+
+The scan predicts: it reads the files on disk and says what a new session would load. A trace reports: it reads the record an agent kept of a past session and says what the model received in each call. The two never mix. A trace is not part of a snapshot, has no fingerprint, and is never an input of a plan.
+
+From version 2.1.302 Claude Code records every request it sends, and a reader can rebuild each request body and check it against a digest that the record carries (the session spec, sections 3 and 4). Codex CLI and Gemini CLI record the conversation and the token counts, not the request (the session spec, section 16). So the base of the model is a list of calls with their usage, and the request a call sent is a layer on top that says whether it is exact.
+
+### Types
+
+```rust
+pub struct TraceId(String);   // the agent's own id of a session. For Claude Code the transcript's file stem.
+
+/// One row of the session list. Read from the head and the tail of the record, never the whole file.
+pub struct TraceInfo {
+    pub agent: AgentId,
+    pub id: TraceId,
+    pub file: AbsPath,
+    pub bytes: u64,
+    pub title: Option<String>,     // the agent's own title for the session, else its first prompt. The operator's text.
+    pub started: Option<String>,   // RFC 3339, as ChangeRecord.at
+    pub last: Option<String>,
+    pub cwd: Option<AbsPath>,      // where the session started
+}
+
+/// A session, or one subagent of it. `part` is the agent's id for the subagent.
+pub struct TraceKey { pub agent: AgentId, pub id: TraceId, pub part: Option<String> }
+
+pub struct Trace {
+    pub info: TraceInfo,
+    pub read: u64,                   // bytes of the record this trace was built from. A detail request names it.
+    pub steps: Vec<Step>,            // one per call of the model, in the order they were made
+    pub boundaries: Vec<Boundary>,
+    pub parts: Vec<PartInfo>,        // subagents recorded under the session
+    pub top: Vec<TopPiece>,          // the 30 largest pieces, each at the step that sent it first
+    pub problems: Vec<TraceProblem>,
+}
+
+pub struct Step {
+    pub at: String,
+    pub model: Option<String>,
+    pub usage: Option<Usage>,        // None: the record holds no reply (interrupted, failed, still running)
+    pub sent: Option<Sent>,          // None: the agent recorded no request for this reply
+    pub reply: Vec<ReplyPiece>,
+}
+
+/// What the API reported. `input` is the part that was neither read from the cache nor written to it.
+pub struct Usage { pub input: u64, pub cache_read: u64, pub cache_write: u64, pub output: u64, pub thinking: Option<u64> }
+
+pub struct Sent {
+    pub exact: bool,                 // the rebuilt request matches the digest the agent recorded for it
+    pub pieces: u32,
+    pub shared: u32,                 // how many leading pieces equal the previous step's request, piece for piece
+    pub by_kind: Vec<KindTotal>,     // estimated tokens per kind
+    pub marks: Vec<u32>,             // indexes of the pieces that end at a cache mark
+}
+pub struct KindTotal { pub kind: PieceKind, pub shared: u32, pub fresh: u32 }
+pub struct ReplyPiece { pub kind: PieceKind, pub label: Option<String>, pub bytes: u64, pub tokens: u32 }
+
+/// A compaction. `before` is the index of the first step after it.
+pub struct Boundary { pub before: u32, pub pre_tokens: Option<u64>, pub post_tokens: Option<u64> }
+pub struct PartInfo { pub part: String, pub label: Option<String>, pub description: Option<String>, pub bytes: u64 }
+pub struct TopPiece { pub step: u32, pub piece: u32, pub kind: PieceKind, pub label: Option<String>, pub tokens: u32 }
+
+pub enum TraceProblem {
+    NoRequests { steps: u32 },                   // replies whose request the agent did not record
+    Inexact { steps: u32 },                      // requests that do not match their digest, or hold a message that did not resolve
+    UnreadableLines { lines: u32 },
+    RecordTooLarge { bytes: u64, limit: u64 },
+}
+
+/// One piece of a request, in the order the model received them: system blocks, tool definitions, messages.
+pub struct Piece {
+    pub place: PiecePlace,
+    pub kind: PieceKind,
+    pub label: Option<String>,       // a short name from the record: the tool, the skill, the hook event
+    pub file: Option<AbsPath>,       // the file the piece came from, when the record names it
+    pub bytes: u64,
+    pub tokens: u32,                 // o200k estimate of this piece alone
+    pub head: String,                // its first 160 characters
+}
+pub enum PiecePlace { System { block: u32 }, Tool { index: u32 }, Message { message: u32, role: Role, block: u32 } }
+pub enum Role { User, Model, System, Developer }
+pub enum PieceKind {
+    System, ToolDefinition, Instructions, Catalog, Environment, Reminder, HookOutput,
+    UserText, Command, FileMention, ExtensionBody, Summary,
+    ModelText, Thinking, ToolCall, ToolResult, Frame, Other,
+}
+
+pub enum StepPieces { Current { pieces: Vec<Piece> }, Stale }
+pub enum PieceRef { Sent { piece: u32 }, Reply { piece: u32 } }
+pub enum PieceText { Current { text: String, bytes: u64, cut: bool }, Stale }
+```
+
+### The rules the types carry
+
+- **Real and estimated numbers stay apart.** `Usage` holds only what the agent recorded from the API. `tokens` on a piece is always the o200k estimate. The difference between the prompt totals of two consecutive steps is real, so the UI can say how much a step added without an estimate.
+- **A piece is a span of text with one kind.** The pieces of a message joined give the message's text, as the pieces of a `RenderedBlock` give its text. Separators and wrappers are `Frame`.
+- **A kind comes from the record, not from guessing at prose.** An adapter labels a piece from the record type, the content block type, the flags of the conversation record it came from, or the attachment whose rendered text it holds. A piece that nothing explains is `Other`.
+- **`shared` is what a prompt cache can reuse.** A cache reads a prefix. A request that shares fewer pieces with the previous request than that request had has changed its own past, and `shared` is the index of the first piece that differs.
+- **A step without `sent` is still a step.** Its reply and its usage are exact. That is the whole view for an agent that records no requests, and for the turns an old Claude Code wrote.
+
+### Reading
+
+`Agent::traces` and `Agent::trace` have empty defaults. An agent without a reader returns nothing, so the UI needs no flag and no agent name.
+
+`trace` returns a `TraceData`: every distinct message once, as its pieces, and every step as references to them. `trace.rs` projects that into `Trace`, `StepPieces` and `PieceText`. It counts tokens once per distinct message and computes `shared`, `by_kind` and `top`. No adapter builds those.
+
+A record is far larger than the 8 MiB that a scan may read from one file. `ProbeFs` gains a bounded line reader (at most 512 MiB per record and 64 MiB per line) and bounded reads of the head and the tail of a file. A record over the limit yields the steps read so far and `RecordTooLarge`. A last line that does not parse belongs to a record that is still being written, and is ignored.
+
+A session id in a request is matched against the adapter's own listing. A string from the client is never joined into a path.
+
+The host keeps the two traces it opened last in memory, keyed by file, length and modification time. That is a memo of a pure function of the file, checked on every use. It is the one exception to "the host keeps no state" in section 2, and it is not state of record.
+
+### What the first version leaves out
+
+Following a session while it runs, comparing a session's first request with what the scan predicts, the full text of a tool output that the agent saved outside the record, and readers for Codex CLI and Gemini CLI.
 
 ## Decision record
 
@@ -631,6 +762,8 @@ Three candidates wrote this design independently against one grounding file: one
 **Accepted after a capture.** `Delivery::SystemMessage` (a system-role message inside the conversation) and `ContextBlock.preceded_by` with `Unsized { BuiltIn, FirstPrompt }` were added because the lead captured one real Claude Code 2.1.329 request: it sends the subagent listing before the skill listing, in a system-role message, with the first prompt in between. `preceded_by` is a list so that one block can follow several gaps. The core pass starts the list of the first session block of every agent with `BuiltIn`. The Claude adapter adds `FirstPrompt` to its first listing block, so a project with skills and no instruction file starts with `[BuiltIn, FirstPrompt]`.
 
 **A budget per kind of work (third batch).** A worker that fixed the reader measured two more shapes of the same class: a commands directory with four links to itself did not finish listing, and 500 links to one 8 MiB file made a scan read 4 GB. Closing shapes one at a time does not end, so the rule is now general: a scan has a budget for each kind of work a repository can cause (listing, reading, expanding, counting), each enforced in the one place that does that work, and each exceeded budget is a typed diagnostic.
+
+**Past sessions, added on the owner's request.** The owner asked whether the tool could also analyse a real session, not only predict one. A specification unit measured the record first: on the research machine all 9,923 request records of Claude Code rebuilt to the digest they carry, and an oracle compared rebuilt requests with the bytes a scripted endpoint received in nine scenarios. Two shapes were weighed for the model. In the first, every step carries its full list of pieces: simple to render, but a session of 500 calls with hundreds of messages each repeats almost every piece in every step. In the second, each distinct message is stored once and a step refers to it, which is how the record itself is built. The second was chosen for the core (`TraceData`), and the wire gives an overview with one row per step plus one step's pieces and one piece's text on demand, so the UI never sees the record's own chaining. A third option, mixing recorded sessions into the snapshot, was rejected: a prediction and a report would then share types that mean different things. The host memo of the last two traces is accepted because a record of tens of megabytes cannot be parsed again for every click.
 
 ## Deviations
 
@@ -676,6 +809,10 @@ Three candidates wrote this design independently against one grounding file: one
 - Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
 - Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.
+- Scan budgets unit: the directory lister is `walk::list_tree` (and `walk::list_dir` for one level). Flat listings go through it as well, so every adapter listing has the entry budget of 2,000 and the depth limit of 8, and a test fails on any `.listing(` call outside `walk.rs` and `probe_fs.rs`: `ProbeFs::listing` is the one-level read under the lister, crate-private, and `ProbeFs::list` is gone. The plan's tree of a directory trashed whole lists through `walk::list_tree_with` at its own limits (depth 16, 10,000 entries); a listing it could not finish is `partial` and the tree is not revertible. The Codex plugin content hash lists through `walk::list_tree_with` with no depth limit and its own entry limit (5,000 in a scan, 200,000 in `inspect`), because Codex hashes the whole tree and a capped tree has no hash. It still lists each real directory once.
+- Scan budgets unit: the counting bound is a bound on text analysis, `md::MAX_ANALYZED_BYTES` (1 MiB). Past it a token count is an estimate from the first MiB, and the reference pass and the missing-link check look for links only in the first MiB, because a span scan costs as much per byte as a count. One `TextPartlyAnalyzed` diagnostic per file says both, and a session block whose loads deliver more than the bound is `Approximate`. A text of at least 64 KiB is counted once per content, keyed by the hash of its first MiB.
+- Scan budgets unit: besides the 4 MiB per root file, import expansion has a budget of 8 MiB for the whole scan (`imports::MAX_SCAN_EXPANDED_BYTES`), charged in `ProbeFs` by the expander. Gemini expands every context file on its own, so a hundred directories whose GEMINI.md imports one 1 MiB file three times took 58 s and 370 MB without it. A root that the shared budget stopped carries no diagnostic of its own; the scan reports one `ScanExpansionExhausted`.
+- Scan budgets unit: the reference pass knows a file by its real path, so links that all point at one file are one reference under the first name that reaches it. Before, 500 links to one 8 MiB file were 500 references of 8 MiB each.
 - Load text unit: a block's `tokens` is the sum of its pieces' counts, each piece counted alone, for every agent. Claude and Gemini counted the joined text before, so their block totals move by a few tokens at the joins. `parts` now follow the pieces in order, so a header between two files is glue in its place instead of a share of the next file's part.
 - Load text unit: the frame of a load is not its text. Claude's `Contents of <path> (<label>):` header and the `- ` of a listing line, Codex's line break after a catalog line and Gemini's `--- Context from: <p> ---` lines are frame. A Gemini context file's `Delivered` now counts its text without that frame.
 - Load text unit: a Gemini import is inlined into its host's text, so it has no piece of its own. `load_texts` returns the imported file with its own imports inlined, which is a run of the host's piece.

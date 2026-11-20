@@ -1,14 +1,14 @@
 //! `scan(&ScanEnv) -> Snapshot`: runs the adapters over one `ProbeFs`, interns files, and sets
 //! the fingerprint. A scan is a function of the filesystem and the environment.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::agents::{Agent, FileClaim, ScanCx, registry};
 use crate::env::ScanEnv;
 use crate::model::*;
 pub use crate::probe_fs::MAX_READ_BYTES;
-use crate::probe_fs::{ProbeErrorKind, ProbeFs};
-use crate::{doctor, passes, walk};
+use crate::probe_fs::{Exceeded, ProbeErrorKind, ProbeFs, SCAN_READ_LIMIT};
+use crate::{doctor, md, passes, walk};
 
 /// A snapshot plus what the host needs to answer follow-up calls about the same scan.
 pub struct Scanned {
@@ -97,6 +97,8 @@ pub fn scan_with_parked(
         existing: &diagnostics,
     });
     diagnostics.extend(found);
+    diagnostics.extend(estimated_counts(&mut views, &files));
+    diagnostics.extend(fs.exceeded().into_iter().map(budget_diagnostic));
 
     let snapshot = Snapshot {
         cwd: env.cwd.clone(),
@@ -116,6 +118,95 @@ pub fn scan_with_parked(
         snapshot,
         probed,
         fs,
+    }
+}
+
+/// Design section 8: the scan analyzes the first [`md::MAX_ANALYZED_BYTES`] of a text, so the
+/// token count of a larger text is an estimate and its links past that point are not followed.
+/// Each file that large, or that large where it reaches the model, gets one diagnostic, and a
+/// block that large is no longer exact.
+fn estimated_counts(
+    views: &mut [AgentView],
+    files: &BTreeMap<AbsPath, FileEntry>,
+) -> Vec<Diagnostic> {
+    let mut estimated: BTreeSet<AbsPath> = files
+        .iter()
+        .filter(|(_, entry)| {
+            matches!(entry.state, FileState::Present { bytes, .. } if md::is_partly_analyzed(bytes))
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    for view in views.iter_mut() {
+        let delivered = |id: &LoadId| {
+            view.loads
+                .get(id.0 as usize)
+                .and_then(|load| load.delivered.as_ref())
+                .map_or(0, |d| d.bytes)
+        };
+        for block in &mut view.session {
+            let bytes: u64 = block
+                .parts
+                .iter()
+                .map(|part| match part {
+                    Part::Load { load, .. } => delivered(load),
+                    Part::Glue { .. } => 0,
+                })
+                .sum();
+            if md::is_partly_analyzed(bytes) {
+                block.fidelity = Fidelity::Approximate;
+            }
+        }
+        estimated.extend(
+            view.loads
+                .iter()
+                .filter(|load| {
+                    load.delivered
+                        .as_ref()
+                        .is_some_and(|d| md::is_partly_analyzed(d.bytes))
+                })
+                .map(|load| load.file.clone()),
+        );
+    }
+    estimated
+        .into_iter()
+        .map(|path| Diagnostic {
+            severity: Severity::Info,
+            agent: None,
+            at: Subject::File { path, line: None },
+            problem: Problem::TextPartlyAnalyzed {
+                max: md::MAX_ANALYZED_BYTES as u64,
+            },
+            fix: None,
+        })
+        .collect()
+}
+
+/// A budget the scan ran out of (design section 8, "resource exhaustion by repository content").
+fn budget_diagnostic(exceeded: Exceeded) -> Diagnostic {
+    let (at, problem) = match exceeded {
+        Exceeded::Reads { max } => (Subject::Agent, Problem::ReadBudgetExhausted { max }),
+        Exceeded::Expansions { max } => (Subject::Agent, Problem::ScanExpansionExhausted { max }),
+        Exceeded::ListingEntries { dir, max } => (
+            Subject::File {
+                path: dir,
+                line: None,
+            },
+            Problem::ListingCapped { max },
+        ),
+        Exceeded::ListingDepth { dir, max } => (
+            Subject::File {
+                path: dir,
+                line: None,
+            },
+            Problem::ListingTooDeep { max },
+        ),
+    };
+    Diagnostic {
+        severity: Severity::Warning,
+        agent: None,
+        at,
+        problem,
+        fix: None,
     }
 }
 
@@ -193,6 +284,9 @@ fn read_entry(cx: &ScanCx, path: &AbsPath, claimed: EditPolicy) -> FileEntry {
         Ok(stat) => match cx.fs.read(path) {
             Err(err) => match err.kind {
                 ProbeErrorKind::TooLarge { bytes } => FileState::TooBig { bytes },
+                ProbeErrorKind::BudgetSpent => FileState::BudgetExhausted {
+                    limit: SCAN_READ_LIMIT,
+                },
                 _ => FileState::Unreadable { error: err.detail },
             },
             Ok(bytes) => {

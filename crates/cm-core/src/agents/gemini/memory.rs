@@ -10,6 +10,7 @@ use crate::md::frontmatter;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
 use crate::tokens;
+use crate::walk;
 
 pub(super) const INDEX: &str = "MEMORY.md";
 
@@ -137,16 +138,13 @@ fn fill(w: &World, dir: &AbsPath, store: &mut MemoryStore, claims: &mut Vec<File
         .as_ref()
         .and_then(|p| read_lossy(cx, p))
         .unwrap_or_default();
-    let Ok(entries) = cx.fs.list(dir) else {
-        return;
-    };
-    for entry in entries.iter() {
-        let path = dir.join(&entry.name);
+    for entry in walk::list_dir(cx.fs, dir) {
+        let path = entry.path.clone();
         match entry.kind {
-            EntryKind::File if entry.name.ends_with(".md") => {
+            EntryKind::File if entry.name().ends_with(".md") => {
                 let is_index = Some(&path) == store.index.as_ref();
                 let text = read_lossy(cx, &path).unwrap_or_default();
-                let (title, description) = describe(&text, &entry.name);
+                let (title, description) = describe(&text, entry.name());
                 store.entries.push(MemoryEntry {
                     file: path,
                     role: if is_index {
@@ -154,13 +152,14 @@ fn fill(w: &World, dir: &AbsPath, store: &mut MemoryStore, claims: &mut Vec<File
                     } else {
                         MemoryRole::Note
                     },
-                    indexed: (!is_index).then(|| index_body.contains(&entry.name)),
+                    indexed: (!is_index).then(|| index_body.contains(entry.name())),
                     title,
                     description,
                 });
             }
             EntryKind::File
-                if entry.name == ".extraction-state.json" || entry.name == ".extraction.lock" =>
+                if entry.name() == ".extraction-state.json"
+                    || entry.name() == ".extraction.lock" =>
             {
                 claims.push(FileClaim {
                     path: path.clone(),
@@ -168,43 +167,31 @@ fn fill(w: &World, dir: &AbsPath, store: &mut MemoryStore, claims: &mut Vec<File
                         why: ReadOnlyWhy::AgentState,
                     },
                 });
-                store.entries.push(generated(path, &entry.name));
+                store.entries.push(generated(path, entry.name()));
             }
-            EntryKind::Dir if entry.name == ".inbox" || entry.name == "skills" => {
-                generated_below(w, &path, 2, store, claims);
+            EntryKind::Dir if entry.name() == ".inbox" || entry.name() == "skills" => {
+                generated_below(w, &path, store, claims);
             }
             _ => {}
         }
     }
 }
 
-/// Everything under `.inbox` and `skills/` belongs to the Auto Memory service (spec 4, Auto
-/// Memory row; spec 8): the tool lists it and never edits it.
-fn generated_below(
-    w: &World,
-    dir: &AbsPath,
-    depth: usize,
-    store: &mut MemoryStore,
-    claims: &mut Vec<FileClaim>,
-) {
-    let Ok(entries) = w.cx.fs.list(dir) else {
-        return;
-    };
-    for entry in entries.iter() {
-        let path = dir.join(&entry.name);
-        match entry.kind {
-            EntryKind::File => {
-                claims.push(FileClaim {
-                    path: path.clone(),
-                    policy: EditPolicy::ReadOnly {
-                        why: ReadOnlyWhy::Generated,
-                    },
-                });
-                store.entries.push(generated(path, &entry.name));
-            }
-            EntryKind::Dir if depth > 0 => generated_below(w, &path, depth - 1, store, claims),
-            _ => {}
+/// Everything under `.inbox` and `skills/`, two directories deep, belongs to the Auto Memory
+/// service (spec 4, Auto Memory row; spec 8): the tool lists it and never edits it.
+fn generated_below(w: &World, dir: &AbsPath, store: &mut MemoryStore, claims: &mut Vec<FileClaim>) {
+    for entry in walk::list_tree(w.cx.fs, dir, |e| e.depth() <= 2) {
+        if entry.kind != EntryKind::File {
+            continue;
         }
+        claims.push(FileClaim {
+            path: entry.path.clone(),
+            policy: EditPolicy::ReadOnly {
+                why: ReadOnlyWhy::Generated,
+            },
+        });
+        let name = entry.name().to_owned();
+        store.entries.push(generated(entry.path, &name));
     }
 }
 
