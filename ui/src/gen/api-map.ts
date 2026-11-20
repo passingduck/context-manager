@@ -11,6 +11,8 @@ import type { HistoryReq } from "./HistoryReq";
 import type { HookRun } from "./HookRun";
 import type { JsonValue } from "./serde_json/JsonValue";
 import type { KnownProject } from "./KnownProject";
+import type { LoadTexts } from "./LoadTexts";
+import type { LoadTextsReq } from "./LoadTextsReq";
 import type { PlanReq } from "./PlanReq";
 import type { Preview } from "./Preview";
 import type { ReadReq } from "./ReadReq";
@@ -34,6 +36,7 @@ export interface ApiMap {
   scan: { args: ScanReq; result: Snapshot };
   read_file: { args: ReadReq; result: FileContent };
   render: { args: RenderReq; result: Array<RenderedBlock> };
+  load_texts: { args: LoadTextsReq; result: LoadTexts };
   simulate: { args: SimReq; result: Array<Simulation> };
   search: { args: SearchReq; result: SearchResult };
   watch: { args: WatchReq; result: Fingerprint };

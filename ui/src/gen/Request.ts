@@ -2,6 +2,7 @@
 import type { ApplyReq } from "./ApplyReq";
 import type { ChangeReq } from "./ChangeReq";
 import type { HistoryReq } from "./HistoryReq";
+import type { LoadTextsReq } from "./LoadTextsReq";
 import type { PlanReq } from "./PlanReq";
 import type { ReadReq } from "./ReadReq";
 import type { RenderReq } from "./RenderReq";
@@ -15,4 +16,4 @@ import type { WatchReq } from "./WatchReq";
 /**
  * A request as it crosses the boundary: `{"op": "scan", "args": {...}}`.
  */
-export type Request = { "op": "session", "args": null } | { "op": "agents", "args": null } | { "op": "projects", "args": null } | { "op": "scan", "args": ScanReq } | { "op": "read_file", "args": ReadReq } | { "op": "render", "args": RenderReq } | { "op": "simulate", "args": SimReq } | { "op": "search", "args": SearchReq } | { "op": "watch", "args": WatchReq } | { "op": "plan", "args": PlanReq } | { "op": "apply", "args": ApplyReq } | { "op": "history", "args": HistoryReq } | { "op": "change", "args": ChangeReq } | { "op": "hook_sample", "args": SampleReq } | { "op": "run_hook", "args": RunReq };
+export type Request = { "op": "session", "args": null } | { "op": "agents", "args": null } | { "op": "projects", "args": null } | { "op": "scan", "args": ScanReq } | { "op": "read_file", "args": ReadReq } | { "op": "render", "args": RenderReq } | { "op": "load_texts", "args": LoadTextsReq } | { "op": "simulate", "args": SimReq } | { "op": "search", "args": SearchReq } | { "op": "watch", "args": WatchReq } | { "op": "plan", "args": PlanReq } | { "op": "apply", "args": ApplyReq } | { "op": "history", "args": HistoryReq } | { "op": "change", "args": ChangeReq } | { "op": "hook_sample", "args": SampleReq } | { "op": "run_hook", "args": RunReq };

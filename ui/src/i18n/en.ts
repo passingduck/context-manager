@@ -658,6 +658,7 @@ export const en = {
     projectUntrusted: (v) => `The folder is not trusted, so the agent skips ${v.skipped.length} project ${v.skipped.length === 1 ? "setting" : "settings"}.`,
     globMatchesNothing: (v) => `The pattern ${v.glob} matches no file.`,
     walkCapped: (v) => `The project walk stopped after ${v.entries.toLocaleString("en-US")} entries, so some files may be missing here.`,
+    bodyAlsoImported: (v, d) => `Line ${v.line} of ${d(v.host)} imports this body, so the model receives it with every session and again when the item is invoked. Remove the import line, or keep the text in an instruction file instead of a skill.`,
   } satisfies Msgs<Problem>,
   hookBlock,
   hookState: {

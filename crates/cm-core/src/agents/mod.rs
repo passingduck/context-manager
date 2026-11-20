@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeFs};
+use crate::tokens;
 
 pub mod claude;
 pub mod codex;
@@ -75,9 +76,15 @@ pub trait Agent: Sync {
     fn on_access(&self, _cx: &ScanCx, _dir: &AbsPath) -> Vec<Candidate> {
         Vec::new()
     }
-    /// The literal session-start text.
+    /// The literal session-start text, piece by piece.
     fn render(&self, _cx: &ScanCx, _view: &AgentView) -> Vec<RenderedBlock> {
         Vec::new()
+    }
+    /// The text the model receives for a delivered load that has no piece of its own in a
+    /// session-start block: a body on invoke, a file on access and what it imports, a file the
+    /// model may read by itself. The default is the file as it is.
+    fn load_text(&self, cx: &ScanCx, _view: &AgentView, load: &Load) -> Option<String> {
+        file_text(cx, &load.file)
     }
     fn known_projects(&self, _cx: &ScanCx) -> Vec<AbsPath> {
         Vec::new()
@@ -117,6 +124,84 @@ pub trait Agent: Sync {
     fn sample_input(&self, _event: &str, _cx: &ScanCx) -> serde_json::Value {
         serde_json::Value::Null
     }
+}
+
+/// A file as it is on disk, decoded lossily.
+pub(crate) fn file_text(cx: &ScanCx, path: &AbsPath) -> Option<String> {
+    let bytes = cx.fs.read(path).ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The pieces of one session-start block, in delivery order. Adjacent frames merge into one, and
+/// an empty frame is dropped.
+#[derive(Debug, Default)]
+pub(crate) struct Pieces(Vec<Piece>);
+
+impl Pieces {
+    pub fn frame(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        match self.0.last_mut() {
+            Some(Piece::Frame { text: last }) => last.push_str(text),
+            _ => self.0.push(Piece::Frame {
+                text: text.to_owned(),
+            }),
+        }
+    }
+
+    pub fn load(&mut self, load: LoadId, text: impl Into<String>) {
+        self.0.push(Piece::Load {
+            load,
+            text: text.into(),
+        });
+    }
+}
+
+/// The scan's description of a block and its literal text, both from one list of pieces. Each
+/// piece is counted on its own, and the block costs the sum, so `parts` add up to `tokens`.
+pub(crate) fn assemble(
+    delivery: Delivery,
+    label: BlockLabel,
+    fidelity: Fidelity,
+    pieces: Pieces,
+) -> (ContextBlock, RenderedBlock) {
+    let parts: Vec<Part> = pieces
+        .0
+        .iter()
+        .map(|piece| match piece {
+            Piece::Frame { text } => Part::Glue {
+                tokens: tokens::count(text),
+            },
+            Piece::Load { load, text } => Part::Load {
+                load: load.clone(),
+                tokens: tokens::count(text),
+            },
+        })
+        .collect();
+    let total = parts
+        .iter()
+        .map(|p| match p {
+            Part::Glue { tokens } | Part::Load { tokens, .. } => *tokens,
+        })
+        .sum();
+    (
+        ContextBlock {
+            delivery,
+            label,
+            parts,
+            tokens: total,
+            fidelity,
+            preceded_by: Vec::new(),
+        },
+        RenderedBlock {
+            delivery,
+            label,
+            pieces: pieces.0,
+            tokens: total,
+            fidelity,
+        },
+    )
 }
 
 /// Registry order is the order agents appear in a snapshot. A fourth agent adds one line here.

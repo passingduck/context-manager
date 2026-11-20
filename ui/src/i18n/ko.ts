@@ -631,6 +631,7 @@ export const ko: typeof en = {
     projectUntrusted: (v) => `폴더를 신뢰하지 않아서 에이전트가 프로젝트 설정 ${v.skipped.length}개를 건너뜁니다.`,
     globMatchesNothing: (v) => `패턴 ${v.glob}에 맞는 파일이 없습니다.`,
     walkCapped: (v) => `프로젝트 훑기가 항목 ${v.entries.toLocaleString("ko-KR")}개에서 멈춰서 일부 파일이 빠졌을 수 있습니다.`,
+    bodyAlsoImported: (v, d) => `${d(v.host)}의 ${v.line}번째 줄이 이 본문을 가져옵니다. 그래서 모델은 세션마다 이 본문을 받습니다. 호출하면 같은 본문을 한 번 더 받습니다. 가져오기 줄을 지우세요. 아니면 이 내용을 스킬이 아닌 지침 파일에 두세요.`,
   },
   hookBlock,
   hookState: {

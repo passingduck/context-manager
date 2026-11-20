@@ -205,7 +205,7 @@ fn a_private_memory_index_switches_the_system_instruction_to_the_object_form() {
     assert_eq!(blocks.len(), 1);
     assert!(
         blocks[0]
-            .text
+            .text()
             .starts_with("---\n\n<loaded_context>\n<user_project_memory>\n")
     );
 }

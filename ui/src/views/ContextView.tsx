@@ -404,7 +404,7 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
   return (
     <ol className="space-y-2 px-3 pt-2" aria-label={t.context.blocksFor}>
       {view.session.map((block, index) => {
-        const text = render.data?.find((rendered) => rendered.label === block.label && rendered.delivery === block.delivery)?.text;
+        const text = render.data?.find((rendered) => rendered.label === block.label && rendered.delivery === block.delivery)?.pieces.map((piece) => piece.text).join("");
         return (
           <li key={block.label} className="rounded border border-line">
             <div className="flex flex-wrap items-center gap-2 border-b border-line bg-subtle px-2 py-1">

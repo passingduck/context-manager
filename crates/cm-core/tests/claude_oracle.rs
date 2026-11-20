@@ -488,6 +488,25 @@ fn which(bin: &str) -> Option<PathBuf> {
         })
 }
 
+/// Gives a fixture home the operator's macOS keychains. Claude Code stores credentials with
+/// `security`, which looks for keychains under `$HOME/Library/Keychains`; without them macOS
+/// shows a "keychain not found" dialog on every run.
+fn link_keychains(home: &Path) {
+    if !cfg!(target_os = "macos") || home.join("Library/Keychains").exists() {
+        return;
+    }
+    let Ok(real) = std::env::var("HOME") else {
+        return;
+    };
+    std::fs::create_dir_all(home.join("Library")).expect("create fixture Library");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        Path::new(&real).join("Library/Keychains"),
+        home.join("Library/Keychains"),
+    )
+    .expect("link fixture keychains");
+}
+
 struct Run {
     reminder: String,
     requests: Vec<Captured>,
@@ -496,6 +515,7 @@ struct Run {
 
 /// Runs `claude -p` in `cwd` against a fresh sink. `home` and `cfg` come from the tree.
 fn run_claude(claude: &Path, t: &Tree, cwd: &Path) -> Run {
+    link_keychains(&t.home());
     let sink = Listener::start(true);
     let tripwire = Listener::start(false);
     let status = Command::new("perl")
@@ -583,7 +603,7 @@ fn ours(t: &Tree, cwd: &Path) -> String {
     blocks
         .iter()
         .filter(|b| b.fidelity == Fidelity::Exact)
-        .map(|b| b.text.as_str())
+        .map(|b| b.text())
         .collect::<Vec<_>>()
         .join("\n\n")
 }
@@ -913,7 +933,7 @@ fn oracle_catalogs() {
             continue;
         }
         let want_role = role_of(block.delivery);
-        for line in text.text.lines().filter(|l| !l.is_empty()) {
+        for line in text.text().lines().filter(|l| !l.is_empty()) {
             let needle = format!("{line}\n");
             let found = flat[from..]
                 .find(&needle)
@@ -948,7 +968,7 @@ fn oracle_catalogs() {
         .session
         .iter()
         .zip(&rendered)
-        .map(|(b, r)| (b.label, place(b.label, &r.text)))
+        .map(|(b, r)| (b.label, place(b.label, &r.text())))
         .collect();
     assert!(
         placed.windows(2).all(|w| w[0].1 < w[1].1),
@@ -1077,4 +1097,103 @@ fn oracle_catalogs_without_instructions() {
         [Unsized::BuiltIn, Unsized::FirstPrompt]
     );
     assert!(view.session[1].preceded_by.is_empty());
+}
+
+/// The owner's setup (spec 1.5 and 4): the project `CLAUDE.md` imports a skill file with `@`.
+/// The file then reaches the model in two places at session start: its body without the
+/// frontmatter in the instruction reminder, and one line in the skill listing. The text
+/// `load_texts` returns for each of the two loads appears verbatim in the captured request,
+/// each in its own place.
+#[test]
+fn oracle_imported_skill() {
+    let Some(claude) = which("claude") else {
+        eprintln!("SKIP imported skill: `claude` is not installed");
+        return;
+    };
+    if which("git").is_none() {
+        eprintln!("SKIP imported skill: `git` is not installed");
+        return;
+    }
+    let t = fresh_root("imported-skill");
+    t.w("top/repo/CLAUDE.md", "@.claude/skills/demo/SKILL.md\n");
+    t.w(
+        "top/repo/.claude/skills/demo/SKILL.md",
+        "---\nname: demo\ndescription: MARK-S-demo shows one skill\n---\n\nMARK-BODY-1\nMARK-BODY-2\nMARK-BODY-3\n",
+    );
+    std::fs::create_dir_all(t.repo()).unwrap();
+    git(&t.repo(), &["init", "-q", "."]);
+    std::fs::create_dir_all(t.home()).unwrap();
+    let cwd = t.repo();
+    let run = run_claude(&claude, &t, &cwd);
+    assert_eq!(
+        run.tripwire_connections, 0,
+        "a connection reached the proxy tripwire"
+    );
+    assert!(
+        run.reminder.contains(INTRO_START),
+        "no instruction reminder was captured"
+    );
+    let body: Value = run
+        .requests
+        .iter()
+        .filter_map(|r| serde_json::from_slice::<Value>(&r.body).ok())
+        .find(|b| b.get("messages").is_some())
+        .expect("the sink saw no request with messages");
+    let listing = body["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .skip(1)
+        .flat_map(|msg| texts_of(&msg["content"]))
+        .find(|text| text.contains("MARK-S-demo"))
+        .expect("no later message lists the skill");
+
+    // Our side: the texts of the skill file's loads.
+    let abs = |p: &Path| AbsPath::parse(p.to_str().unwrap()).unwrap();
+    let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
+        .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
+    let fs = ProbeFs::new();
+    let cx = ScanCx {
+        env: &env,
+        fs: &fs,
+        parked_dir: None,
+    };
+    let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
+    let view = agent.scan(&cx).view;
+    let skill = abs(&cwd.join(".claude/skills/demo/SKILL.md"));
+    let texts = cm_core::texts::load_texts(agent, &cx, &view, &skill);
+    let text_of = |pred: &dyn Fn(&cm_core::model::Load) -> bool| -> String {
+        let load = view
+            .loads
+            .iter()
+            .find(|l| l.file == skill && pred(l))
+            .expect("the scan has the load");
+        texts
+            .iter()
+            .find(|t| t.load == load.id)
+            .and_then(|t| t.text.clone())
+            .expect("the load has a text")
+    };
+    let import = text_of(&|l| matches!(l.via, cm_core::model::Via::Import { .. }));
+    let line = text_of(&|l| l.kind == cm_core::model::DocKind::Listing);
+
+    assert!(
+        run.reminder.contains(&import),
+        "the import's text is not in the captured reminder:\n{import}\n--- reminder ---\n{}",
+        run.reminder
+    );
+    assert!(!import.contains("description:"));
+    assert!(
+        listing.contains(&line),
+        "the listing line is not in the captured listing:\n{line}\n--- listing ---\n{listing}"
+    );
+    assert!(!line.contains('\n'));
+    assert!(
+        !run.reminder.contains(&line),
+        "the listing line is in the reminder"
+    );
+    assert!(
+        !listing.contains("MARK-BODY-1"),
+        "the body is in the listing"
+    );
 }

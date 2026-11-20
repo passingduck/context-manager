@@ -89,6 +89,8 @@ api! {
     ReadFile => read_file(ReadReq) -> FileContent;
     // literal session-start text
     Render => render(RenderReq) -> Vec<RenderedBlock>;
+    // per load of one file: the text the model receives there
+    LoadTexts => load_texts(LoadTextsReq) -> LoadTexts;
     // per agent: fired loads, extra loads, added tokens, notes
     Simulate => simulate(SimReq) -> Vec<Simulation>;
     // at most 500 hits
