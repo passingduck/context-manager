@@ -266,6 +266,16 @@ impl Agent for Codex {
         plan::plan(cx, edit)
     }
 
+    fn write_warnings(
+        &self,
+        cx: &PlanCx,
+        path: &AbsPath,
+        _before: Option<&str>,
+        _after: Option<&str>,
+    ) -> Vec<Warning> {
+        plan::write_warnings(cx, path)
+    }
+
     fn guard(
         &self,
         path: &AbsPath,

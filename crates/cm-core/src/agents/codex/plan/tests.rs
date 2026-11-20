@@ -275,7 +275,11 @@ fn toml_add_and_remove_round_trip_and_keep_comments_and_state() {
         draft: draft("PreToolUse", Some("Write"), "echo new"),
     });
     assert!(preview.warnings.contains(&Warning::HookTrustReset));
-    assert!(preview.warnings.contains(&also_writes()));
+    assert!(
+        preview
+            .warnings
+            .contains(&Warning::AgentAlsoWrites { agent: me() })
+    );
     let after = home.state();
     let (gone, added) = changed(TOML_FILE, &after);
     assert!(gone.is_empty(), "an add removes no byte: {gone:?}");

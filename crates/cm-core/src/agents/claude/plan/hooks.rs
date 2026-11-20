@@ -51,11 +51,6 @@ fn settings_warnings(file: &AbsPath) -> Vec<Warning> {
     } else {
         out.push(takes_effect("claude.takes_effect.reload_plugins"));
     }
-    if name == "settings.local.json" {
-        out.push(Warning::AgentAlsoWrites {
-            agent: super::claude(),
-        });
-    }
     out
 }
 

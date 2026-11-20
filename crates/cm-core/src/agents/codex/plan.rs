@@ -83,8 +83,14 @@ fn warning_effect(rule: &'static str) -> Warning {
     }
 }
 
-fn also_writes() -> Warning {
-    Warning::AgentAlsoWrites { agent: me() }
+/// Warnings that follow a write to a Codex file whoever planned it, a plain save included. Codex
+/// rewrites the user `config.toml` itself (spec 7.1).
+pub(super) fn write_warnings(cx: &PlanCx, path: &AbsPath) -> Vec<Warning> {
+    if Setup::load(&scan_cx(cx)).user_config == *path {
+        vec![Warning::AgentAlsoWrites { agent: me() }]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The text of a file: `None` when it does not exist.
@@ -360,12 +366,8 @@ fn unreadable<E>(_: E) -> ApiError {
     invalid("file", RULE_UNREADABLE)
 }
 
-fn hook_warnings(toml_file: bool) -> Vec<Warning> {
-    let mut warnings = vec![Warning::HookTrustReset, warning_effect(RULE_HOOKS_REREAD)];
-    if toml_file {
-        warnings.push(also_writes());
-    }
-    warnings
+fn hook_warnings() -> Vec<Warning> {
+    vec![Warning::HookTrustReset, warning_effect(RULE_HOOKS_REREAD)]
 }
 
 /// A new group at the end of the event, so no other hook's key moves.
@@ -411,7 +413,7 @@ fn add_hook(cx: &PlanCx, file: &AbsPath, draft: &HookDraft) -> Result<Preview, A
         file,
         old,
         text,
-        hook_warnings(hook_file.format == HookFormat::CodexConfigToml),
+        hook_warnings(),
     ))
 }
 
@@ -490,7 +492,7 @@ fn remove_hook(cx: &PlanCx, hook: &Hook) -> Result<Preview, ApiError> {
         file,
         old,
         new,
-        hook_warnings(at.toml.is_some()),
+        hook_warnings(),
     ))
 }
 
@@ -553,7 +555,7 @@ fn update_hook(cx: &PlanCx, hook: &Hook, draft: &HookDraft) -> Result<Preview, A
         file,
         old,
         new,
-        hook_warnings(at.toml.is_some()),
+        hook_warnings(),
     ))
 }
 
@@ -568,7 +570,7 @@ fn set_enabled(cx: &PlanCx, hook: &Hook, enabled: bool) -> Result<Preview, ApiEr
         .ok_or_else(|| invalid("hook", "codex.hooks.toggle_unsupported"))?;
     let config = Setup::load(&scx).user_config;
     let old = read(cx, &config)?;
-    let warnings = vec![warning_effect(RULE_HOOKS_REREAD), also_writes()];
+    let warnings = vec![warning_effect(RULE_HOOKS_REREAD)];
     if listed.enabled == enabled {
         return Ok(preview(
             ChangeEdit::SetHookEnabled,

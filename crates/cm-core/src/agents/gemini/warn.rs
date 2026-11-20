@@ -28,6 +28,11 @@ pub(super) fn write_warnings(
         out.push(Warning::AgentAlsoWrites { agent: id() });
     }
 
+    // Spec 4: the CLI appends to the private memory index itself.
+    if memory::memory_dir(&w).is_some_and(|dir| *path == dir.join(memory::INDEX)) {
+        out.push(Warning::AgentAlsoWrites { agent: id() });
+    }
+
     // Spec 6, subagents row: any edit of an acknowledged project agent changes its hash.
     if before.is_some() && after.is_some() && before != after && is_project_agent(cx, path) {
         out.push(Warning::AgentAckReset);

@@ -492,6 +492,29 @@ fn switching_an_extension_hook_writes_the_user_settings_and_no_other_file() {
 }
 
 #[test]
+fn a_plan_that_writes_two_settings_layers_warns_once_about_each_thing() {
+    let fx = Fixture::new();
+    fx.write(
+        &settings(&fx),
+        r#"{"hooks":{"BeforeTool":[{"hooks":[{"type":"command","command":"keep.sh"}]}]},"hooksConfig":{"disabled":["keep.sh"]}}"#,
+    );
+    fx.write(
+        &fx.project_path(".gemini/settings.json"),
+        r#"{"hooksConfig":{"disabled":["keep.sh"]}}"#,
+    );
+    let env = trusted(&fx);
+    let preview = switch(&fx, &env, "keep.sh", true);
+    assert_eq!(preview.change_set.ops.len(), 2, "both layers are rewritten");
+    let overwrite = Warning::SessionMayOverwrite { agent: Gemini.id() };
+    assert_eq!(
+        preview.warnings.iter().filter(|w| **w == overwrite).count(),
+        1,
+        "{:?}",
+        preview.warnings
+    );
+}
+
+#[test]
 fn the_switch_key_is_the_name_when_there_is_one_and_it_is_added_to_an_existing_list() {
     let fx = Fixture::new();
     fx.write(

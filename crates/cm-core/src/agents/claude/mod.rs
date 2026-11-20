@@ -193,6 +193,16 @@ impl Agent for Claude {
         plan::plan(cx, edit)
     }
 
+    fn write_warnings(
+        &self,
+        _cx: &PlanCx,
+        path: &AbsPath,
+        _before: Option<&str>,
+        _after: Option<&str>,
+    ) -> Vec<Warning> {
+        plan::write_warnings(path)
+    }
+
     /// Spec 6.2: what a write may not touch, and what it must keep valid.
     fn guard(
         &self,

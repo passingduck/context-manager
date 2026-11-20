@@ -618,6 +618,8 @@ impl<'a> Planner<'a> {
         let owners = self.owners(&op.path);
         for agent in self.agents.iter().filter(|a| owners.contains(&a.id())) {
             for warning in agent.write_warnings(&cx, &op.path, before, after) {
+                // An agent's warning names the agent, not the file, so a change that writes
+                // two of its files would repeat it.
                 if !warnings.contains(&warning) {
                     warnings.push(warning);
                 }

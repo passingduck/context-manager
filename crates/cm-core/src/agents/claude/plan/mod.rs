@@ -95,6 +95,17 @@ pub(super) fn preview(edit: &Edit, ops: Vec<FileOp>, warnings: Vec<Warning>) -> 
     }
 }
 
+/// Warnings that follow a write to a Claude Code file whoever planned it, a plain save included.
+/// Claude Code rewrites `settings.local.json` itself, for example when the user approves a
+/// permission prompt (spec 6, H8).
+pub(super) fn write_warnings(path: &AbsPath) -> Vec<Warning> {
+    if path.file_name() == Some("settings.local.json") {
+        vec![Warning::AgentAlsoWrites { agent: claude() }]
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) fn takes_effect(rule: &'static str) -> Warning {
     Warning::TakesEffect {
         agent: claude(),
