@@ -44,6 +44,8 @@ Test what a caller can observe: the snapshot a scan returns for a fixture tree, 
 
 Where a real CLI can answer, compare with it. `tools/oracle/` holds the scripts. An oracle test skips when the CLI is not installed and says so in its output.
 
+A change to the write pipeline (`apply.rs`, `recovery.rs`, `history.rs`, `fsio.rs` in `crates/cm-host`, or `Planner::revert`) is checked against its TLA+ model: follow `.claude/skills/write-pipeline/SKILL.md`.
+
 ## Text
 
 Code, comments, commit messages and docs are in English. UI strings exist in English and Korean.

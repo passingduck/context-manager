@@ -42,4 +42,9 @@ fi
 step "pnpm type check against the regenerated bindings"
 pnpm -C ui typecheck
 
+# A notice, not a gate: the code the write pipeline model covers changed after the commit
+# the model was last confirmed against.
+step "write pipeline model drift"
+formal/write-pipeline/drift.sh
+
 printf '\ncheck.sh: ok\n'
