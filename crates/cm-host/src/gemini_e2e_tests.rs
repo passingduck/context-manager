@@ -1,5 +1,6 @@
 //! Gemini CLI hook edits end to end through the host: plan, apply, history, revert.
 
+use std::path::Path;
 use std::time::Duration;
 
 use cm_core::agents::Agent;
@@ -8,8 +9,17 @@ use cm_core::testing::Fixture;
 use cm_core::*;
 use serde_json::json;
 
-use crate::apply::OsTrash;
+use crate::apply::Trasher;
 use crate::host::{Host, HostConfig};
+
+/// Removes the path, so the test sends nothing to the real OS trash.
+struct RemovingTrash;
+
+impl Trasher for RemovingTrash {
+    fn trash(&self, path: &Path) -> Result<(), String> {
+        std::fs::remove_file(path).map_err(|e| e.to_string())
+    }
+}
 
 const START: &str = "// mine\n{\n\t\"ui\": { \"theme\": \"dark\" }, // keep\n\t\"hooks\": {\n\t\t\"BeforeTool\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"keep.sh\" } ] } ]\n\t}\n}\n";
 
@@ -24,7 +34,7 @@ fn host(fx: &Fixture) -> Host {
             data_dir: fx.root().join("data"),
         },
         agents,
-        Box::new(OsTrash),
+        Box::new(RemovingTrash),
     )
 }
 
