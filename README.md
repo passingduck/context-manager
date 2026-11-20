@@ -94,3 +94,7 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 - **The write flows.** Driven through the real UI in headless Chrome on a throwaway home directory, never on a real agent home.
 - **Token counts.** Estimates made with the o200k tokenizer. Claude and Gemini use other tokenizers, so their real counts differ.
 - **Linux.** The headless build is only compile-checked with `scripts/check-linux.sh`. It was never run on Linux, and the trash behavior on a headless Linux host is untested.
+
+## License
+
+MIT. The full text is in [`LICENSE`](LICENSE).
