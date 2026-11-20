@@ -269,7 +269,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
           <div className="space-y-2">
             <p className="rounded border border-ok bg-ok-bg p-3 text-ok">{t.write.applied(phase.result.files.length)}</p>
             {phase.result.notTrashed.length > 0 && (
-              <section className="rounded border border-warn bg-warn-bg p-3">
+              <section data-testid="not-trashed" className="rounded border border-warn bg-warn-bg p-3">
                 <h3 className="font-semibold text-warn">{t.write.notTrashedTitle}</h3>
                 <p className="mt-1">{t.write.notTrashedBody}</p>
                 <ul className="mt-1">
@@ -281,7 +281,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
             )}
           </div>
         );
-      footer = <PrimaryButton onClick={onClose}>{t.write.close}</PrimaryButton>;
+      footer = <PrimaryButton data-testid="apply-close" onClick={onClose}>{t.write.close}</PrimaryButton>;
       break;
     }
   }
