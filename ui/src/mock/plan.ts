@@ -66,7 +66,7 @@ function finish(summaryEdit: Edit["kind"], agent: string | null, ops: FileOp[], 
 function editable(path: AbsPath, allowAbsent = false): void {
   const entry = files[path];
   if (!entry && !allowAbsent) reject({ kind: "outsideBoundary", path });
-  if (entry?.policy.kind === "readOnly") reject({ kind: "readOnly", why: "host.read_only_file" });
+  if (entry?.policy.kind === "readOnly") reject({ kind: "readOnly", why: { kind: "file", why: entry.policy.why } });
 }
 
 function writeOp(path: AbsPath, text: string, expect = baseOf(texts[path] ?? null)): FileOp[] {
@@ -140,7 +140,7 @@ function planNewItem(edit: Extract<Edit, { kind: "newItem" }>): Plan {
 function planAddMemory(edit: Extract<Edit, { kind: "addMemory" }>): Plan {
   const store = snapshot.agents.find((view) => view.agent === edit.agent)?.memory.find((s) => s.id === edit.store);
   if (!store) return reject({ kind: "notFound" });
-  if (store.write.kind === "readOnly") return reject({ kind: "readOnly", why: store.write.why });
+  if (store.write.kind === "readOnly") return reject({ kind: "readOnly", why: { kind: "rule", rule: store.write.why } });
   const title = edit.title.trim();
   if (!title) return reject({ kind: "invalidEdit", field: "title", why: store.label });
   const dir = store.write.kind === "notesDir" ? store.write.dir : store.root;
@@ -178,11 +178,11 @@ function hookFrom(base: Hook | null, id: string, file: AbsPath, draft: HookDraft
 
 function validateDraft(draft: HookDraft): void {
   const handler = draft.handler;
-  if (typeof handler !== "object" || handler === null || Array.isArray(handler)) reject({ kind: "invalidEdit", field: "handler", why: "host.invalid_hook" });
+  if (typeof handler !== "object" || handler === null || Array.isArray(handler)) reject({ kind: "invalidEdit", field: "handler", why: "edit.unsupported" });
 }
 
 function hookPlan(kind: "addHook" | "updateHook" | "removeHook" | "setHookEnabled", agent: string, file: AbsPath, next: Hook[], commit: () => void): Plan {
-  if (!file.endsWith(".json")) return reject({ kind: "invalidEdit", field: "file", why: "host.invalid_hook" });
+  if (!file.endsWith(".json")) return reject({ kind: "invalidEdit", field: "file", why: "edit.unsupported" });
   editable(file, true);
   const extra: Warning[] = agent === "codex" ? [{ kind: "hookTrustReset" }] : [];
   return finish(kind, agent, writeOp(file, renderHooks(file, next)), extra, [], commit);

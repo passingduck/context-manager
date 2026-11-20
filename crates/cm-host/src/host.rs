@@ -195,6 +195,7 @@ impl Api for Host {
                 .into_iter()
                 .map(|record| record.id)
                 .collect(),
+            core_rules: cm_core::agents::core_rules().to_vec(),
         })
     }
 
@@ -250,7 +251,7 @@ impl Api for Host {
     async fn apply(&self, req: ApplyReq) -> Result<ApplyResult, ApiError> {
         if self.config.read_only {
             return Err(ApiError::ReadOnly {
-                why: RuleRef::new("host.read_only"),
+                why: ReadOnlyReason::Host,
             });
         }
         let ctx = self.ctx.clone();
@@ -411,7 +412,7 @@ impl Api for Host {
     async fn run_hook(&self, req: RunReq) -> Result<HookRun, ApiError> {
         if self.config.read_only {
             return Err(ApiError::ReadOnly {
-                why: RuleRef::new("host.read_only"),
+                why: ReadOnlyReason::Host,
             });
         }
         let scanned = self.scanned(req.cwd.clone()).await?;

@@ -14,7 +14,9 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use crate::model::{AbsPath, Fingerprint};
+use crate::model::{
+    AbsPath, ApiError, Fingerprint, Invalid, Limit, LimitKind, RuleRef, Skip, Unit,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
@@ -64,6 +66,32 @@ impl ProbeError {
         self.kind == ProbeErrorKind::Io(io::ErrorKind::NotFound)
     }
 
+    /// The operating system's text, for a failure the system reported.
+    pub fn os_detail(&self) -> Option<String> {
+        matches!(self.kind, ProbeErrorKind::Io(_)).then(|| self.detail.clone())
+    }
+
+    /// The load status of a file that `read` refused.
+    pub fn skip(&self) -> Skip {
+        match self.kind {
+            ProbeErrorKind::TooLarge { .. } => Skip::TooLarge {
+                limit: Limit {
+                    kind: LimitKind::MaxFileBytes,
+                    value: MAX_READ_BYTES,
+                    unit: Unit::Bytes,
+                },
+            },
+            ProbeErrorKind::NotRegular => Skip::Invalid {
+                why: Invalid::NotRegular,
+            },
+            ProbeErrorKind::Io(_) => Skip::Invalid {
+                why: Invalid::Unreadable {
+                    os: self.os_detail(),
+                },
+            },
+        }
+    }
+
     fn not_regular() -> ProbeError {
         ProbeError {
             kind: ProbeErrorKind::NotRegular,
@@ -84,6 +112,22 @@ impl From<io::Error> for ProbeError {
         ProbeError {
             kind: ProbeErrorKind::Io(err.kind()),
             detail: err.to_string(),
+        }
+    }
+}
+
+/// A refusal the tool itself detects is an invalid edit with a rule. Anything else is the text
+/// of the operating system.
+impl From<ProbeError> for ApiError {
+    fn from(err: ProbeError) -> ApiError {
+        let why = match err.kind {
+            ProbeErrorKind::NotRegular => "edit.not_regular_file",
+            ProbeErrorKind::TooLarge { .. } => "edit.file_too_large",
+            ProbeErrorKind::Io(_) => return ApiError::Io { detail: err.detail },
+        };
+        ApiError::InvalidEdit {
+            field: "path".to_owned(),
+            why: RuleRef::new(why),
         }
     }
 }

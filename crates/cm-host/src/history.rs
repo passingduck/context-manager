@@ -177,9 +177,7 @@ impl History {
         let bytes = self.blob(id).map_err(io_detail)?;
         String::from_utf8(bytes)
             .map(Some)
-            .map_err(|_| ApiError::Io {
-                detail: format!("blob {id} is not UTF-8"),
-            })
+            .map_err(|_| ApiError::HistoryCorrupt)
     }
 
     /// The record with the text of each file before and after. An operation with neither (a

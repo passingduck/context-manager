@@ -7,7 +7,7 @@ use std::ops::Range;
 use crate::agents::ScanCx;
 use crate::md::refs::{self, RefNode};
 use crate::model::*;
-use crate::probe_fs::{MAX_READ_BYTES, ProbeError, ProbeErrorKind};
+
 use crate::scan::format_of;
 
 /// At most this many reference nodes per scan, over all agents.
@@ -147,27 +147,7 @@ impl Graph<'_, '_> {
                     transformed: false,
                 }),
             ),
-            Err(ProbeError {
-                kind: ProbeErrorKind::TooLarge { .. },
-                ..
-            }) => (
-                LoadStatus::Skipped {
-                    skip: Skip::TooLarge {
-                        limit: Limit {
-                            kind: LimitKind::MaxFileBytes,
-                            value: MAX_READ_BYTES,
-                            unit: Unit::Bytes,
-                        },
-                    },
-                },
-                None,
-            ),
-            Err(err) => (
-                LoadStatus::Skipped {
-                    skip: Skip::Invalid { detail: err.detail },
-                },
-                None,
-            ),
+            Err(err) => (LoadStatus::Skipped { skip: err.skip() }, None),
         };
         Load {
             id,

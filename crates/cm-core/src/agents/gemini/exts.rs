@@ -151,7 +151,7 @@ fn skills(b: &mut Builder, out: &mut Exts) {
             (
                 ExtStatus::Rejected { why: rule(problem) },
                 Some(Skip::Invalid {
-                    detail: "frontmatter".to_owned(),
+                    why: Invalid::Frontmatter,
                 }),
             )
         } else if let Some(by) = entry.shadowed_by {
@@ -507,9 +507,7 @@ fn commands(b: &mut Builder, out: &mut Exts) {
             } else if let Some(problem) = found.problem {
                 (
                     ExtStatus::Rejected { why: rule(problem) },
-                    Some(Skip::Invalid {
-                        detail: "toml".to_owned(),
-                    }),
+                    Some(Skip::Invalid { why: Invalid::Toml }),
                 )
             } else {
                 (ExtStatus::Active, None)
@@ -665,7 +663,7 @@ fn agents(b: &mut Builder, out: &mut Exts) {
                 (
                     ExtStatus::Rejected { why: rule(problem) },
                     Some(Skip::Invalid {
-                        detail: "frontmatter".to_owned(),
+                        why: Invalid::Frontmatter,
                     }),
                 )
             } else if !agents_on {

@@ -100,7 +100,7 @@ impl<'w, 'a> Builder<'w, 'a> {
         if kind(cx, path) == Some(EntryKind::Dir) {
             // `readFile` fails with EISDIR and the CLI skips the path without a word.
             let l = self.push(skipped(Skip::Invalid {
-                detail: "directory".to_owned(),
+                why: Invalid::NotRegular,
             }));
             return bare(l, None, 0);
         }
@@ -196,7 +196,7 @@ impl<'w, 'a> Builder<'w, 'a> {
                     (
                         LoadStatus::Skipped {
                             skip: Skip::Invalid {
-                                detail: "outside-root".to_owned(),
+                                why: Invalid::OutsideRoot,
                             },
                         },
                         None,
@@ -220,7 +220,7 @@ impl<'w, 'a> Builder<'w, 'a> {
                     (
                         LoadStatus::Skipped {
                             skip: Skip::Invalid {
-                                detail: "unreadable".to_owned(),
+                                why: Invalid::Unreadable { os: None },
                             },
                         },
                         None,

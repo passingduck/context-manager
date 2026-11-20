@@ -267,7 +267,7 @@ function WhyCard({ agent, load, text }: { agent: string; load: Load; text: strin
         <Field label={t.detail.statusLabel}>
           <div className="space-y-0.5">
             <p>{say(t.status.detail, load.status, d)}</p>
-            {load.status.kind === "skipped" && <p>{say(t.skip, load.status.skip, d)}</p>}
+            {load.status.kind === "skipped" && <p>{load.status.skip.kind === "notRead" ? project.rule(load.status.skip.why) : say(t.skip, load.status.skip, d)}</p>}
             {cut && <p>{t.detail.cutAt(cut.kept, cut.total, t.unit[cut.limit.unit], t.limit(cut.limit))}{line ? ` ${t.detail.cutLine(line)}` : ""}</p>}
           </div>
         </Field>

@@ -62,7 +62,7 @@ pub struct AbsPath(String);       // absolute, lexically normalized, UTF-8. Buil
 pub struct Revision(String);      // "sha256:<hex>" of the file bytes. The compare-and-swap token for writes.
 pub struct Fingerprint(String);   // hash over the stat of every path a scan probed
 pub struct AgentId(String);       // "claude" | "codex" | "gemini". Checked against the registry at parse. Nothing matches on it.
-pub struct RuleRef(String);       // "codex.agents_md.project". Resolves to a RuleSpec.
+pub struct RuleRef(String);       // "codex.agents_md.project". Resolves to a RuleSpec; `RuleRef::new` takes a `&'static str`, so no id is built at run time.
 pub struct LoadId(u32);           // index into AgentView.loads, valid within one snapshot
 pub struct HookId(String);        // hash(agent, source file, locator, digest of the stored entry)
 pub struct ExtId(String);         // hash(agent, kind, file)
@@ -163,7 +163,7 @@ pub enum Skip {
     Excluded { pattern: String },            // Claude claudeMdExcludes
     FeatureOff { name: String },
     AlreadyLoaded { first: LoadId },
-    Invalid { detail: String },
+    Invalid { why: Invalid },                // the file cannot serve; only Unreadable carries (operating-system) text
     NotRead { why: RuleRef },                // e.g. the legacy Codex prompts directory
 }
 pub struct Limit { pub kind: LimitKind, pub value: u64, pub unit: Unit }   // Unit: Bytes | Chars | Lines | Tokens | Hops
@@ -259,6 +259,10 @@ pub enum Problem {
 
 /// Agent knowledge that the UI explains. It lives next to the adapter, in both languages.
 pub struct RuleSpec { pub id: RuleRef, pub en: String, pub ko: String, pub evidence: String }
+pub enum Invalid { Unreadable { os: Option<String> }, NotRegular, NotText, Frontmatter, Toml, Location { which: RefusedLocation }, OutsideRoot }
+pub enum RefusedLocation { ConnectorDownloads, Scratchpad, DeviceOrProcess }
+pub enum ReadOnlyReason { Host, File { why: ReadOnlyWhy }, Rule { rule: RuleRef } }
+pub enum HookRunFailure { EmptyInvocation, ProgramNotFound { program: String }, StartFailed { program: String, os: String } }
 ```
 
 Consequences of this model:
@@ -267,7 +271,7 @@ Consequences of this model:
 - **The literal context is available.** The `render` operation returns the text of each block. Tests compare it with what the real CLI prints.
 - **The path simulator reuses the rules.** `OnAccess` rules are data. `simulate` evaluates them for a target path and also probes the directories between `cwd` and the target with the same rule function the scan uses.
 - **A broken import is a row, not only a warning.** Its load has `Skip::Missing` and points at an `Absent` file.
-- **The backend sends facts.** `Skip`, `Problem`, `Warning` and `HookBlock` are typed and are translated in the frontend. Rule explanations are agent knowledge, so they ship with the adapter as `RuleSpec`s.
+- **The backend sends facts.** `Skip`, `Problem`, `Warning` and `HookBlock` are typed and are translated in the frontend. Rule explanations are agent knowledge, so they ship with the adapter as `RuleSpec`s. Reasons that belong to no agent are in `crates/cm-core/src/core_rules.toml` and travel in `Session.core_rules`. A test fails when code names a rule id that no rules file defines.
 
 ## 4. Write model
 
@@ -427,7 +431,7 @@ The core runs these passes after the adapters, so no adapter repeats them: file 
 
 ```rust
 api! {
-    session(())                                              -> Session;        // version, shell, read_only, launch_cwd, home, os, pending changes
+    session(())                                              -> Session;        // version, shell, read_only, launch_cwd, home, os, pending changes, core_rules
     agents(())                                               -> Vec<AgentInfo>; // id, display name, RuleSpecs, HookSchema
     projects(())                                             -> Vec<KnownProject>;   // path, exists, which agents know it
     scan(ScanReq { cwd })                                    -> Snapshot;
@@ -447,7 +451,7 @@ api! {
 
 The macro expands to `enum Request` (tagged with `op` and `args`), `trait Api` with one async method per row, `dispatch`, and a list of (name, argument type, result type).
 
-`ApiError` is `NotFound | Conflict { path, expected, found, current } | OutsideBoundary { path } | ReadOnly { why } | InvalidEdit { field, why } | Forbidden { why } | Io { detail } | Unauthorized`.
+`ApiError` is `NotFound | Conflict { path, expected, found, current } | OutsideBoundary { path } | ReadOnly { why: ReadOnlyReason } | InvalidEdit { field, why: RuleRef } | Forbidden { why: RuleRef } | HookRun { why: HookRunFailure } | BadRequest | HistoryCorrupt | Io { detail } | Unauthorized`. `Io` carries only text from the operating system. A condition the tool detects itself (a path that is not a regular file, a file over the read limit) is an `InvalidEdit` with a core rule.
 
 **TypeScript stays in step by generation.** `ts-rs` writes one file per type into `ui/src/gen/`. A test writes `ui/src/gen/api-map.ts` from the operation list. The client is `call<K extends keyof ApiMap>(op: K, args: ApiMap[K]['args']): Promise<ApiMap[K]['result']>`. The generated files are committed, and `scripts/check.sh` fails when regeneration changes them. The i18n catalogs are keyed on the generated unions, so a new `Problem` variant fails the type check until both languages render it.
 
@@ -654,3 +658,4 @@ Three candidates wrote this design independently against one grounding file: one
 - Claude planners unit: `AddMemory` has no field for the memory kind, so the topic file gets `metadata.type: project` and no `modified` stamp, since a plan has no clock. A title with no `[a-z0-9]` (Korean, for one) gets the file name `memory-<8 hex of its hash>`.
 - Claude planners unit: the session blocks gain `SkillCatalog` and `AgentCatalog`, both `Approximate`: no run pins their framing, only each entry and the character budget. The oracle comparison keeps to the `Exact` blocks. `MOVING_VARS` gains `SLASH_COMMAND_TOOL_CHAR_BUDGET`, which overrides the skill listing budget. Past the budget, descriptions go from the least-used skill first by `skillUsage` in `~/.claude.json`, aged from the newest use on record because a scan has no clock.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
+- Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.
