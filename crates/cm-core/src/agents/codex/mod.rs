@@ -20,7 +20,7 @@ mod tests;
 
 use std::sync::OnceLock;
 
-use super::{Agent, AgentScan, PlanCx, ScanCx, home_dir, presence, rules_from};
+use super::{Agent, AgentScan, PlanCx, ScanCx, home_dir, presence, rules_from, unbudgeted};
 use crate::model::*;
 use crate::tokens;
 use out::{Block, BlockPart, Out, me};
@@ -81,23 +81,6 @@ fn compute(cx: &ScanCx) -> Computed {
 
     out.blocks.sort_by_key(|b| rank(b.delivery));
     let session: Vec<ContextBlock> = out.blocks.iter().map(context_block).collect();
-    let by_label = {
-        let mut by: Vec<(BlockLabel, u32)> = Vec::new();
-        for block in &session {
-            match by.iter_mut().find(|(l, _)| *l == block.label) {
-                Some((_, n)) => *n += block.tokens,
-                None => by.push((block.label, block.tokens)),
-            }
-        }
-        by
-    };
-    let budget = Budget {
-        session_start: session.iter().map(|b| b.tokens).sum(),
-        by_label,
-        on_access_max: 0,
-        method: TokenMethod::O200kEstimate,
-    };
-
     // Subagents after skills, as the extension list reads.
     let view = AgentView {
         agent: me(),
@@ -107,7 +90,7 @@ fn compute(cx: &ScanCx) -> Computed {
         assumptions: std::mem::take(&mut out.assumptions),
         loads: std::mem::take(&mut out.loads),
         session,
-        budget,
+        budget: unbudgeted(),
         hooks: std::mem::take(&mut out.hooks),
         hook_files: std::mem::take(&mut out.hook_files),
         memory: std::mem::take(&mut out.memory),

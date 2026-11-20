@@ -57,11 +57,6 @@ impl Spans {
             .chain(&self.comments)
             .any(|s| s.range.contains(&offset))
     }
-
-    /// Whether `range` starts inside a fence, a code span or a block comment.
-    pub fn range_in_code_or_comment(&self, range: &Range<usize>) -> bool {
-        self.in_code_or_comment(range.start)
-    }
 }
 
 /// Maps byte offsets to lines and columns.

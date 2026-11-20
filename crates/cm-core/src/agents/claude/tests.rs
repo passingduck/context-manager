@@ -874,7 +874,9 @@ fn render_matches_the_session_blocks_and_symlinks_show_their_target() {
     assert_eq!(text, &want);
     assert_eq!(blocks[0].tokens, crate::tokens::count(text));
     assert_eq!(scan.view.session.len(), 1);
-    assert_eq!(scan.view.budget.session_start, blocks[0].tokens);
+    let mut counted = scan.view.clone();
+    crate::passes::budget(&mut counted);
+    assert_eq!(counted.budget.session_start, blocks[0].tokens);
     assert_eq!(scan.view.session[0].tokens, blocks[0].tokens);
 }
 

@@ -99,7 +99,6 @@ impl Agent for Gemini {
 
         let loads = built.loads;
         view.session = built.composed.iter().map(|c| c.block.clone()).collect();
-        view.budget = budget(&view.session, &loads);
         view.loads = loads;
         view.hooks = hooks.hooks;
         view.hook_files = hooks.files;
@@ -263,27 +262,6 @@ fn system_md(b: &mut Builder) -> Option<compose::SystemMdText> {
         delivered,
     });
     text.map(|text| compose::SystemMdText { load, text })
-}
-
-fn budget(session: &[ContextBlock], loads: &[Load]) -> Budget {
-    let mut by_label: Vec<(BlockLabel, u32)> = Vec::new();
-    for block in session {
-        match by_label.iter_mut().find(|(label, _)| *label == block.label) {
-            Some((_, total)) => *total += block.tokens,
-            None => by_label.push((block.label, block.tokens)),
-        }
-    }
-    let on_access_max = loads
-        .iter()
-        .filter(|l| matches!(l.when, Activation::OnAccess { .. }))
-        .filter_map(|l| l.delivered.as_ref().map(|d| d.tokens))
-        .sum();
-    Budget {
-        session_start: session.iter().map(|b| b.tokens).sum(),
-        by_label,
-        on_access_max,
-        method: TokenMethod::O200kEstimate,
-    }
 }
 
 fn finish(

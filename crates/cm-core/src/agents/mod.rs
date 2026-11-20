@@ -245,6 +245,17 @@ pub(crate) fn home_dir(cx: &ScanCx, role: &'static str, choice: &HomeChoice) -> 
     }
 }
 
+/// The budget an adapter reports. `passes::budget` computes the real one after every adapter
+/// has run, from the view's session blocks and loads.
+pub(crate) fn unbudgeted() -> Budget {
+    Budget {
+        session_start: 0,
+        by_label: Vec::new(),
+        on_access_max: 0,
+        method: TokenMethod::O200kEstimate,
+    }
+}
+
 pub(crate) fn empty_view(agent: AgentId, presence: Presence, homes: Vec<HomeDir>) -> AgentView {
     AgentView {
         agent,
@@ -257,39 +268,12 @@ pub(crate) fn empty_view(agent: AgentId, presence: Presence, homes: Vec<HomeDir>
         assumptions: Vec::new(),
         loads: Vec::new(),
         session: Vec::new(),
-        budget: Budget {
-            session_start: 0,
-            by_label: Vec::new(),
-            on_access_max: 0,
-            method: TokenMethod::O200kEstimate,
-        },
+        budget: unbudgeted(),
         hooks: Vec::new(),
         hook_files: Vec::new(),
         memory: Vec::new(),
         extensions: Vec::new(),
         slots: Vec::new(),
-    }
-}
-
-pub(crate) static NO_HOOKS: HookSchema = HookSchema {
-    events: Vec::new(),
-    handler_kinds: Vec::new(),
-};
-
-/// Resolves the home of an adapter whose view is otherwise empty.
-pub(crate) fn home_only_scan(
-    cx: &ScanCx,
-    agent: AgentId,
-    bin: &str,
-    role: &'static str,
-    choice: HomeChoice,
-) -> AgentScan {
-    let home = home_dir(cx, role, &choice);
-    let presence = presence(cx, bin, home.exists);
-    AgentScan {
-        view: empty_view(agent, presence, vec![home]),
-        files: Vec::new(),
-        diagnostics: Vec::new(),
     }
 }
 

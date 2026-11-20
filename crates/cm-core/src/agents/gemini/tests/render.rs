@@ -74,8 +74,10 @@ fn the_session_blocks_in_the_view_match_the_rendered_blocks() {
             .sum();
         assert_eq!(parts, block.tokens);
     }
+    let mut counted = scanned.view.clone();
+    crate::passes::budget(&mut counted);
     assert_eq!(
-        scanned.view.budget.session_start,
+        counted.budget.session_start,
         rendered.iter().map(|b| b.tokens).sum::<u32>()
     );
 }

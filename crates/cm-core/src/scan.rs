@@ -357,10 +357,10 @@ mod tests {
             &[]
         }
         fn hook_schema(&self) -> &'static HookSchema {
-            &crate::agents::NO_HOOKS
+            &crate::testing::NO_HOOKS
         }
         fn scan(&self, cx: &ScanCx) -> AgentScan {
-            let mut scan = crate::agents::home_only_scan(
+            let mut scan = crate::testing::home_only_scan(
                 cx,
                 self.id(),
                 "claude",

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::{
     Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, home_dir, home_with_env, presence,
-    rules_from,
+    rules_from, unbudgeted,
 };
 use crate::model::*;
 use crate::walk;
@@ -97,7 +97,6 @@ impl Agent for Claude {
         let hook_out = hooks::scan(cx, &setup, &ext);
 
         let blocks = render::session(cx, &setup, &loads, &ext.extensions);
-        let budget = render::budget(&blocks, &loads);
 
         let mut stores = mem.stores;
         stores.extend(agent_stores);
@@ -131,7 +130,7 @@ impl Agent for Claude {
             ),
             loads,
             session: blocks.into_iter().map(|b| b.block).collect(),
-            budget,
+            budget: unbudgeted(),
             hooks: hook_out.hooks,
             hook_files: hook_out.hook_files,
             memory: stores,

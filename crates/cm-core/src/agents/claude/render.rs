@@ -197,35 +197,3 @@ pub(super) fn built(
         },
     }
 }
-
-pub(super) fn budget(blocks: &[Built], loads: &[Load]) -> Budget {
-    let mut by_label: Vec<(BlockLabel, u32)> = Vec::new();
-    for b in blocks {
-        match by_label.iter_mut().find(|(l, _)| *l == b.block.label) {
-            Some((_, t)) => *t += b.block.tokens,
-            None => by_label.push((b.block.label, b.block.tokens)),
-        }
-    }
-    let on_access_max = loads
-        .iter()
-        .filter(|l| delivered(l) && root_is_on_access(loads, l))
-        .filter_map(|l| l.delivered.as_ref())
-        .map(|d| d.tokens)
-        .sum();
-    Budget {
-        session_start: blocks.iter().map(|b| b.block.tokens).sum(),
-        by_label,
-        on_access_max,
-        method: TokenMethod::O200kEstimate,
-    }
-}
-
-fn root_is_on_access(loads: &[Load], load: &Load) -> bool {
-    match (&load.when, &load.via) {
-        (Activation::OnAccess { .. }, _) => true,
-        (Activation::WithHost, Via::Import { host, .. }) => loads
-            .get(host.0 as usize)
-            .is_some_and(|host| root_is_on_access(loads, host)),
-        _ => false,
-    }
-}
