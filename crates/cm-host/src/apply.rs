@@ -9,9 +9,11 @@
 //!    record.
 //! 5. Seal: write the sealed record and remove the pending one.
 //!
-//! One process-wide mutex serializes the whole run.
+//! One mutex per process and a lock on a file in the data directory serialize steps 2 to 5,
+//! within this process and across processes.
 
 use std::fs;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -25,14 +27,18 @@ use cm_core::{
 };
 
 use crate::fsio::{
-    DATA_FILE_MODE, NEW_FILE_MODE, atomic_write, create_private_dir, io_detail, mode_of,
-    write_target,
+    DATA_FILE_MODE, NEW_FILE_MODE, atomic_write, create_private_dir, has_other_names, io_detail,
+    mode_of, write_in_place, write_target,
 };
 use crate::history::{History, new_change_id, now_iso};
 use crate::recovery::{OpState, classify};
 
-/// Serializes `apply` and recovery within this process.
-pub(crate) static PIPELINE: Mutex<()> = Mutex::new(());
+/// Serializes `apply` within this process.
+static PIPELINE: Mutex<()> = Mutex::new(());
+
+/// The file in the data directory whose lock `apply` holds from step 2 to step 5 (design section
+/// 4, "The apply pipeline"). The operating system releases the lock of a process that exits.
+pub(crate) const LOCK_FILE: &str = "apply.lock";
 
 /// Moves a path to the OS trash. A test replaces it.
 pub trait Trasher: Send + Sync {
@@ -85,6 +91,17 @@ pub(crate) struct Ctx {
 }
 
 impl Ctx {
+    /// Opens the lock file, and creates it and the data directory when they are missing.
+    pub(crate) fn lock_file(&self) -> std::io::Result<fs::File> {
+        create_private_dir(self.data_dir.as_path())?;
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(DATA_FILE_MODE)
+            .open(self.data_dir.join(LOCK_FILE).as_path())
+    }
+
     pub fn plan(&self, cwd: &AbsPath, edit: &Edit) -> Result<Preview, ApiError> {
         let env = self.env.with_cwd(cwd.clone());
         let scanned = scan_with_parked(self.agents, &env, Some(&self.parked_dir));
@@ -107,6 +124,9 @@ impl Ctx {
         checkpoint: Checkpoint,
     ) -> Result<ApplyResult, ApiError> {
         let _serialized = PIPELINE.lock().unwrap_or_else(|e| e.into_inner());
+        // Waits while another process applies. Dropping the file at the end releases the lock.
+        let lock = self.lock_file().map_err(io_detail)?;
+        lock.lock().map_err(io_detail)?;
         let now = self.plan(cwd, edit)?;
         // A revert of a record that never finished restores the files at after and leaves a file
         // at neither state as it is: the preview listed it as a conflict (design section 4).
@@ -374,9 +394,17 @@ impl Effects<'_> {
     }
 
     /// Writes through a temp file in the directory of the target. A symlink is followed, so the
-    /// link survives. The mode bits of an existing file are kept.
+    /// link survives. The mode bits of an existing file are kept. A file with other hard links
+    /// is written in place, so all of its names change (design section 4, step 4).
     pub fn write(&self, path: &AbsPath, bytes: &[u8], tag: &str) -> std::io::Result<()> {
         let target = write_target(path);
+        // A symlink to nothing that appeared after the plan. The plan refuses one already there.
+        if target.is_symlink() {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
+        if has_other_names(&target) {
+            return write_in_place(&target, bytes);
+        }
         let own = path.starts_with(self.data_dir);
         if let Some(dir) = target.parent() {
             if own {

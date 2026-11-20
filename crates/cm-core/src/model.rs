@@ -698,7 +698,12 @@ variants! {
     pub enum Place {
         File { path: AbsPath },
         NamedFile { dir: AbsPath, ext: String },
+        /// An item that is a directory: `<dir>/<name>/` with its entry file, such as
+        /// `skills/<name>/SKILL.md`.
         NamedDir { dir: AbsPath, file: String },
+        /// A file with a fixed name in a subdirectory of `dir` that the user names, such as
+        /// Gemini's `src/GEMINI.md`. The subdirectory belongs to the project and is no item.
+        InSubdir { dir: AbsPath, file: String },
     }
 }
 
@@ -813,13 +818,16 @@ variants! {
         /// The file is read by more than one agent.
         SharedFile { agents: Vec<AgentId> },
         ThroughSymlink { target: AbsPath },
+        /// The file has other names: the write goes in place and changes all of them.
+        HardLinked { links: u32 },
         /// Next session, `/reload-plugins`, `/memory reload`.
         TakesEffect { agent: AgentId, when: RuleRef },
         /// Gemini: a new `@word` becomes an import attempt.
         NewImportToken { raw: String },
         /// A parked Claude hook exists only in this tool's data directory.
         ParkedOnThisMachine,
-        /// A directory over 16 MiB: the OS trash is the only copy.
+        /// A directory the plan could not capture completely (design section 4, step 4): the OS
+        /// trash is the only copy.
         NotRevertible,
         /// Gemini: the switch is a name or command that other hooks share, so it switches them too.
         HookKeyShared { others: u32 },

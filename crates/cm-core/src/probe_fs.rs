@@ -33,12 +33,23 @@ pub struct Stat {
     pub mtime_ms: i64,
     /// Any execute bit is set.
     pub executable: bool,
+    /// The number of hard links, the names the file has.
+    pub links: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     pub name: String,
     pub kind: EntryKind,
+}
+
+/// One directory as the lister read it. A name that is not UTF-8 has no entry, because
+/// [`DirEntry::name`] is a `String`. `not_utf8` counts those names, so a caller that must see
+/// every entry knows when it did not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub entries: Arc<Vec<DirEntry>>,
+    pub not_utf8: usize,
 }
 
 /// `read` refuses a larger file. A file is listed with its size and never read.
@@ -53,6 +64,9 @@ pub enum ProbeErrorKind {
     TooLarge {
         bytes: u64,
     },
+    /// `stat` met a symlink whose target does not exist. A reader finds nothing there, so
+    /// [`ProbeError::is_not_found`] holds. A writer must not create the target (design section 4).
+    DanglingLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,7 +77,10 @@ pub struct ProbeError {
 
 impl ProbeError {
     pub fn is_not_found(&self) -> bool {
-        self.kind == ProbeErrorKind::Io(io::ErrorKind::NotFound)
+        matches!(
+            self.kind,
+            ProbeErrorKind::Io(io::ErrorKind::NotFound) | ProbeErrorKind::DanglingLink
+        )
     }
 
     /// The operating system's text, for a failure the system reported.
@@ -89,6 +106,7 @@ impl ProbeError {
                     os: self.os_detail(),
                 },
             },
+            ProbeErrorKind::DanglingLink => Skip::Missing,
         }
     }
 
@@ -123,6 +141,7 @@ impl From<ProbeError> for ApiError {
         let why = match err.kind {
             ProbeErrorKind::NotRegular => "edit.not_regular_file",
             ProbeErrorKind::TooLarge { .. } => "edit.file_too_large",
+            ProbeErrorKind::DanglingLink => "edit.dangling_symlink",
             ProbeErrorKind::Io(_) => return ApiError::Io { detail: err.detail },
         };
         ApiError::InvalidEdit {
@@ -144,7 +163,7 @@ type Cached<T> = Result<T, ProbeError>;
 #[derive(Default)]
 struct State {
     reads: HashMap<AbsPath, Cached<Arc<Vec<u8>>>>,
-    lists: HashMap<AbsPath, Cached<Arc<Vec<DirEntry>>>>,
+    lists: HashMap<AbsPath, Cached<Listing>>,
     stats: HashMap<AbsPath, Cached<Stat>>,
     real_paths: HashMap<AbsPath, Cached<AbsPath>>,
     probes: BTreeMap<AbsPath, bool>,
@@ -171,13 +190,19 @@ impl ProbeFs {
         result
     }
 
-    /// Entries sorted by name.
+    /// Entries sorted by name. A name that is not UTF-8 is left out: [`ProbeFs::listing`] counts
+    /// them.
     pub fn list(&self, path: &AbsPath) -> Cached<Arc<Vec<DirEntry>>> {
+        self.listing(path).map(|listing| listing.entries)
+    }
+
+    /// The entries of `list`, with the count of names it left out.
+    pub fn listing(&self, path: &AbsPath) -> Cached<Listing> {
         let mut state = self.state.lock().expect("probe state");
         if let Some(cached) = state.lists.get(path) {
             return cached.clone();
         }
-        let result = list_dir(path).map(Arc::new);
+        let result = list_dir(path);
         state.probes.insert(path.clone(), result.is_ok());
         state.lists.insert(path.clone(), result.clone());
         result
@@ -267,6 +292,16 @@ fn is_executable(_: &fs::Metadata) -> bool {
     true
 }
 
+#[cfg(unix)]
+fn link_count(meta: &fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::nlink(meta)
+}
+
+#[cfg(not(unix))]
+fn link_count(_: &fs::Metadata) -> u64 {
+    1
+}
+
 /// Checks the kind and the size before it opens the file: opening a named pipe blocks until a
 /// writer comes, and a device can stream without end. It reads one byte past the limit at most,
 /// whatever the stat said, because a file can grow after the stat.
@@ -289,24 +324,34 @@ fn read_regular(path: &AbsPath) -> Cached<Vec<u8>> {
 }
 
 fn stat_path(path: &AbsPath) -> Cached<Stat> {
-    let meta = fs::metadata(path.as_path())?;
-    let is_symlink = fs::symlink_metadata(path.as_path())
-        .map(|m| m.is_symlink())
-        .unwrap_or(false);
+    let is_symlink = fs::symlink_metadata(path.as_path()).is_ok_and(|m| m.is_symlink());
+    let meta = match fs::metadata(path.as_path()) {
+        Ok(meta) => meta,
+        Err(err) if is_symlink && err.kind() == io::ErrorKind::NotFound => {
+            return Err(ProbeError {
+                kind: ProbeErrorKind::DanglingLink,
+                detail: err.to_string(),
+            });
+        }
+        Err(err) => return Err(err.into()),
+    };
     Ok(Stat {
         kind: kind_of(meta.file_type()),
         is_symlink,
         len: meta.len(),
         mtime_ms: (mtime_ns(&meta) / 1_000_000) as i64,
         executable: is_executable(&meta),
+        links: link_count(&meta),
     })
 }
 
-fn list_dir(path: &AbsPath) -> Cached<Vec<DirEntry>> {
+fn list_dir(path: &AbsPath) -> Cached<Listing> {
     let mut entries = Vec::new();
+    let mut not_utf8 = 0;
     for entry in fs::read_dir(path.as_path())? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            not_utf8 += 1;
             continue;
         };
         // A symlink to a directory lists as a directory, as the agents see it.
@@ -317,7 +362,10 @@ fn list_dir(path: &AbsPath) -> Cached<Vec<DirEntry>> {
         entries.push(DirEntry { name, kind });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
+    Ok(Listing {
+        entries: Arc::new(entries),
+        not_utf8,
+    })
 }
 
 /// Hashes the length and modification time of each path, or that it is missing. The host calls
@@ -401,5 +449,15 @@ mod tests {
         assert_eq!(names, ["a", "b", "link"]);
         assert_eq!(fs.real_path(&abs(&dir, "link")).unwrap(), abs(&dir, "a"));
         assert!(fs.stat(&abs(&dir, "link")).unwrap().is_symlink);
+    }
+
+    #[test]
+    fn a_symlink_to_nothing_is_not_found_and_says_it_is_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = abs(&dir, "CLAUDE.md");
+        std::os::unix::fs::symlink("missing/target.md", link.as_path()).unwrap();
+        let err = ProbeFs::new().stat(&link).unwrap_err();
+        assert_eq!(err.kind, ProbeErrorKind::DanglingLink);
+        assert!(err.is_not_found());
     }
 }

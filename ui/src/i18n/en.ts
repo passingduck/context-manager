@@ -105,6 +105,7 @@ const warning: WarnMsgs = {
   sessionMayOverwrite: (v, c) => `A running ${c.name(v.agent)} session may write this file again from the copy it read at startup and undo this change. Restart the session after you save.`,
   sharedFile: (v, c) => `More than one agent reads this file: ${v.agents.map(c.name).join(", ")}. The change reaches all of them.`,
   throughSymlink: (v, c) => `This path is a symbolic link. The write goes to ${c.d(v.target)}.`,
+  hardLinked: (v) => `This file has ${v.links} names through hard links. The write changes the file in place, so every name gets the new text.`,
   takesEffect: (v, c) => `${c.name(v.agent)}: ${c.rule(v.when)}`,
   newImportToken: (v) => `The text ${v.raw} becomes an import attempt. The agent will try to load a file with that name.`,
   parkedOnThisMachine: () => "The parked hook is kept in this tool's data directory on this machine only. It does not follow the project to another machine.",

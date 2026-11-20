@@ -238,7 +238,7 @@ pub struct Extension {
     pub status: ExtStatus,                   // Active | Conditional { patterns } | Hidden { why } | Shadowed { by } | Rejected { why } | Disabled { by }
 }
 pub struct Slot { pub id: SlotId, pub place: Place, pub new_kind: NewItemKind, pub scope: Scope, pub rule: RuleRef }
-pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String } }
+pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String }, InSubdir { dir: AbsPath, file: String } }
 pub enum NewItemKind { Instructions, Rule, Skill, Command, Subagent, Memory }
 
 pub struct Diagnostic { pub severity: Severity, pub agent: Option<AgentId>, pub at: Subject, pub problem: Problem, pub fix: Option<Edit> }
@@ -313,7 +313,7 @@ pub enum Warning {
     TakesEffect { agent: AgentId, when: RuleRef },   // next session, /reload-plugins, /memory reload
     NewImportToken { raw: String },  // Gemini: a new "@word" becomes an import attempt
     ParkedOnThisMachine,             // a parked Claude hook exists only in this tool's data directory
-    NotRevertible,                   // a directory over 16 MiB: the OS trash is the only copy
+    NotRevertible,                   // a directory the plan could not capture completely: the OS trash is the only copy
 }
 pub enum ApplyResult {
     Applied { change: ChangeId, files: Vec<(AbsPath, Option<Revision>)>, not_trashed: Vec<AbsPath> },
@@ -343,7 +343,7 @@ One mutex per process serializes `apply`, and a lock on a file in the data direc
 1. **Policy.** Refuse when the host runs with `--read-only`.
 2. **Plan again.** Run a fresh scan of `cwd` and plan the edit against it. If the plan is empty, return `AlreadyApplied`. If its digest differs from the one the client sent, the disk changed after the preview: return `Stale` with the new preview and write nothing.
 3. **Journal.** Store the before and after content of each file as blobs named by their hash. Then write `changes/<id>.pending.json`. Each write is a temp file, a sync and a rename.
-4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). A file that has more than one hard link is written in place instead, because a rename would leave the other names on the old content. `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
+4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). A file that has more than one hard link is written in place instead, because a rename would leave the other names on the old content. `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, a name the lister cannot represent or a symlink, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
 5. **Seal.** Write `changes/<id>.json` and remove the pending file.
 
 | crash point | left on disk | what recovery does |
@@ -657,5 +657,10 @@ Three candidates wrote this design independently against one grounding file: one
 - Claude planners unit: `Planner::plan` offers `Edit::Trash` to the agents' `plan` before the generic plan, through `agent_plan` in `edit.rs`, so that trashing a memory topic also removes its index line. A `None` answer keeps the generic plan.
 - Claude planners unit: `AddMemory` has no field for the memory kind, so the topic file gets `metadata.type: project` and no `modified` stamp, since a plan has no clock. A title with no `[a-z0-9]` (Korean, for one) gets the file name `memory-<8 hex of its hash>`.
 - Claude planners unit: the session blocks gain `SkillCatalog` and `AgentCatalog`, both `Approximate`: no run pins their framing, only each entry and the character budget. The oracle comparison keeps to the `Exact` blocks. `MOVING_VARS` gains `SLASH_COMMAND_TOOL_CHAR_BUDGET`, which overrides the skill listing budget. Past the budget, descriptions go from the least-used skill first by `skillUsage` in `~/.claude.json`, aged from the newest use on record because a scan has no clock.
+- Write safety unit: the pipeline lock is `apply.lock` in the data directory. A read-only host's recovery classifies without it, because it writes nothing and opening the lock file would create it.
+- Write safety unit: the root in `Warning::ThroughSymlink` ("below the slot's root") is the deepest of the home directory, the project root and `cwd` that holds the path. A path below none of them is checked at its own entry only. `ProbeErrorKind` gains `DanglingLink`; `is_not_found` still holds for it, so a reader sees such a link as absent and only the planner refuses it.
+- Write safety unit: `ProbeFs`'s `Stat` gains `links`, the hard link count, so the plan warns `HardLinked` through the one reader. `apply` decides to write in place from the link count on disk at the moment of the write.
+- Write safety unit: `ProbeFs` gains `listing`, the entries of a directory with `not_utf8`, the count of names it has no entry for. `list` returns the entries alone, so the adapters read directories as before. The walk of a directory trashed whole does not follow a symlink inside it.
+- Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
 - Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.

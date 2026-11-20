@@ -179,7 +179,7 @@ fn new_item(cx: &PlanCx, slot: &SlotId, name: Option<&str>) -> Result<Preview, A
                 name.to_owned(),
             )
         }
-        Place::NamedDir { dir, file } => {
+        Place::NamedDir { dir, file } | Place::InSubdir { dir, file } => {
             let name = named()?;
             (dir.join(name).join(file), name.to_owned())
         }
