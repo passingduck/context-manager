@@ -506,7 +506,10 @@ fn run_claude(claude: &Path, t: &Tree, cwd: &Path) -> Run {
         .current_dir(cwd)
         .env_clear()
         .env("HOME", t.home())
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env(
+            "PATH",
+            cm_core::testing::cli_path(&t.root.join("bin"), "/usr/bin:/bin:/usr/sbin:/sbin"),
+        )
         .env("TERM", "dumb")
         .env("CLAUDE_CONFIG_DIR", t.cfg())
         .env("ANTHROPIC_API_KEY", "sk-ant-dummy-capture")
