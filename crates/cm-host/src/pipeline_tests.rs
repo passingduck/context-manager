@@ -488,6 +488,130 @@ async fn a_read_only_host_classifies_a_pending_record_and_writes_nothing() {
     assert_eq!(ro.session(()).await.unwrap().pending.len(), 1);
 }
 
+/// The name and bytes of every file in `dir`, sorted.
+fn files_in(dir: &AbsPath) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut files: Vec<_> = std::fs::read_dir(dir.as_path())
+        .unwrap()
+        .map(|e| {
+            let path = e.unwrap().path();
+            (path.clone(), std::fs::read(path).unwrap())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Design section 4, "The apply pipeline": a lock on a file in the data directory serializes
+/// `apply` across processes. Another process holding it is applying a change, so recovery leaves
+/// the pending record and its temp files alone, and an apply here waits.
+#[tokio::test]
+async fn while_another_process_holds_the_lock_recovery_leaves_its_change_alone_and_apply_waits() {
+    let two = Two::new();
+    two.crash_after(Step::Op(0)).await;
+    let data = two.fx.root().join("data");
+    let changes = data.join("history/changes");
+    let id = crate::History::open(data.as_path()).pending().remove(0).id;
+    let tmp = two.fx.project_path(&format!(".cm-{}-1.tmp", id.0));
+    two.fx.write(&tmp, "half written");
+    let records_before = files_in(&changes);
+
+    let other = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(data.join(crate::apply::LOCK_FILE).as_path())
+        .unwrap();
+    other.lock().unwrap();
+
+    let host = two.restart();
+    let records = history(&host).await;
+    assert_eq!(
+        records[0].state,
+        ChangeState::Pending,
+        "recovery classified a change another process is applying"
+    );
+    assert_eq!(
+        files_in(&changes),
+        records_before,
+        "recovery wrote a record while another process held the lock"
+    );
+    assert!(
+        tmp.as_path().exists(),
+        "recovery removed a temp file of a change in progress"
+    );
+
+    let edit = save(&two.b, "b0", "b2");
+    let preview = plan(&host, &two.fx, &edit).await.unwrap();
+    let digest = preview.digest.clone();
+    let host = Arc::new(host);
+    let waiting = {
+        let (host, fx_project, edit) = (host.clone(), two.fx.project(), edit.clone());
+        tokio::spawn(async move {
+            host.apply(ApplyReq {
+                cwd: fx_project,
+                edit,
+                digest,
+            })
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished() && read(&two.b) == "b0",
+        "an apply ran while another process held the lock"
+    );
+
+    drop(other);
+    applied(waiting.await.unwrap().unwrap());
+    assert_eq!(read(&two.b), "b2");
+}
+
+/// Two hosts over one data directory, as two windows of the tool. A history read on the second
+/// while the first is between two operations of a change returns, and leaves that change alone.
+#[tokio::test]
+async fn a_history_read_on_a_second_host_during_an_apply_leaves_the_change_alone() {
+    let two = Two::new();
+    let first = host(&two.fx, two.agent());
+    let second = host(&two.fx, two.agent());
+    let preview = plan(&first, &two.fx, &two.edit()).await.unwrap();
+    let (paused_tx, paused) = std::sync::mpsc::channel();
+    let (resume, resume_rx) = std::sync::mpsc::channel::<()>();
+    let applying = {
+        let (ctx, cwd, edit, digest) = (
+            first.ctx.clone(),
+            two.fx.project(),
+            two.edit(),
+            preview.digest.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            ctx.apply(&cwd, &edit, &digest, &|step| {
+                if step == Step::Op(0) {
+                    paused_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                }
+                Ok(())
+            })
+        })
+    };
+    paused.recv_timeout(Duration::from_secs(10)).unwrap();
+    let changes = two.fx.root().join("data/history/changes");
+    let records_before = files_in(&changes);
+
+    let read_during = tokio::time::timeout(Duration::from_secs(5), history(&second)).await;
+    let records_during = files_in(&changes);
+    resume.send(()).unwrap();
+    let records = read_during.expect("a history read waited for an apply on another host");
+    assert_eq!(records[0].state, ChangeState::Pending);
+    assert_eq!(
+        records_during, records_before,
+        "a history read changed the record of a change in progress"
+    );
+
+    applied(applying.await.unwrap().unwrap());
+    assert_eq!((read(&two.a).as_str(), read(&two.b).as_str()), ("a1", "b1"));
+    assert_eq!(history(&second).await[0].state, ChangeState::Sealed);
+}
+
 #[tokio::test]
 async fn a_revert_of_a_record_that_needs_attention_restores_its_files_and_resolves_it() {
     let two = Two::new();

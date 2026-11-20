@@ -11,12 +11,16 @@
 //! The decision is a function of the disk, so a second run changes nothing. Recovery runs when
 //! the host starts and when the history is read. In a read-only host it classifies and reports
 //! and writes nothing.
+//!
+//! Recovery takes the lock of the apply pipeline without waiting. While a process holds it, that
+//! process is applying a change: its record is pending and its temp files are in use, so the
+//! round leaves every record and temp file alone.
 
 use std::fs;
 
 use cm_core::{AbsPath, ChangeId, ChangeRecord, ChangeState, JournalOp};
 
-use crate::apply::{Ctx, PIPELINE, disk_hash};
+use crate::apply::{Ctx, disk_hash};
 use crate::fsio::write_target;
 use crate::history::BLOB_MAX_AGE;
 
@@ -88,8 +92,13 @@ fn remove_temp_files(record: &ChangeRecord) {
 
 /// `write` is false in a read-only host: the records are classified and left as they are.
 pub(crate) fn recover(ctx: &Ctx, write: bool) -> Report {
-    let _serialized = PIPELINE.lock().unwrap_or_else(|e| e.into_inner());
     let mut report = Report::default();
+    // Held to the end of the round. A read-only round writes nothing, so it takes no lock.
+    let _lock = match write.then(|| ctx.lock_file()) {
+        None => None,
+        Some(Ok(file)) if file.try_lock().is_ok() => Some(file),
+        Some(_) => return report,
+    };
     if write {
         ctx.history.drop_closed_twins();
     }
