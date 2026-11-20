@@ -514,6 +514,14 @@ impl<'a> Planner<'a> {
             if let Some(target) = landing {
                 warnings.push(Warning::ThroughSymlink { target });
             }
+            // Design section 4, step 4: a file with other names is written in place.
+            if let Action::Write { .. } = op.action
+                && let Ok(stat) = self.fs().stat(&op.path)
+                && stat.links > 1
+            {
+                let links = u32::try_from(stat.links).unwrap_or(u32::MAX);
+                warnings.push(Warning::HardLinked { links });
+            }
             let users = self.users(&op.path);
             if users.len() > 1 {
                 warnings.push(Warning::SharedFile { agents: users });

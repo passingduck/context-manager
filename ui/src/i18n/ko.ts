@@ -76,6 +76,7 @@ const warning: typeof en.warning = {
   sessionMayOverwrite: (v, c) => `실행 중인 ${c.name(v.agent)} 세션이 시작할 때 읽은 사본으로 이 파일을 다시 써서 이 변경을 되돌릴 수 있습니다. 저장한 뒤 세션을 다시 시작하세요.`,
   sharedFile: (v, c) => `이 파일은 에이전트 여러 개가 읽습니다(${v.agents.map(c.name).join(", ")}). 변경은 모두에게 적용됩니다.`,
   throughSymlink: (v, c) => `이 경로는 심볼릭 링크입니다. 쓰기는 ${c.d(v.target)}에 적용됩니다.`,
+  hardLinked: (v) => `이 파일은 하드 링크로 이름이 ${v.links}개 있습니다. 쓰기는 파일을 그 자리에서 바꾸므로 모든 이름이 새 내용을 갖게 됩니다.`,
   takesEffect: (v, c) => `${c.name(v.agent)}: ${c.rule(v.when)}`,
   newImportToken: (v) => `${v.raw} 텍스트가 가져오기 시도로 바뀝니다. 에이전트가 그 이름의 파일을 불러오려고 합니다.`,
   parkedOnThisMachine: () => "보관한 훅은 이 컴퓨터의 이 도구 데이터 디렉터리에만 있습니다. 프로젝트를 다른 컴퓨터로 옮겨도 따라가지 않습니다.",

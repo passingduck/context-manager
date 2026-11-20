@@ -1126,6 +1126,44 @@ async fn a_project_below_a_symlinked_directory_gets_no_symlink_warning() {
     );
 }
 
+/// Design section 4, step 4: a file with more than one hard link is written in place, because a
+/// rename would leave the other names on the old content. A revert restores every name.
+#[tokio::test]
+async fn a_save_of_a_hard_linked_file_changes_every_name_and_a_revert_restores_them() {
+    use std::os::unix::fs::MetadataExt;
+    let fx = Fixture::new();
+    let agents_md = fx.project_path("AGENTS.md");
+    let claude_md = fx.project_path("CLAUDE.md");
+    fx.write(&agents_md, "shared v1\n");
+    std::fs::hard_link(agents_md.as_path(), claude_md.as_path()).unwrap();
+    let host = host(&fx, claims(&[&agents_md, &claude_md]));
+    let names = || {
+        let links = std::fs::metadata(agents_md.as_path()).unwrap().nlink();
+        (read(&claude_md), read(&agents_md), links)
+    };
+
+    let edit = save(&claude_md, "shared v1\n", "shared v2\n");
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::HardLinked { links: 2 }),
+        "the preview does not say the file has other names: {:?}",
+        preview.warnings
+    );
+    let (change, ..) = applied(apply(&host, &fx, &edit, &preview.digest).await.unwrap());
+    assert_eq!(
+        names(),
+        ("shared v2\n".into(), "shared v2\n".into(), 2),
+        "a save split the hard link"
+    );
+
+    applied(run(&host, &fx, &Edit::Revert { change }).await.unwrap());
+    assert_eq!(
+        names(),
+        ("shared v1\n".into(), "shared v1\n".into(), 2),
+        "a revert split the hard link"
+    );
+}
+
 #[tokio::test]
 async fn the_mode_bits_of_a_file_survive_a_write() {
     let fx = Fixture::new();

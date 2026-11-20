@@ -793,6 +793,8 @@ variants! {
         /// The file is read by more than one agent.
         SharedFile { agents: Vec<AgentId> },
         ThroughSymlink { target: AbsPath },
+        /// The file has other names: the write goes in place and changes all of them.
+        HardLinked { links: u32 },
         /// Next session, `/reload-plugins`, `/memory reload`.
         TakesEffect { agent: AgentId, when: RuleRef },
         /// Gemini: a new `@word` becomes an import attempt.

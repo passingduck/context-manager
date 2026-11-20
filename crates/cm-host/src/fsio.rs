@@ -2,7 +2,7 @@
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use cm_core::AbsPath;
@@ -53,6 +53,21 @@ pub fn atomic_write(target: &Path, tmp: &Path, bytes: &[u8], mode: u32) -> io::R
         let _ = dir.sync_all();
     }
     Ok(())
+}
+
+/// Whether `path` is a file with more than one hard link. A rename over it would give this name
+/// a new inode and leave the other names on the old content.
+pub fn has_other_names(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.nlink() > 1)
+}
+
+/// Writes `bytes` over the content of `target` and syncs it. The inode stays, so every hard link
+/// to it reads the new content. Unlike [`atomic_write`], a crash can leave the file half written;
+/// the history holds its before content.
+pub fn write_in_place(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).truncate(true).open(target)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 /// Writes a file of the data directory: temp file, sync, rename, mode 0600.

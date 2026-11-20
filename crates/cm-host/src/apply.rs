@@ -27,8 +27,8 @@ use cm_core::{
 };
 
 use crate::fsio::{
-    DATA_FILE_MODE, NEW_FILE_MODE, atomic_write, create_private_dir, io_detail, mode_of,
-    write_target,
+    DATA_FILE_MODE, NEW_FILE_MODE, atomic_write, create_private_dir, has_other_names, io_detail,
+    mode_of, write_in_place, write_target,
 };
 use crate::history::{History, new_change_id, now_iso};
 use crate::recovery::{OpState, classify};
@@ -394,12 +394,16 @@ impl Effects<'_> {
     }
 
     /// Writes through a temp file in the directory of the target. A symlink is followed, so the
-    /// link survives. The mode bits of an existing file are kept.
+    /// link survives. The mode bits of an existing file are kept. A file with other hard links
+    /// is written in place, so all of its names change (design section 4, step 4).
     pub fn write(&self, path: &AbsPath, bytes: &[u8], tag: &str) -> std::io::Result<()> {
         let target = write_target(path);
         // A symlink to nothing that appeared after the plan. The plan refuses one already there.
         if target.is_symlink() {
             return Err(std::io::ErrorKind::NotFound.into());
+        }
+        if has_other_names(&target) {
+            return write_in_place(&target, bytes);
         }
         let own = path.starts_with(self.data_dir);
         if let Some(dir) = target.parent() {

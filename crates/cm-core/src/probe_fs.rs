@@ -31,6 +31,8 @@ pub struct Stat {
     pub mtime_ms: i64,
     /// Any execute bit is set.
     pub executable: bool,
+    /// The number of hard links, the names the file has.
+    pub links: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,6 +231,16 @@ fn is_executable(_: &fs::Metadata) -> bool {
     true
 }
 
+#[cfg(unix)]
+fn link_count(meta: &fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::nlink(meta)
+}
+
+#[cfg(not(unix))]
+fn link_count(_: &fs::Metadata) -> u64 {
+    1
+}
+
 /// Checks the kind and the size before it opens the file: opening a named pipe blocks until a
 /// writer comes, and a device can stream without end. It reads one byte past the limit at most,
 /// whatever the stat said, because a file can grow after the stat.
@@ -268,6 +280,7 @@ fn stat_path(path: &AbsPath) -> Cached<Stat> {
         len: meta.len(),
         mtime_ms: (mtime_ns(&meta) / 1_000_000) as i64,
         executable: is_executable(&meta),
+        links: link_count(&meta),
     })
 }
 

@@ -3,4 +3,4 @@ import type { AbsPath } from "./AbsPath";
 import type { AgentId } from "./AgentId";
 import type { RuleRef } from "./RuleRef";
 
-export type Warning = { "kind": "hookTrustReset" } | { "kind": "agentAckReset" } | { "kind": "agentAlsoWrites", agent: AgentId, } | { "kind": "sessionMayOverwrite", agent: AgentId, } | { "kind": "sharedFile", agents: Array<AgentId>, } | { "kind": "throughSymlink", target: AbsPath, } | { "kind": "takesEffect", agent: AgentId, when: RuleRef, } | { "kind": "newImportToken", raw: string, } | { "kind": "parkedOnThisMachine" } | { "kind": "notRevertible" } | { "kind": "hookKeyShared", others: number, };
+export type Warning = { "kind": "hookTrustReset" } | { "kind": "agentAckReset" } | { "kind": "agentAlsoWrites", agent: AgentId, } | { "kind": "sessionMayOverwrite", agent: AgentId, } | { "kind": "sharedFile", agents: Array<AgentId>, } | { "kind": "throughSymlink", target: AbsPath, } | { "kind": "hardLinked", links: number, } | { "kind": "takesEffect", agent: AgentId, when: RuleRef, } | { "kind": "newImportToken", raw: string, } | { "kind": "parkedOnThisMachine" } | { "kind": "notRevertible" } | { "kind": "hookKeyShared", others: number, };
