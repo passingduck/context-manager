@@ -1273,6 +1273,186 @@ async fn a_save_of_a_hard_linked_file_changes_every_name_and_a_revert_restores_t
     );
 }
 
+/// From the pending record on, the tests below limit the size of the files the process writes
+/// to this. An in-place write of a longer text then truncates the file, writes up to the limit
+/// and fails with EFBIG, as it would on a full disk.
+const WRITE_LIMIT: usize = 16 * 1024;
+
+/// Runs the test `name` of this binary again in a child process and returns false. In that child
+/// it returns true. A test that changes a limit of the whole process runs its body there, so the
+/// tests beside it in this process keep their limits.
+fn in_child(name: &str) -> bool {
+    const CHILD: &str = "CM_TEST_CHILD";
+    if std::env::var(CHILD).as_deref() == Ok(name) {
+        return true;
+    }
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            &format!("pipeline_tests::{name}"),
+            "--exact",
+            "--test-threads=1",
+        ])
+        .env(CHILD, name)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success() && text.contains(" 1 passed"), "{text}");
+    false
+}
+
+/// Sets the size limit for the files this process writes, or lifts it (`None`). The signal a
+/// write past the limit raises is ignored, so the write fails with EFBIG instead.
+fn limit_file_size(bytes: Option<usize>) {
+    // SAFETY: `signal`, `getrlimit` and `setrlimit` get valid arguments, and `limit` outlives
+    // both calls that take its address.
+    unsafe {
+        libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit), 0);
+        limit.rlim_cur = bytes.map_or(limit.rlim_max, |b| b as libc::rlim_t);
+        assert_eq!(libc::setrlimit(libc::RLIMIT_FSIZE, &limit), 0);
+    }
+}
+
+/// A change of `A.md` and of `B.md`, which has a second name, `LINK.md`, so the tool writes it
+/// in place. Its new text is longer than [`WRITE_LIMIT`].
+struct InPlace {
+    fx: Fixture,
+    a: AbsPath,
+    b: AbsPath,
+    link: AbsPath,
+    host: Host,
+}
+
+impl InPlace {
+    fn new(b_text: &str) -> InPlace {
+        let fx = Fixture::new();
+        let a = fx.project_path("A.md");
+        let b = fx.project_path("B.md");
+        let link = fx.project_path("LINK.md");
+        fx.write(&a, "a0");
+        fx.write(&b, b_text);
+        std::fs::hard_link(b.as_path(), link.as_path()).unwrap();
+        let host = host(
+            &fx,
+            TestAgent {
+                files: vec![a.clone(), b.clone()],
+                writes: vec![
+                    (a.clone(), "a1".into()),
+                    (b.clone(), "b1".repeat(WRITE_LIMIT)),
+                ],
+                ..TestAgent::default()
+            },
+        );
+        InPlace {
+            fx,
+            a,
+            b,
+            link,
+            host,
+        }
+    }
+
+    /// Applies the change. `at_pending` runs once the pending record is written.
+    async fn apply(&self, at_pending: impl Fn()) -> ApiError {
+        let edit = Two::new().edit();
+        let preview = plan(&self.host, &self.fx, &edit).await.unwrap();
+        assert_eq!(preview.change_set.ops.len(), 2);
+        assert!(preview.warnings.contains(&Warning::HardLinked { links: 2 }));
+        self.host
+            .ctx
+            .apply(&self.fx.project(), &edit, &preview.digest, &|step| {
+                if step == Step::Pending {
+                    at_pending();
+                }
+                Ok(())
+            })
+            .unwrap_err()
+    }
+
+    /// The apply with the file size limit in place, from the pending record to its return.
+    async fn apply_until_the_disk_is_full(&self) -> ApiError {
+        let err = self.apply(|| limit_file_size(Some(WRITE_LIMIT))).await;
+        limit_file_size(None);
+        err
+    }
+}
+
+/// Design section 4, "A failed apply is not a crash", and step 4: an in-place write that fails
+/// after it truncated the file has changed it. The undo puts the text from before back, and every
+/// name of the file reads it again.
+#[tokio::test]
+async fn an_in_place_write_that_fails_halfway_is_undone_on_every_name_and_aborted() {
+    if !in_child("an_in_place_write_that_fails_halfway_is_undone_on_every_name_and_aborted") {
+        return;
+    }
+    use std::os::unix::fs::MetadataExt;
+    let t = InPlace::new("b0\n");
+    // Each file of the project by name, size and hash.
+    let disk = || -> Vec<_> {
+        files_in(&t.fx.project())
+            .into_iter()
+            .map(|(path, bytes)| (path, bytes.len(), sha256_hex(&bytes)))
+            .collect()
+    };
+    let before = disk();
+
+    let err = t.apply_until_the_disk_is_full().await;
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!(disk(), before, "part of the failed change is on disk");
+    assert_eq!((read(&t.b), read(&t.link)), ("b0\n".into(), "b0\n".into()));
+    assert_eq!(std::fs::metadata(t.b.as_path()).unwrap().nlink(), 2);
+    let records = history(&t.host).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, ChangeState::Aborted);
+    assert!(t.host.session(()).await.unwrap().pending.is_empty());
+}
+
+/// The same failure, and the restore of the text from before fails too: the record needs
+/// attention, because the history must not say that nothing of the change is on disk.
+#[tokio::test]
+async fn an_in_place_write_whose_restore_fails_too_needs_attention() {
+    if !in_child("an_in_place_write_whose_restore_fails_too_needs_attention") {
+        return;
+    }
+    let t = InPlace::new(&"b0".repeat(WRITE_LIMIT * 3 / 4));
+
+    let err = t.apply_until_the_disk_is_full().await;
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!(read(&t.a), "a0");
+    let records = history(&t.host).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, ChangeState::NeedsAttention);
+    assert_eq!(
+        t.host.session(()).await.unwrap().pending,
+        vec![records[0].id.clone()]
+    );
+}
+
+/// The operator edits the hard-linked file after the plan. The hash check fails before the write
+/// opens the file, so the edit is the operator's and stays on every name.
+#[tokio::test]
+async fn an_outside_edit_before_an_in_place_write_stays_on_every_name() {
+    let t = InPlace::new("b0\n");
+
+    let err = t
+        .apply(|| std::fs::write(t.b.as_path(), "operator\n").unwrap())
+        .await;
+    assert!(matches!(err, ApiError::Conflict { .. }), "{err:?}");
+    assert_eq!(read(&t.a), "a0");
+    assert_eq!(
+        (read(&t.b), read(&t.link)),
+        ("operator\n".into(), "operator\n".into()),
+        "the undo wrote over the operator's edit"
+    );
+    let records = history(&t.host).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].state, ChangeState::Aborted);
+}
+
 #[tokio::test]
 async fn the_mode_bits_of_a_file_survive_a_write() {
     let fx = Fixture::new();
