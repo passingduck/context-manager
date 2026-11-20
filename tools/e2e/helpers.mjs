@@ -88,7 +88,8 @@ export async function trashFromRow(t, agent, file) {
 
 /** Waits until the apply dialog shows the review, clicking through a first-use explanation. */
 export async function waitReview(page) {
-  await page.until(`!!document.querySelector("[data-testid=apply-confirm], [data-testid=apply-continue]")`, "the apply dialog");
+  // A plan that fails shows its error in the dialog instead. Return then, so the caller's assertions report it.
+  await page.until(`!!document.querySelector("[data-testid=apply-confirm], [data-testid=apply-continue], [role=dialog] [role=alert]")`, "the apply dialog");
   if (await page.count("[data-testid=apply-continue]")) {
     await page.click("[data-testid=apply-continue]");
     await page.waitFor("[data-testid=apply-confirm]");
