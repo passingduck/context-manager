@@ -229,6 +229,7 @@ UndoNext(p, ok) ==
 
 \* The operator writes a file outside the tool: a new text, or a checkout of the text
 \* the file held at the start (Absent deletes it).
+\*   code: none; an editor, git or an agent CLI, which take no lock
 OutsideEdit(f, t) ==
     /\ outside < MaxOutside
     /\ t # disk[f]
@@ -544,6 +545,7 @@ SealRemove(p) ==
                    planned>>
 
 \* Only in the variant SealBeforeLastOp: the apply returns after its last operation.
+\*   code: none; the variant moves `self.history.seal` in Ctx::run before the last run_op
 ApplyReturn(p) ==
     /\ pc[p] = "a_return"
     /\ Return(p, "ok", FALSE)
