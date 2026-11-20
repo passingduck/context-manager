@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePieceText, useStepPieces, useTrace } from "../api/queries";
 import { useProject } from "../app/project";
 import { Badge, Button, ErrorNote, Loading, Mono } from "../components/ui";
@@ -27,7 +27,7 @@ export function CallDetail({ route, go }: { route: Route; go: Go }) {
   if (!key || !trace.data || route.call < 1 || route.call > trace.data.steps.length) {
     return (
       <div className="grid h-full place-items-center p-6 text-center text-muted">
-        <p className="max-w-xs">{key && trace.isPending ? t.loading : t.sessions.selectCall}</p>
+        <p className="max-w-xs">{!key ? t.sessions.pickSession : trace.isPending ? t.loading : t.sessions.selectCall}</p>
       </div>
     );
   }
@@ -137,6 +137,10 @@ function Exactness({ step }: { step: Step }) {
   );
 }
 
+const ROW_H = 40;
+const LIST_H = 360;
+const OVERSCAN = 20;
+
 function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step; pieces: TracePiece[]; index: number; keyOf: TraceKey; trace: Trace; picked: Picked | null; go: Go }) {
   const { t } = useI18n();
   const sent = step.sent!;
@@ -145,12 +149,20 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
   const shared = sent.shared;
   const present = useMemo(() => KINDS.filter((k) => pieces.some((p) => p.kind === k)), [pieces]);
   const rows = pieces.map((piece, i) => ({ piece, i })).filter(({ piece, i }) => (kind === "" || piece.kind === kind) && (!onlyFresh || i >= shared));
-  const select = (i: number) => go({ pc: pickText("sent", i) });
+  const select = useCallback((i: number) => go({ pc: pickText("sent", i) }), [go]);
   const open = picked?.side === "sent" ? picked.piece : null;
-  const listRef = useRef<HTMLUListElement>(null);
+  // Only the rows in view exist. A call can send thousands of pieces.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [top, setTop] = useState(0);
+  const first = Math.max(0, Math.floor(top / ROW_H) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((top + LIST_H) / ROW_H) + OVERSCAN);
+  const openAt = open === null ? -1 : rows.findIndex((r) => r.i === open);
   useEffect(() => {
-    if (open !== null) listRef.current?.querySelector(`[data-index="${open}"]`)?.scrollIntoView({ block: "nearest" });
-  }, [open, pieces]);
+    const box = listRef.current;
+    if (!box || openAt < 0) return;
+    if (openAt * ROW_H < box.scrollTop) box.scrollTop = openAt * ROW_H;
+    else if ((openAt + 1) * ROW_H > box.scrollTop + LIST_H) box.scrollTop = (openAt + 1) * ROW_H - LIST_H;
+  }, [openAt]);
 
   return (
     <>
@@ -182,11 +194,13 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
           <span className="text-right" title={t.sessions.estimatedTokens}>{t.sessions.call.colTokens}</span>
           <span>{t.sessions.call.colState}</span>
         </div>
-        <ul ref={listRef} data-testid="pieces" className="max-h-[22rem] overflow-y-auto">
-          {rows.map(({ piece, i }) => (
-            <PieceRow key={i} piece={piece} index={i} fresh={i >= shared} selected={open === i} onSelect={select} />
-          ))}
-        </ul>
+        <div ref={listRef} data-testid="pieces" onScroll={(e) => setTop(e.currentTarget.scrollTop)} className="overflow-y-auto" style={{ height: Math.min(LIST_H, Math.max(rows.length, 1) * ROW_H) }}>
+          <ul className="relative" style={{ height: rows.length * ROW_H }}>
+            {rows.slice(first, last).map(({ piece, i }, k) => (
+              <PieceRow key={i} piece={piece} index={i} fresh={i >= shared} selected={open === i} onSelect={select} top={(first + k) * ROW_H} />
+            ))}
+          </ul>
+        </div>
       </section>
       {open !== null && pieces[open] && <PieceText piece={pieces[open]} pick={{ side: "sent", piece: open }} index={index} keyOf={keyOf} trace={trace} go={go} />}
     </>
@@ -197,35 +211,15 @@ function Strip({ pieces, sharedCount, marks, open, select, present }: { pieces: 
   const { t } = useI18n();
   const total = Math.max(1, pieces.reduce((n, p) => n + p.tokens, 0));
   const markSet = new Set(marks);
-  const name = (piece: TracePiece) => pieceName(piece, t);
   return (
     <section aria-label={t.sessions.call.stripTitle} className="pt-2">
       <h3 className="text-[12px] font-semibold">{t.sessions.call.stripTitle}</h3>
       <p className="mb-1 text-[11px] text-muted">{t.sessions.call.stripNote(exact(total))}</p>
       <div className="overflow-x-auto pb-1">
-        <div data-testid="strip" className="relative flex h-7 bg-sunken" style={{ minWidth: "100%", width: Math.max(0, pieces.length * 3) }}>
-          {pieces.map((piece, i) => {
-            const fresh = i >= sharedCount;
-            return (
-              <button
-                key={i}
-                type="button"
-                data-testid="strip-piece"
-                data-index={i}
-                data-fresh={fresh}
-                data-mark={markSet.has(i)}
-                title={`${name(piece)}, ${exact(piece.tokens)} ${t.sessions.estimatedTokens}, ${fresh ? t.sessions.call.fresh : t.sessions.call.shared}`}
-                aria-label={name(piece)}
-                aria-pressed={open === i}
-                onClick={() => select(i)}
-                className="relative block h-full cursor-default p-0"
-                style={{ flex: `${piece.tokens} 1 0`, minWidth: 2, background: fresh ? kindColor(piece.kind) : `${SHARED_HATCH}, ${kindColor(piece.kind)}`, opacity: fresh ? 1 : 0.55, boxShadow: open === i ? "inset 0 0 0 2px var(--fg)" : "inset -1px 0 0 var(--bg)" }}
-              >
-                {markSet.has(i) && <span aria-hidden data-testid="cache-mark" className="absolute -top-2 right-0 h-[calc(100%+8px)] w-0.5 bg-fg" />}
-                {i === sharedCount && sharedCount > 0 && <span aria-hidden data-testid="fresh-start" className="absolute -top-2 left-0 h-[calc(100%+8px)] border-l-2 border-dashed border-accent" />}
-              </button>
-            );
-          })}
+        <div data-testid="strip" onClick={(e) => { const at = (e.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"); if (at) select(Number(at)); }} className="relative flex h-7 bg-sunken" style={{ minWidth: "100%", width: Math.max(0, pieces.length * 3) }}>
+          {pieces.map((piece, i) => (
+            <StripPiece key={i} piece={piece} index={i} fresh={i >= sharedCount} mark={markSet.has(i)} freshStart={i === sharedCount && sharedCount > 0} selected={open === i} />
+          ))}
         </div>
       </div>
       <ul className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted">
@@ -252,11 +246,30 @@ function Strip({ pieces, sharedCount, marks, open, select, present }: { pieces: 
   );
 }
 
-function PieceRow({ piece, index, fresh, selected, onSelect }: { piece: TracePiece; index: number; fresh: boolean; selected: boolean; onSelect: (i: number) => void }) {
+const StripPiece = memo(function StripPiece({ piece, index, fresh, mark, freshStart, selected }: { piece: TracePiece; index: number; fresh: boolean; mark: boolean; freshStart: boolean; selected: boolean }) {
+  const { t } = useI18n();
+  const name = pieceName(piece, t);
+  return (
+    <span
+      data-testid="strip-piece"
+      data-index={index}
+      data-fresh={fresh}
+      data-mark={mark}
+      title={`${name}, ${exact(piece.tokens)} ${t.sessions.estimatedTokens}, ${fresh ? t.sessions.call.fresh : t.sessions.call.shared}`}
+      className="relative block h-full cursor-default"
+      style={{ flex: `${piece.tokens} 1 0`, minWidth: 2, background: fresh ? kindColor(piece.kind) : `${SHARED_HATCH}, ${kindColor(piece.kind)}`, opacity: fresh ? 1 : 0.55, boxShadow: selected ? "inset 0 0 0 2px var(--fg)" : "inset -1px 0 0 var(--bg)" }}
+    >
+      {mark && <span aria-hidden data-testid="cache-mark" className="absolute -top-2 right-0 h-[calc(100%+8px)] w-0.5 bg-fg" />}
+      {freshStart && <span aria-hidden data-testid="fresh-start" className="absolute -top-2 left-0 h-[calc(100%+8px)] border-l-2 border-dashed border-accent" />}
+    </span>
+  );
+});
+
+const PieceRow = memo(function PieceRow({ piece, index, fresh, selected, onSelect, top }: { piece: TracePiece; index: number; fresh: boolean; selected: boolean; onSelect: (i: number) => void; top: number }) {
   const { t } = useI18n();
   const place = placeName(piece.place, t);
   return (
-    <li style={{ contentVisibility: "auto", containIntrinsicSize: "auto 38px" }}>
+    <li className="absolute inset-x-0" style={{ top, height: ROW_H }}>
       <button
         type="button"
         data-testid="piece-row"
@@ -265,7 +278,7 @@ function PieceRow({ piece, index, fresh, selected, onSelect }: { piece: TracePie
         data-kind={piece.kind}
         aria-pressed={selected}
         onClick={() => onSelect(index)}
-        className={`block w-full border-l-2 px-1 py-0.5 text-left hover:bg-subtle ${selected ? "border-accent bg-accent-bg" : "border-transparent"}`}
+        className={`block h-full w-full border-l-2 px-1 py-0.5 text-left hover:bg-subtle ${selected ? "border-accent bg-accent-bg" : "border-transparent"}`}
       >
         <span className="grid grid-cols-[minmax(0,9rem)_minmax(0,6.5rem)_minmax(0,1fr)_4rem_3.5rem] items-baseline gap-x-2">
           <span className="truncate">{place}</span>
@@ -281,7 +294,7 @@ function PieceRow({ piece, index, fresh, selected, onSelect }: { piece: TracePie
       </button>
     </li>
   );
-}
+});
 
 function PieceText({ piece, pick, index, keyOf, trace, go }: { piece: { file?: TracePiece["file"]; kind: PieceKind; label: string | null }; pick: Picked; index: number; keyOf: TraceKey; trace: Trace; go: Go }) {
   const { t } = useI18n();

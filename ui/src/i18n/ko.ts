@@ -753,6 +753,7 @@ export const ko: typeof en = {
     empty: "이 프로젝트에는 기록된 세션이 없습니다.",
     noCalls: "이 세션에는 모델 호출이 없습니다.",
     selectCall: "호출을 하나 선택하세요.",
+    pickSession: "세션을 하나 선택하세요.",
     untitled: "제목 없는 세션",
     unknown: "알 수 없음",
     startedHead: "시작",

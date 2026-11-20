@@ -19,12 +19,12 @@ const START = Date.parse("2026-11-20T09:00:00Z");
 interface Spec {
   sig: string;
   piece: TracePiece;
-  text: string;
+  text: () => string;
 }
 
 const make = (sig: string, kind: PieceKind, tokens: number, place: TracePiece["place"], label: string | null = null, file: string | null = null): Spec => {
-  const text = `${sig}\n${"x".repeat(Math.max(0, tokens * 4 - sig.length))}`;
-  return { sig, piece: { place, kind, label, file, bytes: text.length, tokens, head: text.slice(0, 160) }, text };
+  const text = () => `${sig}\n${"x".repeat(Math.max(0, tokens * 4 - sig.length))}`;
+  return { sig, piece: { place, kind, label, file, bytes: tokens * 4 + 1, tokens, head: `${sig}\n${"x".repeat(100)}`.slice(0, 160) }, text };
 };
 
 /** The request of call `i`: system blocks, tool definitions, then a conversation that grows. A changed system block at call 5 breaks the cache. */
@@ -80,7 +80,8 @@ function build(part: boolean): { trace: Trace; specs: Spec[][] } {
   if (hit) return hit;
   const steps: Step[] = [];
   const allSpecs: Spec[][] = [];
-  const count = part ? 4 : 12;
+  // `?calls=800` makes a long session, to try the view at scale.
+  const count = part ? 4 : Number(new URLSearchParams(window.location.search).get("calls")) || 12;
   for (let i = 0; i < count; i++) {
     const { step, specs } = stepOf(i, part, allSpecs[i - 1] ?? null);
     steps.push(step);
@@ -122,5 +123,6 @@ export function pieceText(req: TraceReq & { read: number; step: number; piece: {
   const built = req.key.id === ID ? build(req.key.part === PART) : null;
   const spec = req.piece.kind === "sent" ? built?.specs[req.step]?.[req.piece.piece] : undefined;
   if (req.read !== 4096 || !spec) return { kind: "stale" };
-  return { kind: "current", text: spec.text, bytes: spec.text.length, cut: false };
+  const text = spec.text();
+  return { kind: "current", text, bytes: text.length, cut: false };
 }

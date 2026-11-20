@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTrace, useTraces } from "../api/queries";
 import { useProject } from "../app/project";
 import { Badge, Button, Empty, ErrorNote, Loading, PaneTitle } from "../components/ui";
@@ -111,6 +111,7 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
     if (route.call === 0 && trace.steps.length > 0) go({ call: trace.steps.length }, true);
   }, [route.call, trace.steps.length, go]);
 
+  const select = useCallback((index: number) => go({ call: index + 1, pc: "" }), [go]);
   if (trace.steps.length === 0) {
     return (
       <>
@@ -120,7 +121,6 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
     );
   }
   const lostCount = trace.steps.filter((_, i) => cacheLoss(trace, i)).length;
-  const select = (index: number) => go({ call: index + 1, pc: "" });
   return (
     <div className="space-y-3 px-3 py-2">
       <dl data-testid="stats" className="grid grid-cols-4 gap-2">

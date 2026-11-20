@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { PieceKind } from "../gen/PieceKind";
 import type { Step } from "../gen/Step";
 import type { Trace } from "../gen/Trace";
@@ -36,10 +36,8 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
   const scroller = useRef<HTMLDivElement>(null);
   const steps = trace.steps;
   const width = barWidth(steps.length);
-  const heights = steps.map((s) => (mode === "cache" ? (s.usage ? promptOf(s.usage) : 0) : estimateOf(s)));
-  const max = Math.max(1, ...heights);
-  const px = (v: number) => (v <= 0 ? 0 : Math.max(1, Math.round((v / max) * BAR_H)));
-  const losses = steps.map((_, i) => cacheLoss(trace, i));
+  const max = useMemo(() => steps.reduce((m, s) => Math.max(m, mode === "cache" ? (s.usage ? promptOf(s.usage) : 0) : estimateOf(s)), 1), [steps, mode]);
+  const losses = useMemo(() => steps.map((_, i) => cacheLoss(trace, i)), [trace, steps]);
 
   useEffect(() => {
     scroller.current?.querySelector("[data-selected=true]")?.scrollIntoView({ inline: "nearest", block: "nearest" });
@@ -60,33 +58,7 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
       const title = `${t.sessions.chart.compaction}${boundary.preTokens !== null && boundary.postTokens !== null ? `: ${t.sessions.chart.compactionSizes(exact(boundary.preTokens), exact(boundary.postTokens))}` : ""}`;
       out.push(<div key={`c${i}`} data-testid="compaction" data-before={i} title={title} className="shrink-0 border-l-2 border-dashed border-warn" style={{ width: 4, height: BAR_H + LANE_H }} />);
     }
-    const loss = losses[i] ?? null;
-    out.push(
-      <button
-        key={i}
-        type="button"
-        tabIndex={-1}
-        data-testid="call-bar"
-        data-index={i}
-        data-lost={loss ? "true" : "false"}
-        data-selected={selected === i}
-        aria-label={`${t.sessions.tip.call(i + 1)}${loss ? `, ${t.sessions.lost.badge}` : ""}`}
-        aria-pressed={selected === i}
-        onClick={() => onSelect(i)}
-        onPointerEnter={(e) => {
-          const r = e.currentTarget.getBoundingClientRect();
-          setTip({ index: i, x: r.left + r.width / 2, y: r.bottom });
-        }}
-        onPointerLeave={() => setTip(null)}
-        className={`flex shrink-0 cursor-default flex-col justify-end p-0 ${selected === i ? "bg-accent-bg" : "hover:bg-subtle"}`}
-        style={{ width: width + GAP, height: BAR_H + LANE_H, paddingRight: GAP }}
-      >
-        <Column step={step} mode={mode} px={px} />
-        <span className="block w-full" style={{ height: LANE_H }}>
-          {loss && <span aria-hidden data-testid="lost-mark" className="mx-auto block bg-bad" style={{ width: Math.max(3, width), height: LANE_H - 2, marginTop: 2, clipPath: "polygon(50% 0, 100% 100%, 0 100%)" }} />}
-        </span>
-      </button>,
-    );
+    out.push(<Bar key={i} step={step} index={i} lost={losses[i] !== null} selected={selected === i} mode={mode} max={max} width={width} onSelect={onSelect} onTip={setTip} />);
     return out;
   });
 
@@ -123,6 +95,48 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
     </div>
   );
 }
+
+interface BarProps {
+  step: Step;
+  index: number;
+  lost: boolean;
+  selected: boolean;
+  mode: ChartMode;
+  max: number;
+  width: number;
+  onSelect: (index: number) => void;
+  onTip: (tip: Tip | null) => void;
+}
+
+const Bar = memo(function Bar({ step, index, lost, selected, mode, max, width, onSelect, onTip }: BarProps) {
+  const { t } = useI18n();
+  const px = (v: number) => (v <= 0 ? 0 : Math.max(1, Math.round((v / max) * BAR_H)));
+  return (
+    <button
+      type="button"
+      tabIndex={-1}
+      data-testid="call-bar"
+      data-index={index}
+      data-lost={lost ? "true" : "false"}
+      data-selected={selected}
+      aria-label={`${t.sessions.tip.call(index + 1)}${lost ? `, ${t.sessions.lost.badge}` : ""}`}
+      aria-pressed={selected}
+      onClick={() => onSelect(index)}
+      onPointerEnter={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        onTip({ index, x: r.left + r.width / 2, y: r.bottom });
+      }}
+      onPointerLeave={() => onTip(null)}
+      className={`flex shrink-0 cursor-default flex-col justify-end p-0 ${selected ? "bg-accent-bg" : "hover:bg-subtle"}`}
+      style={{ width: width + GAP, height: BAR_H + LANE_H, paddingRight: GAP }}
+    >
+      <Column step={step} mode={mode} px={px} />
+      <span className="block w-full" style={{ height: LANE_H }}>
+        {lost && <span aria-hidden data-testid="lost-mark" className="mx-auto block bg-bad" style={{ width: Math.max(3, width), height: LANE_H - 2, marginTop: 2, clipPath: "polygon(50% 0, 100% 100%, 0 100%)" }} />}
+      </span>
+    </button>
+  );
+});
 
 function Column({ step, mode, px }: { step: Step; mode: ChartMode; px: (v: number) => number }) {
   if (mode === "cache") {

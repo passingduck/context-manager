@@ -784,6 +784,7 @@ export const en = {
     empty: "This project has no recorded session.",
     noCalls: "This session has no call of the model.",
     selectCall: "Select a call.",
+    pickSession: "Select a session.",
     untitled: "Untitled session",
     unknown: "unknown",
     startedHead: "Started",
