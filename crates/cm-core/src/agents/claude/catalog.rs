@@ -13,6 +13,7 @@ use super::extensions::{listing_budget_chars, listing_entry, max_desc_chars};
 use super::instructions::ASSUMED_WINDOW_TOKENS;
 use super::render::{Built, built};
 use super::setup::Setup;
+use crate::agents::Pieces;
 use crate::agents::ScanCx;
 use crate::md::frontmatter;
 use crate::model::*;
@@ -101,28 +102,26 @@ pub(super) fn build(cx: &ScanCx, setup: &Setup, extensions: &[Extension]) -> Vec
         if entries.is_empty() {
             continue;
         }
-        let pieces: Vec<(LoadId, String)> = entries
-            .into_iter()
-            .map(|e| (e.load, format!("- {}", e.text)))
-            .collect();
-        let body: Vec<&str> = pieces.iter().map(|(_, text)| text.as_str()).collect();
-        // The agent intro is followed directly by its entries, the skill intro by a blank line.
-        let text = match outro {
-            Some(outro) => format!("{intro}\n{}\n\n{outro}", body.join("\n")),
-            None => format!("{intro}\n\n{}", body.join("\n")),
-        };
-        let mut block = built(
+        // The list mark of each entry is frame: the load's text is the entry the scan counts.
+        let mut pieces = Pieces::default();
+        match outro {
+            // The agent intro is followed directly by its entries, the skill intro by a blank line.
+            Some(_) => pieces.frame(&format!("{intro}\n")),
+            None => pieces.frame(&format!("{intro}\n\n")),
+        }
+        for (n, entry) in entries.into_iter().enumerate() {
+            pieces.frame(if n == 0 { "- " } else { "\n- " });
+            pieces.load(entry.load, entry.text);
+        }
+        if let Some(outro) = outro {
+            pieces.frame(&format!("\n\n{outro}"));
+        }
+        out.push(built(
+            Delivery::SystemMessage,
             label,
-            text,
-            pieces
-                .iter()
-                .map(|(id, t)| (id.clone(), t.as_str()))
-                .collect(),
             Fidelity::Approximate,
-        );
-        block.rendered.delivery = Delivery::SystemMessage;
-        block.block.delivery = Delivery::SystemMessage;
-        out.push(block);
+            pieces,
+        ));
     }
     // Spec 4: the first prompt and the context around it sit between the instruction reminder
     // and this message.
@@ -242,12 +241,12 @@ mod tests {
         assert_eq!(skills.fidelity, Fidelity::Approximate);
         assert!(
             skills
-                .text
+                .text()
                 .contains("- deploy: Ship it - after a green build")
         );
-        assert!(skills.text.contains("- plain: Just a skill"));
+        assert!(skills.text().contains("- plain: Just a skill"));
         let agents = block(&rendered, BlockLabel::AgentCatalog);
-        assert!(agents.text.contains("- reviewer: Reviews diffs"));
+        assert!(agents.text().contains("- reviewer: Reviews diffs"));
         assert_eq!(
             block(&rendered, BlockLabel::Instructions).fidelity,
             Fidelity::Exact
@@ -274,7 +273,7 @@ mod tests {
         );
         let (_, rendered) = blocks(&fx);
         let line = block(&rendered, BlockLabel::SkillCatalog)
-            .text
+            .text()
             .lines()
             .find(|l| l.starts_with("- wordy: "))
             .unwrap()
@@ -298,7 +297,7 @@ mod tests {
             r#"{"skillUsage":{"s29":{"usageCount":9,"lastUsedAt":1000}}}"#,
         );
         let (_, rendered) = blocks(&fx);
-        let text = &block(&rendered, BlockLabel::SkillCatalog).text;
+        let text = &block(&rendered, BlockLabel::SkillCatalog).text();
         let names: Vec<&str> = text.lines().filter(|l| l.starts_with("- s")).collect();
         assert_eq!(names.len(), 30, "every name stays");
         assert!(
@@ -343,11 +342,11 @@ mod tests {
         assert_eq!(view.session[0].preceded_by, [Unsized::FirstPrompt]);
         assert!(view.session[1].preceded_by.is_empty());
         assert_eq!(
-            block(&rendered, BlockLabel::AgentCatalog).text,
+            block(&rendered, BlockLabel::AgentCatalog).text(),
             "Available agent types for the Agent tool:\n- helper: d-helper (Tools: All tools)\n\nWhen you launch multiple agents for independent work, send them in a single message with multiple tool uses so they run concurrently."
         );
         assert_eq!(
-            block(&rendered, BlockLabel::SkillCatalog).text,
+            block(&rendered, BlockLabel::SkillCatalog).text(),
             "The following skills are available for use with the Skill tool:\n\n- one: d"
         );
     }
@@ -369,8 +368,8 @@ mod tests {
         agent(&fx, false, "f-gone", "tools: Read\ndisallowedTools: Read\n");
         agent(&fx, false, "g-star", "tools: '*'\n");
         let (_, rendered) = blocks(&fx);
-        let suffixes: Vec<&str> = block(&rendered, BlockLabel::AgentCatalog)
-            .text
+        let text = block(&rendered, BlockLabel::AgentCatalog).text();
+        let suffixes: Vec<&str> = text
             .lines()
             .filter_map(|l| l.strip_prefix("- "))
             .filter_map(|l| l.split_once("(Tools: "))
@@ -414,7 +413,7 @@ mod tests {
         let (_, rendered) = blocks(&fx);
         let names = |label| -> Vec<String> {
             block(&rendered, label)
-                .text
+                .text()
                 .lines()
                 .filter_map(|l| l.strip_prefix("- "))
                 .map(|l| l.split(':').next().unwrap().to_owned())

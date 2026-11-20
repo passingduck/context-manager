@@ -1,6 +1,8 @@
 //! The accumulator the adapter's passes write into.
 
-use crate::agents::FileClaim;
+use std::collections::BTreeMap;
+
+use crate::agents::{FileClaim, Pieces};
 use crate::model::*;
 
 pub(super) fn me() -> AgentId {
@@ -31,28 +33,28 @@ pub(super) struct Out {
     pub slots: Vec<Slot>,
     /// Literal session-start blocks in delivery order, with the loads each is made of.
     pub blocks: Vec<Block>,
+    /// The text of each delivered load that fires after the session starts, as the scan counted
+    /// it. `load_texts` returns it.
+    pub texts: BTreeMap<LoadId, String>,
 }
 
-/// One session-start block: the literal text and the loads inside it.
+/// One session-start block: the literal text and the loads inside it, as pieces.
 pub(super) struct Block {
     pub delivery: Delivery,
     pub label: BlockLabel,
-    pub parts: Vec<BlockPart>,
-}
-
-pub(super) enum BlockPart {
-    Text(String),
-    Load(LoadId, String),
+    pub pieces: Pieces,
 }
 
 impl Block {
-    pub fn text(&self) -> String {
-        self.parts
-            .iter()
-            .map(|p| match p {
-                BlockPart::Text(t) | BlockPart::Load(_, t) => t.as_str(),
-            })
-            .collect()
+    /// A block that is one load's text and nothing else.
+    pub fn one(delivery: Delivery, label: BlockLabel, load: LoadId, text: String) -> Block {
+        let mut pieces = Pieces::default();
+        pieces.load(load, text);
+        Block {
+            delivery,
+            label,
+            pieces,
+        }
     }
 }
 

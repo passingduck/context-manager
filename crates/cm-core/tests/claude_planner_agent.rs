@@ -10,7 +10,7 @@ use cm_core::agents::registry;
 use cm_core::edit::{ChangeSource, Planner};
 use cm_core::model::*;
 use cm_core::scan::scan_with_parked;
-use cm_core::testing::Fixture;
+use cm_core::testing::{Fixture, cli_path};
 
 struct NoHistory;
 impl ChangeSource for NoHistory {
@@ -76,7 +76,13 @@ impl Rig {
             .arg("doctor")
             .current_dir(self.fx.project().as_path())
             .env_clear()
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
+            .env(
+                "PATH",
+                cli_path(
+                    &Path::new(self.fx.root().as_str()).join("bin"),
+                    &std::env::var("PATH").unwrap_or_default(),
+                ),
+            )
             .env("HOME", self.fx.home().as_str())
             .env("CLAUDE_CONFIG_DIR", self.fx.home_path(".claude").as_str())
             .stdin(Stdio::null())

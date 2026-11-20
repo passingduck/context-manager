@@ -107,6 +107,31 @@ pub(crate) fn home_only_scan(
     }
 }
 
+/// The `PATH` for a real agent CLI that a test starts under a fixture home.
+///
+/// Claude Code asks the macOS `security` tool for its credentials and finds that tool on `PATH`.
+/// Under a fixture home the tool has no keychain, and macOS shows a dialog on every start. This
+/// writes a `security` into `dir` that answers every question with "not found" and puts `dir`
+/// first, so the CLI reaches no keychain at all, the operator's included.
+pub fn cli_path(dir: &Path, rest: &str) -> String {
+    std::fs::create_dir_all(dir).expect("create the stub directory");
+    let stub = dir.join("security");
+    // 44 is what `security` exits with for an item that is not in the keychain. With `-i` the
+    // CLI sends its commands on standard input, so read them before answering.
+    std::fs::write(
+        &stub,
+        "#!/bin/sh\n[ \"$1\" = \"-i\" ] && cat >/dev/null\nexit 44\n",
+    )
+    .expect("write the security stub");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+            .expect("mark the security stub executable");
+    }
+    format!("{}:{rest}", dir.display())
+}
+
 /// Claims the files it is given and refuses any text that contains `refuse`.
 #[derive(Default)]
 pub struct TestAgent {
@@ -228,5 +253,47 @@ impl Agent for TestAgent {
             }),
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    use super::cli_path;
+
+    /// The real tool exits 0 for `help`. A process that gets 44 reached the stub.
+    #[test]
+    fn a_process_started_with_cli_path_reaches_the_stub_and_not_the_real_tool() {
+        let dir = tempfile::tempdir().expect("create a temp directory");
+        let path = cli_path(&dir.path().join("bin"), "/usr/bin:/bin");
+
+        let with_arguments = Command::new("security")
+            .arg("help")
+            .env_clear()
+            .env("PATH", &path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("start security");
+        assert_eq!(with_arguments.code(), Some(44));
+
+        let mut interactive = Command::new("security")
+            .arg("-i")
+            .env_clear()
+            .env("PATH", &path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start security -i");
+        interactive
+            .stdin
+            .take()
+            .expect("a pipe to the stub")
+            .write_all(b"help\n")
+            .expect("send a command");
+        assert_eq!(interactive.wait().expect("wait").code(), Some(44));
     }
 }

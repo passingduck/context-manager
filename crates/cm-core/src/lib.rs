@@ -20,6 +20,7 @@ pub mod search;
 pub mod simulate;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod texts;
 pub mod tokens;
 pub mod walk;
 

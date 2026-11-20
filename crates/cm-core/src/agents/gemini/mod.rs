@@ -4,8 +4,8 @@
 use std::sync::OnceLock;
 
 use super::{
-    Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, empty_view, home_dir, home_with_env,
-    presence, rules_from,
+    Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, empty_view, file_text, home_dir,
+    home_with_env, presence, rules_from,
 };
 use crate::model::*;
 use crate::tokens;
@@ -133,6 +133,19 @@ impl Agent for Gemini {
         build(&w).composed.into_iter().map(|c| c.rendered).collect()
     }
 
+    /// The text the scan counted for the load: a file on access, an import inside its host, a
+    /// body on activation. Anything else is the file as it is.
+    fn load_text(&self, cx: &ScanCx, _view: &AgentView, load: &Load) -> Option<String> {
+        let w = World::new(cx);
+        if !w.fatal.is_empty() {
+            return None;
+        }
+        match build(&w).texts.remove(&load.id) {
+            Some(text) => Some(text),
+            None => file_text(cx, &load.file),
+        }
+    }
+
     /// The keys of `projects.json`, in both runtime directories (spec 4, spec 7).
     fn known_projects(&self, cx: &ScanCx) -> Vec<AbsPath> {
         let w = World::new(cx);
@@ -198,6 +211,7 @@ impl Agent for Gemini {
 struct Built {
     loads: Vec<Load>,
     diagnostics: Vec<Diagnostic>,
+    texts: std::collections::BTreeMap<LoadId, String>,
     exts: exts::Exts,
     stores: memory::Stores,
     composed: Vec<compose::Composed>,
@@ -215,6 +229,7 @@ fn build(w: &World) -> Built {
     Built {
         loads: std::mem::take(&mut b.loads),
         diagnostics: std::mem::take(&mut b.diagnostics),
+        texts: std::mem::take(&mut b.texts),
         exts,
         stores,
         composed,

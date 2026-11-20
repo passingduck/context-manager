@@ -250,9 +250,10 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
             let deliv = role
                 .text
                 .as_ref()
-                .map(|_| delivered(&prompt, prompt.len() as u64));
+                .map(|_| (delivered(&prompt, prompt.len() as u64), prompt));
             (ExtStatus::Active, LoadStatus::Loaded, deliv)
         };
+        let (deliv, prompt) = deliv.unzip();
         let body = out.push_load(NewLoad {
             file: role.file.clone(),
             kind: DocKind::SubagentPrompt,
@@ -262,6 +263,9 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
             status: load_status,
             delivered: deliv,
         });
+        if let Some(prompt) = prompt {
+            out.texts.insert(body.clone(), prompt);
+        }
         out.claim(&role.file, EditPolicy::Editable);
         out.extensions.push(Extension {
             id,

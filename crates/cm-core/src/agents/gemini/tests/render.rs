@@ -36,12 +36,12 @@ fn render_one_global_file_and_two_project_files_matches_the_spec_separators() {
 </project_context>\n</loaded_context>"
     );
     assert_eq!(blocks.len(), 2);
-    assert_eq!(blocks[0].text, tier1);
+    assert_eq!(blocks[0].text(), tier1);
     assert_eq!(
         (blocks[0].delivery, blocks[0].label),
         (Delivery::SystemPrompt, BlockLabel::Instructions)
     );
-    assert_eq!(blocks[1].text, tier2);
+    assert_eq!(blocks[1].text(), tier2);
     assert_eq!(
         (blocks[1].delivery, blocks[1].label),
         (Delivery::UserMessage, BlockLabel::Instructions)
@@ -99,7 +99,7 @@ fn the_string_form_holds_only_global_files_and_the_object_form_adds_private_memo
     let expected = format!(
         "---\n\n<loaded_context>\n<global_context>\n--- Context from: {home}/.gemini/GEMINI.md ---\ng\n--- End of Context from: {home}/.gemini/GEMINI.md ---\n</global_context>\n<user_project_memory>\n--- Private Project Memory Index (private, not committed to repo) ---\n--- Context from: {home}/.gemini/tmp/p/memory/MEMORY.md ---\n- [n](n.md)\n--- End of Context from: {home}/.gemini/tmp/p/memory/MEMORY.md ---\n--- End Private Project Memory Index ---\n</user_project_memory>\n</loaded_context>"
     );
-    assert_eq!(blocks[0].text, expected);
+    assert_eq!(blocks[0].text(), expected);
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn render_inlines_imports_with_the_tree_markup() {
     );
     fx.write(&fx.project_path("rules.md"), "be kind\n");
     let blocks = render(&trusted(&fx));
-    let text = &blocks[0].text;
+    let text = &blocks[0].text();
     assert!(text.contains("intro\n<!-- Imported from: ./rules.md -->\nbe kind\n\n<!-- End of import from: ./rules.md -->\n"));
     assert!(text.contains(&format!(
         "<!-- Import failed: ./gone.md - ENOENT: no such file or directory, access '{}' -->",
@@ -133,7 +133,7 @@ fn newline_runs_in_the_system_instruction_collapse_to_two() {
     let fx = Fixture::new();
     fx.write(&fx.home_path(".gemini/GEMINI.md"), "a\n\n\n\nb");
     let blocks = render(&fx.env());
-    assert!(blocks[0].text.contains("a\n\nb"));
+    assert!(blocks[0].text().contains("a\n\nb"));
 }
 
 #[test]
@@ -148,6 +148,6 @@ fn a_system_prompt_override_is_its_own_block_and_tier_one_still_follows() {
         [fx.project_path(".gemini/system.md").as_str().to_owned()]
     );
     let blocks = render(&env);
-    assert_eq!(blocks[0].text, "You are custom.");
-    assert!(blocks[1].text.starts_with("# Contextual Instructions"));
+    assert_eq!(blocks[0].text(), "You are custom.");
+    assert!(blocks[1].text().starts_with("# Contextual Instructions"));
 }

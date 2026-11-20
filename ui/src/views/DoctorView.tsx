@@ -83,6 +83,8 @@ function Row({ diagnostic, route, go }: { diagnostic: Diagnostic; route: Route; 
   const badgeTone = { bad: "text-bad bg-bad-bg", warn: "text-warn bg-warn-bg", info: "text-info bg-info-bg" }[tone];
   return (
     <li
+      data-testid="diagnostic"
+      data-problem={diagnostic.problem.kind}
       aria-selected={selected}
       className={`flex gap-2 border-l-2 px-3 py-1.5 hover:bg-subtle ${selected ? "border-accent bg-accent-bg" : "border-transparent"}`}
       onClick={() => go({ sel: target.patch.sel ?? "", ag: target.patch.ag ?? "", ln: target.patch.ln ?? 0 })}

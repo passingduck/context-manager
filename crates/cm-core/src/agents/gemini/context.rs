@@ -1,9 +1,11 @@
 //! Context files in three tiers (spec 1), their imports (spec 3) and the loads they produce.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::memory;
-use super::util::{accessible, cmp_utf16, fold, js_trim, kind, read_lossy, real, rule};
+use super::util::{
+    accessible, cmp_utf16, collapse_newlines, fold, js_trim, kind, read_lossy, real, rule,
+};
 use super::world::World;
 use crate::md::imports::{ImportNode, ImportOutcome, ImportRules, expand};
 use crate::model::*;
@@ -15,9 +17,10 @@ use crate::walk;
 #[derive(Debug, Clone)]
 pub(super) struct Item {
     pub load: LoadId,
-    /// `--- Context from: <p> ---` block. `None` when the file is skipped or empty.
-    pub block: Option<String>,
-    pub tokens: u32,
+    pub path: AbsPath,
+    /// The file's text with its imports inlined and its ends trimmed, which the CLI puts inside a
+    /// `--- Context from: <p> ---` frame. `None` when the file is skipped or empty.
+    pub text: Option<String>,
 }
 
 #[derive(Default)]
@@ -33,6 +36,9 @@ pub(super) struct Builder<'w, 'a> {
     pub w: &'w World<'a>,
     pub loads: Vec<Load>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The text of each delivered load, as the scan counted it. A session block uses it as the
+    /// load's piece, and `load_texts` returns it for a load that fires later.
+    pub texts: BTreeMap<LoadId, String>,
     /// Identity (the folded real path) of every file loaded so far, with its load. Stands in for
     /// the CLI's `dev:inode` dedupe.
     identities: HashMap<String, LoadId>,
@@ -44,6 +50,7 @@ impl<'w, 'a> Builder<'w, 'a> {
             w,
             loads: Vec::new(),
             diagnostics: Vec::new(),
+            texts: BTreeMap::new(),
             identities: HashMap::new(),
         }
     }
@@ -86,27 +93,27 @@ impl<'w, 'a> Builder<'w, 'a> {
             delivered,
         };
         let skipped = |skip: Skip| load(LoadStatus::Skipped { skip }, None);
-        let bare = |id: LoadId, block: Option<String>, tokens: u32| Item {
+        let bare = |id: LoadId, text: Option<String>| Item {
             load: id,
-            block,
-            tokens,
+            path: path.clone(),
+            text,
         };
 
         let identity = self.identity(path);
         if let Some(first) = self.identities.get(&identity).cloned() {
             let l = self.push(skipped(Skip::AlreadyLoaded { first }));
-            return bare(l, None, 0);
+            return bare(l, None);
         }
         if kind(cx, path) == Some(EntryKind::Dir) {
             // `readFile` fails with EISDIR and the CLI skips the path without a word.
             let l = self.push(skipped(Skip::Invalid {
                 why: Invalid::NotRegular,
             }));
-            return bare(l, None, 0);
+            return bare(l, None);
         }
         let Ok(bytes) = cx.fs.read(path) else {
             let l = self.push(skipped(Skip::Missing));
-            return bare(l, None, 0);
+            return bare(l, None);
         };
         self.identities.insert(identity, LoadId(id.0));
 
@@ -126,20 +133,24 @@ impl<'w, 'a> Builder<'w, 'a> {
         let trimmed = js_trim(&inlined);
         if trimmed.is_empty() {
             let l = self.push(skipped(Skip::Empty));
-            return bare(l, None, 0);
+            return bare(l, None);
         }
-        let block =
-            format!("--- Context from: {path} ---\n{trimmed}\n--- End of Context from: {path} ---");
-        let block_tokens = tokens::count(&block);
+        // Tier 1 (global and private files) goes through the newline cleanup of
+        // `promptProvider.ts`. The frame around the text belongs to the session block.
+        let shown = match rule_id {
+            "gemini.context.global" | "gemini.memory.private" => collapse_newlines(trimmed),
+            _ => trimmed.to_owned(),
+        };
         let delivered = Delivered {
-            bytes: block.len() as u64,
-            tokens: block_tokens,
-            transformed: inlined != text || trimmed.len() != text.len(),
+            bytes: shown.len() as u64,
+            tokens: tokens::count(&shown),
+            transformed: shown != text,
         };
         let l = self.push(load(LoadStatus::Loaded, Some(delivered)));
+        self.texts.insert(LoadId(l.0), shown.clone());
         let top = (path.clone(), LoadId(l.0));
         self.add_imports(LoadId(l.0), path, &scope, &tree.nodes, &mut vec![top]);
-        bare(l, Some(block), block_tokens)
+        bare(l, Some(shown))
     }
 
     fn add_imports(
@@ -165,16 +176,17 @@ impl<'w, 'a> Builder<'w, 'a> {
             let this = id.0;
             let (status, delivered) = match node.outcome {
                 ImportOutcome::Imported => {
-                    let bytes = cx.fs.read(&path).map(|b| b.len() as u64).unwrap_or(0);
-                    let text = read_lossy(cx, &path).unwrap_or_default();
-                    (
-                        LoadStatus::Loaded,
-                        Some(Delivered {
-                            bytes,
-                            tokens: tokens::count(&text),
-                            transformed: false,
-                        }),
-                    )
+                    // Spec 3: the file's text, with its own imports inlined, inside the host's
+                    // text. That is what the model receives from it.
+                    let raw = read_lossy(cx, &path).unwrap_or_default();
+                    let text = inline(&raw, &node.children, &|p| read_lossy(cx, p));
+                    let delivered = Delivered {
+                        bytes: text.len() as u64,
+                        tokens: tokens::count(&text),
+                        transformed: text != raw,
+                    };
+                    self.texts.insert(id.clone(), text);
+                    (LoadStatus::Loaded, Some(delivered))
                 }
                 ImportOutcome::Missing => {
                     let accidental = !raw.contains('/') && !raw.contains('.');

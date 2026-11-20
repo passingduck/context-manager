@@ -136,14 +136,14 @@ impl Case {
         self.rendered(cwd)
             .into_iter()
             .find(|b| b.delivery == Delivery::UserMessage && b.label == BlockLabel::Instructions)
-            .map(|b| b.text)
+            .map(|b| b.text())
     }
 
     fn ours_skills_block(&self, cwd: &AbsPath) -> Option<String> {
         self.rendered(cwd)
             .into_iter()
             .find(|b| b.label == BlockLabel::SkillCatalog)
-            .map(|b| b.text)
+            .map(|b| b.text())
     }
 }
 
@@ -445,9 +445,9 @@ fn oracle_developer_and_base_instructions_come_first() {
     assert_eq!(oracle[1], ("developer".to_owned(), "DEV-MARK".to_owned()));
     let ours = case.rendered(&cwd);
     assert_eq!(ours[0].delivery, Delivery::SystemPrompt);
-    assert_eq!(ours[0].text, "CUSTOM-BASE");
+    assert_eq!(ours[0].text(), "CUSTOM-BASE");
     assert_eq!(ours[1].delivery, Delivery::DeveloperMessage);
-    assert_eq!(ours[1].text, "DEV-MARK");
+    assert_eq!(ours[1].text(), "DEV-MARK");
 }
 
 // ---------------------------------------------------------------------------------------------
