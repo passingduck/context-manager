@@ -70,7 +70,7 @@ export async function startHost(bin, box, { readOnly = false } = {}) {
     CONTEXT_MANAGER_DATA_DIR: box.data,
     CONTEXT_MANAGER_TOKEN: TOKEN,
     CONTEXT_MANAGER_MANAGED_DIR: join(box.root, "managed"),
-    CONTEXT_MANAGER_TRASH_REMOVES: "1",
+    CONTEXT_MANAGER_NO_OS_TRASH: "1",
     GEMINI_CLI_SYSTEM_SETTINGS_PATH: join(box.root, "managed", "gemini-system.json"),
     GEMINI_CLI_SYSTEM_DEFAULTS_PATH: join(box.root, "managed", "gemini-defaults.json"),
     GEMINI_CLI_TRUSTED_FOLDERS_PATH: join(box.root, "managed", "gemini-trusted.json"),

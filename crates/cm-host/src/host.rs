@@ -63,16 +63,23 @@ impl HostConfig {
     }
 }
 
-struct RemovingTrash;
+/// The host with `CONTEXT_MANAGER_NO_OS_TRASH` set: the OS trash is not available. `apply` then
+/// takes the path of design section 4, step 4: a path the history holds completely is removed
+/// and reported as not trashed, any other path stays and the operation fails.
+struct NoOsTrash;
 
-impl Trasher for RemovingTrash {
-    fn trash(&self, path: &std::path::Path) -> Result<(), String> {
-        let removed = if path.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
-        removed.map_err(|e| e.to_string())
+impl Trasher for NoOsTrash {
+    fn trash(&self, _: &std::path::Path) -> Result<(), String> {
+        Err("the OS trash is switched off".into())
+    }
+}
+
+/// `no_os_trash` is `CONTEXT_MANAGER_NO_OS_TRASH`, read once by [`Host::new`].
+pub(crate) fn trasher(no_os_trash: bool) -> Box<dyn Trasher> {
+    if no_os_trash {
+        Box::new(NoOsTrash)
+    } else {
+        Box::new(OsTrash)
     }
 }
 
@@ -100,12 +107,8 @@ const MAX_HISTORY_LIMIT: usize = 500;
 impl Host {
     pub fn new(config: HostConfig) -> Host {
         // `tools/e2e` sets this so that its throwaway run never reaches the OS trash.
-        let trasher: Box<dyn Trasher> =
-            if std::env::var_os("CONTEXT_MANAGER_TRASH_REMOVES").is_some() {
-                Box::new(RemovingTrash)
-            } else {
-                Box::new(OsTrash)
-            };
+        let no_os_trash = std::env::var_os("CONTEXT_MANAGER_NO_OS_TRASH").is_some();
+        let trasher = trasher(no_os_trash);
         Host::with_parts(config, registry(), trasher)
     }
 
