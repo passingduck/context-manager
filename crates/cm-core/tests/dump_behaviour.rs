@@ -389,11 +389,7 @@ fn dump_case(name: &str, build: &[fn(&Tree)], untrusted: bool) -> Value {
         .iter()
         .map(|edit| json!({"edit": edit, "result": plan_json(&planner, edit)}))
         .collect();
-    let cx = cm_core::agents::ScanCx {
-        env: &env,
-        fs: scanned.fs(),
-        parked_dir: Some(&parked),
-    };
+    let cx = cm_core::agents::ScanCx::new(&env, scanned.fs()).with_parked(&parked);
     let sims: Vec<Value> = dirs_below(t.root.join("project").as_path())
         .into_iter()
         .chain(dirs_below(t.root.join("home/.gemini").as_path()))

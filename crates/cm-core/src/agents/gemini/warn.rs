@@ -14,11 +14,7 @@ pub(super) fn write_warnings(
     before: Option<&str>,
     after: Option<&str>,
 ) -> Vec<Warning> {
-    let scan = ScanCx {
-        env: cx.env,
-        fs: cx.fs,
-        parked_dir: None,
-    };
+    let scan = ScanCx::new(cx.env, cx.fs);
     let w = World::new(&scan);
     let mut out = Vec::new();
 

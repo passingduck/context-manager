@@ -69,11 +69,7 @@ fn view<'a>(cx: &'a PlanCx) -> Option<&'a AgentView> {
 }
 
 fn scan_cx<'a>(cx: &'a PlanCx) -> ScanCx<'a> {
-    ScanCx {
-        env: cx.env,
-        fs: cx.fs,
-        parked_dir: None,
-    }
+    ScanCx::new(cx.env, cx.fs)
 }
 
 fn warning_effect(rule: &'static str) -> Warning {

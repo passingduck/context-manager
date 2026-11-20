@@ -62,11 +62,10 @@ pub fn scan_with_parked(
     parked_dir: Option<&AbsPath>,
 ) -> Scanned {
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env,
-        fs: &fs,
-        parked_dir,
-    };
+    let mut cx = ScanCx::new(env, &fs);
+    if let Some(dir) = parked_dir {
+        cx = cx.with_parked(dir);
+    }
     let git_root = find_git_root(&cx);
     let project_root = git_root.clone().unwrap_or_else(|| env.cwd.clone());
 
@@ -311,15 +310,7 @@ mod tests {
         fx.write(&path, "hello world");
         let env = fx.env();
         let fs = ProbeFs::new();
-        let entry = read_entry(
-            &ScanCx {
-                env: &env,
-                fs: &fs,
-                parked_dir: None,
-            },
-            &path,
-            EditPolicy::Editable,
-        );
+        let entry = read_entry(&ScanCx::new(&env, &fs), &path, EditPolicy::Editable);
         let FileState::Present { tokens, .. } = entry.state else {
             panic!("expected a present file");
         };

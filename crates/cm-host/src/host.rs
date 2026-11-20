@@ -312,11 +312,7 @@ impl Api for Host {
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            let cx = ScanCx {
-                env: &env,
-                fs: &fs,
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, &fs);
             let mut known: BTreeMap<AbsPath, Vec<AgentId>> = BTreeMap::new();
             for agent in agents {
                 for path in agent.known_projects(&cx) {
@@ -350,11 +346,7 @@ impl Api for Host {
                 .iter()
                 .find(|view| view.agent == agent.id())
                 .ok_or(ApiError::NotFound)?;
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             Ok(agent.render(&cx, view))
         })
         .await
@@ -366,11 +358,7 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             simulate::simulate(agents, &cx, &scanned.snapshot, &req.path)
         })
         .await
@@ -389,14 +377,7 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            agent.sample_input(
-                &req.event,
-                &ScanCx {
-                    env: &env,
-                    fs: &fs,
-                    parked_dir: None,
-                },
-            )
+            agent.sample_input(&req.event, &ScanCx::new(&env, &fs))
         })
         .await
         .map_err(join_error)
@@ -416,11 +397,7 @@ impl Api for Host {
         tokio::task::spawn_blocking(move || {
             let (view, hook) = scanned.snapshot.hook(&req.hook).ok_or(ApiError::NotFound)?;
             let agent = find_in(agents, &view.agent).ok_or(ApiError::NotFound)?;
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             let spec = agent
                 .exec_spec(hook, &req.input, &cx)
                 .map_err(|why| ApiError::Forbidden { why })?;

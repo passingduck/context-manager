@@ -22,7 +22,25 @@ pub struct ScanCx<'a> {
     pub fs: &'a ProbeFs,
     /// Where the tool keeps parked hook records. `None` for a caller that has no data
     /// directory: no hook is then reported as parked.
-    pub parked_dir: Option<&'a AbsPath>,
+    pub(crate) parked_dir: Option<&'a AbsPath>,
+}
+
+impl<'a> ScanCx<'a> {
+    pub fn new(env: &'a ScanEnv, fs: &'a ProbeFs) -> ScanCx<'a> {
+        ScanCx {
+            env,
+            fs,
+            parked_dir: None,
+        }
+    }
+
+    /// Reads the parked hook records in `dir`, which only the Claude hook reader uses.
+    pub fn with_parked(self, dir: &'a AbsPath) -> ScanCx<'a> {
+        ScanCx {
+            parked_dir: Some(dir),
+            ..self
+        }
+    }
 }
 
 /// What a planner reads through.

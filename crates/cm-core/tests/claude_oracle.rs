@@ -591,11 +591,7 @@ fn ours(t: &Tree, cwd: &Path) -> String {
     let env = ScanEnv::for_fixture(abs(&t.home()), abs(cwd))
         .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
     let scan = agent.scan(&cx);
     let blocks = agent.render(&cx, &scan.view);
@@ -912,11 +908,7 @@ fn oracle_catalogs() {
     let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
         .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
     let view = agent.scan(&cx).view;
     let rendered = agent.render(&cx, &view);
@@ -1082,11 +1074,7 @@ fn oracle_catalogs_without_instructions() {
     let env = ScanEnv::for_fixture(abs(&t.home()), abs(&cwd))
         .with_var("CLAUDE_CONFIG_DIR", t.cfg().to_str().unwrap());
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let agent = find(&AgentId::parse("claude").unwrap()).unwrap();
     let mut view = agent.scan(&cx).view;
     cm_core::passes::unsized_gaps(&mut view);

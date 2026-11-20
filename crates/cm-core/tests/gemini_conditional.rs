@@ -20,11 +20,7 @@ fn gemini_view(snapshot: &Snapshot) -> &AgentView {
 /// files the simulator adds for a path in it, and the files `on_access` names for it.
 fn assert_scan_and_simulator_agree(env: &ScanEnv) -> BTreeSet<AbsPath> {
     let scanned = scan_full(env);
-    let cx = ScanCx {
-        env,
-        fs: scanned.fs(),
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(env, scanned.fs());
     let mut dirs: Vec<AbsPath> = walk(&env.cwd, scanned.fs()).dirs().cloned().collect();
     dirs.push(env.home.join(".gemini"));
     let mut all = BTreeSet::new();
