@@ -25,6 +25,10 @@ step "cargo clippy (warnings denied)"
 cargo clippy --workspace --all-targets -- -D warnings
 cargo clippy -p context-manager --no-default-features --all-targets -- -D warnings
 
+# Clippy for the host platform cannot see code that is compiled out there.
+step "cargo clippy for Linux (warnings denied)"
+scripts/check-linux.sh --if-installed
+
 step "cargo test"
 cargo test --workspace
 cargo test -p context-manager --no-default-features

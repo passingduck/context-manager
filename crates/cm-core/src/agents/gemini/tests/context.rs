@@ -207,7 +207,9 @@ fn just_in_time_files_below_the_working_directory_are_on_access_loads() {
         }
     );
     assert_eq!(jit.status, LoadStatus::Loaded);
-    assert!(scan.view.budget.on_access_max > 0);
+    let mut counted = scan.view.clone();
+    crate::passes::budget(&mut counted);
+    assert!(counted.budget.on_access_max > 0);
     // A directory above the working directory is not an access trigger target.
     assert!(on_access(&trusted(&fx), &fx.root()).is_empty());
 }

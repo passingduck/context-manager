@@ -62,21 +62,20 @@ pub fn scan_with_parked(
     parked_dir: Option<&AbsPath>,
 ) -> Scanned {
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env,
-        fs: &fs,
-        parked_dir,
-    };
+    let mut cx = ScanCx::new(env, &fs);
+    if let Some(dir) = parked_dir {
+        cx = cx.with_parked(dir);
+    }
     let git_root = find_git_root(&cx);
     let project_root = git_root.clone().unwrap_or_else(|| env.cwd.clone());
 
     let mut views = Vec::new();
-    let mut claimed = Vec::new();
+    let mut claimed: BTreeMap<AgentId, Vec<FileClaim>> = BTreeMap::new();
     let mut diagnostics = Vec::new();
     for agent in agents {
         let scan = agent.scan(&cx);
+        claimed.insert(scan.view.agent.clone(), scan.files);
         views.push(scan.view);
-        claimed.push(scan.files);
         diagnostics.extend(scan.diagnostics);
     }
 
@@ -227,7 +226,7 @@ fn find_git_root(cx: &ScanCx) -> Option<AbsPath> {
 fn intern(
     cx: &ScanCx,
     views: &[AgentView],
-    claimed: &[Vec<FileClaim>],
+    claimed: &BTreeMap<AgentId, Vec<FileClaim>>,
 ) -> BTreeMap<AbsPath, FileEntry> {
     struct Claim {
         agents: Vec<AgentId>,
@@ -246,8 +245,8 @@ fn intern(
             entry.policy = policy;
         }
     };
-    for (view, files) in views.iter().zip(claimed) {
-        for file in files {
+    for view in views {
+        for file in claimed.get(&view.agent).into_iter().flatten() {
             claim(&file.path, &view.agent, file.policy.clone());
         }
         // A hook file carries the policy of the extension or settings layer it belongs to, so
@@ -405,15 +404,7 @@ mod tests {
         fx.write(&path, "hello world");
         let env = fx.env();
         let fs = ProbeFs::new();
-        let entry = read_entry(
-            &ScanCx {
-                env: &env,
-                fs: &fs,
-                parked_dir: None,
-            },
-            &path,
-            EditPolicy::Editable,
-        );
+        let entry = read_entry(&ScanCx::new(&env, &fs), &path, EditPolicy::Editable);
         let FileState::Present { tokens, .. } = entry.state else {
             panic!("expected a present file");
         };
@@ -460,10 +451,10 @@ mod tests {
             &[]
         }
         fn hook_schema(&self) -> &'static HookSchema {
-            &crate::agents::NO_HOOKS
+            &crate::testing::NO_HOOKS
         }
         fn scan(&self, cx: &ScanCx) -> AgentScan {
-            let mut scan = crate::agents::home_only_scan(
+            let mut scan = crate::testing::home_only_scan(
                 cx,
                 self.id(),
                 "claude",

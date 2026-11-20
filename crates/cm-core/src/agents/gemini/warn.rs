@@ -14,17 +14,18 @@ pub(super) fn write_warnings(
     before: Option<&str>,
     after: Option<&str>,
 ) -> Vec<Warning> {
-    let scan = ScanCx {
-        env: cx.env,
-        fs: cx.fs,
-        parked_dir: None,
-    };
+    let scan = ScanCx::new(cx.env, cx.fs);
     let w = World::new(&scan);
     let mut out = Vec::new();
 
     // Spec 8, settings row: the CLI rewrites these files from its startup snapshot.
     if w.settings.layers.iter().any(|l| l.path == *path) {
         out.push(Warning::SessionMayOverwrite { agent: id() });
+        out.push(Warning::AgentAlsoWrites { agent: id() });
+    }
+
+    // Spec 4: the CLI appends to the private memory index itself.
+    if memory::memory_dir(&w).is_some_and(|dir| *path == dir.join(memory::INDEX)) {
         out.push(Warning::AgentAlsoWrites { agent: id() });
     }
 

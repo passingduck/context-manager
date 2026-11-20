@@ -85,12 +85,7 @@ pub(super) fn add(
             write_op(&note, &None, text),
             write_op(&index_path, &index_disk, index),
         ],
-        vec![
-            takes_effect("gemini.takes_effect.memory_reload"),
-            Warning::AgentAlsoWrites {
-                agent: super::plan::id(),
-            },
-        ],
+        vec![takes_effect("gemini.takes_effect.memory_reload")],
     ))
 }
 

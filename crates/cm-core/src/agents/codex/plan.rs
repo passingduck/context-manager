@@ -46,13 +46,9 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
             body,
         } if *agent == me() => Some(add_memory(cx, store, title, description, body)),
         Edit::AddHook { agent, file, draft } if *agent == me() => Some(add_hook(cx, file, draft)),
-        Edit::UpdateHook { hook, draft } => {
-            on_hook(cx, hook, |cx, hook| update_hook(cx, hook, draft))
-        }
-        Edit::RemoveHook { hook } => on_hook(cx, hook, remove_hook),
-        Edit::SetHookEnabled { hook, enabled } => {
-            on_hook(cx, hook, |cx, hook| set_enabled(cx, hook, *enabled))
-        }
+        Edit::UpdateHook { draft, .. } => cx.hook.map(|hook| update_hook(cx, hook, draft)),
+        Edit::RemoveHook { .. } => cx.hook.map(|hook| remove_hook(cx, hook)),
+        Edit::SetHookEnabled { enabled, .. } => cx.hook.map(|hook| set_enabled(cx, hook, *enabled)),
         _ => None,
     }
 }
@@ -73,11 +69,7 @@ fn view<'a>(cx: &'a PlanCx) -> Option<&'a AgentView> {
 }
 
 fn scan_cx<'a>(cx: &'a PlanCx) -> ScanCx<'a> {
-    ScanCx {
-        env: cx.env,
-        fs: cx.fs,
-        parked_dir: None,
-    }
+    ScanCx::new(cx.env, cx.fs)
 }
 
 fn warning_effect(rule: &'static str) -> Warning {
@@ -87,8 +79,14 @@ fn warning_effect(rule: &'static str) -> Warning {
     }
 }
 
-fn also_writes() -> Warning {
-    Warning::AgentAlsoWrites { agent: me() }
+/// Warnings that follow a write to a Codex file whoever planned it, a plain save included. Codex
+/// rewrites the user `config.toml` itself (spec 7.1).
+pub(super) fn write_warnings(cx: &PlanCx, path: &AbsPath) -> Vec<Warning> {
+    if Setup::load(&scan_cx(cx)).user_config == *path {
+        vec![Warning::AgentAlsoWrites { agent: me() }]
+    } else {
+        Vec::new()
+    }
 }
 
 /// The text of a file: `None` when it does not exist.
@@ -342,24 +340,6 @@ fn at_of(hook: &Hook) -> Option<At> {
     }
 }
 
-/// Runs `then` for a hook Codex lists. A hook no agent lists is `NotFound`: the entry changed
-/// since the scan, so the id names nothing now. A hook another agent lists is not ours.
-fn on_hook(
-    cx: &PlanCx,
-    id: &HookId,
-    then: impl FnOnce(&PlanCx, &Hook) -> Result<Preview, ApiError>,
-) -> Option<Result<Preview, ApiError>> {
-    if let Some(hook) = view(cx).and_then(|v| v.hooks.iter().find(|h| h.id == *id)) {
-        return Some(then(cx, hook));
-    }
-    let elsewhere = cx
-        .snapshot
-        .agents
-        .iter()
-        .any(|v| v.agent != me() && v.hooks.iter().any(|h| h.id == *id));
-    (!elsewhere).then_some(Err(ApiError::NotFound))
-}
-
 fn check_draft(draft: &HookDraft) -> Result<(), ApiError> {
     if !EVENTS.contains(&draft.event.as_str()) {
         return Err(invalid("draft.event", RULE_EVENT));
@@ -382,12 +362,8 @@ fn unreadable<E>(_: E) -> ApiError {
     invalid("file", RULE_UNREADABLE)
 }
 
-fn hook_warnings(toml_file: bool) -> Vec<Warning> {
-    let mut warnings = vec![Warning::HookTrustReset, warning_effect(RULE_HOOKS_REREAD)];
-    if toml_file {
-        warnings.push(also_writes());
-    }
-    warnings
+fn hook_warnings() -> Vec<Warning> {
+    vec![Warning::HookTrustReset, warning_effect(RULE_HOOKS_REREAD)]
 }
 
 /// A new group at the end of the event, so no other hook's key moves.
@@ -433,7 +409,7 @@ fn add_hook(cx: &PlanCx, file: &AbsPath, draft: &HookDraft) -> Result<Preview, A
         file,
         old,
         text,
-        hook_warnings(hook_file.format == HookFormat::CodexConfigToml),
+        hook_warnings(),
     ))
 }
 
@@ -512,7 +488,7 @@ fn remove_hook(cx: &PlanCx, hook: &Hook) -> Result<Preview, ApiError> {
         file,
         old,
         new,
-        hook_warnings(at.toml.is_some()),
+        hook_warnings(),
     ))
 }
 
@@ -575,18 +551,12 @@ fn update_hook(cx: &PlanCx, hook: &Hook, draft: &HookDraft) -> Result<Preview, A
         file,
         old,
         new,
-        hook_warnings(at.toml.is_some()),
+        hook_warnings(),
     ))
 }
 
 /// Spec 2.5: `[hooks.state."<key>"].enabled` in the user `config.toml`, nothing else.
 fn set_enabled(cx: &PlanCx, hook: &Hook, enabled: bool) -> Result<Preview, ApiError> {
-    if let Toggle::Unavailable { why } = &hook.toggle {
-        return Err(ApiError::InvalidEdit {
-            field: "hook".to_owned(),
-            why: why.clone(),
-        });
-    }
     let at = at_of(hook).ok_or(ApiError::NotFound)?;
     let suffix = format!(":{}:{}:{}", snake(&at.event), at.group, at.handler);
     let scx = scan_cx(cx);
@@ -596,7 +566,7 @@ fn set_enabled(cx: &PlanCx, hook: &Hook, enabled: bool) -> Result<Preview, ApiEr
         .ok_or_else(|| invalid("hook", "codex.hooks.toggle_unsupported"))?;
     let config = Setup::load(&scx).user_config;
     let old = read(cx, &config)?;
-    let warnings = vec![warning_effect(RULE_HOOKS_REREAD), also_writes()];
+    let warnings = vec![warning_effect(RULE_HOOKS_REREAD)];
     if listed.enabled == enabled {
         return Ok(preview(
             ChangeEdit::SetHookEnabled,

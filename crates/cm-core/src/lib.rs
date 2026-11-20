@@ -3,15 +3,15 @@
 
 pub mod agents;
 pub mod api;
-pub mod cfg;
-pub mod doctor;
+pub(crate) mod cfg;
+pub(crate) mod doctor;
 pub mod edit;
 pub mod env;
 pub mod glob;
-pub mod limits;
-pub mod md;
+pub(crate) mod limits;
+pub(crate) mod md;
 pub mod model;
-pub mod parked;
+pub(crate) mod parked;
 pub mod passes;
 pub mod probe_fs;
 pub mod program;
