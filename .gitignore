@@ -9,3 +9,4 @@ CLAUDE.local.md
 .claude/worktrees/
 .omc/
 ui/screenshots/
+__pycache__/
