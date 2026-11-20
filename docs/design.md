@@ -171,6 +171,7 @@ pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, Ma
                      SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth }
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
+/// `parts` count the same pieces `render` returns, in the same order, and `tokens` is their sum.
 pub struct ContextBlock {
     pub delivery: Delivery,                  // SystemPrompt | SystemMessage | UserMessage | DeveloperMessage | ToolSpec
     pub label: BlockLabel,                   // Instructions | Memory | SkillCatalog | AgentCatalog | CommandCatalog
@@ -181,6 +182,12 @@ pub struct ContextBlock {
 }
 pub enum Unsized { BuiltIn, FirstPrompt }    // BuiltIn: built-in prompt and tool definitions. FirstPrompt: the user's first prompt and the context around it
 pub enum Part { Load { load: LoadId, tokens: u32 }, Glue { tokens: u32 } }
+/// The literal text of one block: its pieces joined. A load's piece is its text without the frame.
+pub struct RenderedBlock { pub delivery: Delivery, pub label: BlockLabel, pub pieces: Vec<Piece>, pub tokens: u32, pub fidelity: Fidelity }
+pub enum Piece { Frame { text: String }, Load { load: LoadId, text: String } }   // Frame: a header, a separator, a list mark
+/// What the model receives from one load of a file. `text` is None for a skipped load.
+pub struct LoadText { pub load: LoadId, pub text: Option<String>, pub whole_file: bool }
+pub enum LoadTexts { Current { texts: Vec<LoadText> }, Stale }
 pub struct Budget {
     pub session_start: u32,                  // sum of ContextBlock.tokens
     pub by_label: Vec<(BlockLabel, u32)>,
@@ -255,6 +262,7 @@ pub enum Problem {
     ParseError { format: Format, detail: String, fatal_for_agent: bool },
     FrontmatterInvalid { field: String }, LegacyLocation { why: RuleRef }, ProjectUntrusted { skipped: Vec<RuleRef> },
     GlobMatchesNothing { glob: String }, WalkCapped { entries: u32 },
+    BodyAlsoImported { import: LoadId, host: AbsPath, line: u32 },   // a listed item whose body an import also loads at session start
 }
 
 /// Agent knowledge that the UI explains. It lives next to the adapter, in both languages.
@@ -268,7 +276,8 @@ pub enum HookRunFailure { EmptyInvocation, ProgramNotFound { program: String }, 
 Consequences of this model:
 
 - **The token budget is a sum.** Each adapter assembles `session`, and the budget adds up its blocks. A skill costs its catalog line at start and its body on invoke, because it has two loads.
-- **The literal context is available.** The `render` operation returns the text of each block. Tests compare it with what the real CLI prints.
+- **The literal context is available.** The `render` operation returns the text of each block as pieces: frame, or one load's text. Tests compare the joined text with what the real CLI prints.
+- **Each place a file loads has its own text.** `load_texts` returns, per load of one file, what the model receives there. A session-start load's text is its piece of the block. A load that fires later asks its adapter (`Agent::load_text`), which returns the same text its scan counted.
 - **The path simulator reuses the rules.** `OnAccess` rules are data. `simulate` evaluates them for a target path and also probes the directories between `cwd` and the target with the same rule function the scan uses.
 - **A broken import is a row, not only a warning.** Its load has `Skip::Missing` and points at an `Absent` file.
 - **The backend sends facts.** `Skip`, `Problem`, `Warning` and `HookBlock` are typed and are translated in the frontend. Rule explanations are agent knowledge, so they ship with the adapter as `RuleSpec`s. Reasons that belong to no agent are in `crates/cm-core/src/core_rules.toml` and travel in `Session.core_rules`. A test fails when code names a rule id that no rules file defines.
@@ -383,7 +392,8 @@ pub trait Agent: Sync {
     fn hook_schema(&self) -> &'static HookSchema;      // events, matcher kind per event, handler kinds and their fields
     fn scan(&self, cx: &ScanCx) -> AgentScan;          // every discovery rule, applied to one environment
     fn on_access(&self, cx: &ScanCx, dir: &AbsPath) -> Vec<Candidate>;   // what loads when the agent touches a file in dir
-    fn render(&self, cx: &ScanCx, view: &AgentView) -> Vec<RenderedBlock>;   // the literal session-start text
+    fn render(&self, cx: &ScanCx, view: &AgentView) -> Vec<RenderedBlock>;   // the literal session-start text, piece by piece
+    fn load_text(&self, cx: &ScanCx, view: &AgentView, load: &Load) -> Option<String>;   // a delivered load with no piece of its own; default: the file
     fn known_projects(&self, cx: &ScanCx) -> Vec<AbsPath>;
     fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>>;   // None: the generic plan applies
     fn guard(&self, path: &AbsPath, before: Option<&str>, after: Option<&str>) -> Result<(), ApiError>;   // run on every planned write
@@ -437,6 +447,7 @@ api! {
     scan(ScanReq { cwd })                                    -> Snapshot;
     read_file(ReadReq { cwd, path })                         -> FileContent;    // state plus text; path must be in the snapshot
     render(RenderReq { cwd, agent })                         -> Vec<RenderedBlock>;  // literal session-start text
+    load_texts(LoadTextsReq { cwd, agent, file, fingerprint }) -> LoadTexts;      // per load of one file; Stale when a fresh scan differs
     simulate(SimReq { cwd, path })                           -> Vec<Simulation>;     // per agent: fired loads, extra loads, added tokens, notes
     search(SearchReq { cwd, query, regex, case_sensitive })  -> SearchResult;   // at most 500 hits
     watch(WatchReq { cwd, since: Fingerprint })              -> Fingerprint;    // long poll, at most 25 s
@@ -528,10 +539,10 @@ The layout is the explorer variant from the layout prototype: a rail of sections
 ```
 
 - **Server state** lives in TanStack Query: `['scan', cwd]`, `['file', path, rev]`, `['history', cwd]`. One `useWatch(cwd)` hook runs the long poll and invalidates `scan`.
-- **Navigation state** lives in the URL hash (project, view, selection), so reload and the back button work in a browser.
+- **Navigation state** lives in the URL hash (project, view, selection), so reload and the back button work in a browser. A file selection may name one place the file loads: `at` holds the load's key, made from its kind, its activation and how it got there (rule, catalog entry, or host file and line). A `LoadId` never goes in the URL, because a rescan renumbers loads. Without `at`, or when no load matches it, the selection means every place of the file.
 - **Editor state** is one reducer per open file: `{ path, base, loaded, text }`. Dirty is computed, never stored.
 - **No agent-specific code.** Trees, forms and menus render from `AgentInfo`, `Load`, `Hook`, `Extension`, `Slot` and `Diagnostic`.
-- **Views.** Context (tree grouped by agent: session start, on access, on invoke, may read; a second mode lists the session-start blocks in the order the model receives them, with the literal text from `render`). Memory. Hooks (list by event, switch, form generated from `HookSchema` with a raw JSON tab, test run). Doctor (rows link to their subject; a row with a `fix` offers it through the normal preview). History (diff, revert, pending changes on top). Search and the path simulator sit in the top bar and act on the tree.
+- **Views.** Context (tree grouped by agent: session start, on access, on invoke, may read; a second mode lists the session-start blocks in the order the model receives them, with the literal text from `render` and the selected load's piece marked). The detail pane shows one card per load of the file, the selected one first, each with the text `load_texts` returns for it. Memory. Hooks (list by event, switch, form generated from `HookSchema` with a raw JSON tab, test run). Doctor (rows link to their subject; a row with a `fix` offers it through the normal preview). History (diff, revert, pending changes on top). Search and the path simulator sit in the top bar and act on the tree.
 - **Two languages.** `ui/src/i18n/en.ts` defines the key set. `ko.ts` is typed `typeof en`, so a missing key fails the type check. Messages for `Skip`, `Problem`, `Warning` and `HookBlock` are functions of their typed fields. Rule explanations come from `RuleSpec.en` or `.ko`. The locale comes from local storage, then the browser language.
 - **Editor.** CodeMirror 6 with Markdown, JSON and TOML modes, a gutter mark at a truncation point, and `@codemirror/merge` for the save diff, the conflict view and the history diff.
 
@@ -664,3 +675,8 @@ Three candidates wrote this design independently against one grounding file: one
 - Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
 - Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.
+- Load text unit: a block's `tokens` is the sum of its pieces' counts, each piece counted alone, for every agent. Claude and Gemini counted the joined text before, so their block totals move by a few tokens at the joins. `parts` now follow the pieces in order, so a header between two files is glue in its place instead of a share of the next file's part.
+- Load text unit: the frame of a load is not its text. Claude's `Contents of <path> (<label>):` header and the `- ` of a listing line, Codex's line break after a catalog line and Gemini's `--- Context from: <p> ---` lines are frame. A Gemini context file's `Delivered` now counts its text without that frame.
+- Load text unit: a Gemini import is inlined into its host's text, so it has no piece of its own. `load_texts` returns the imported file with its own imports inlined, which is a run of the host's piece.
+- Load text unit: `LoadText.whole_file` compares the text with the file after trimming both, because Claude and Codex trim a file's ends and the operator reads that as the whole file.
+- Load text unit: `Problem::BodyAlsoImported` carries the host file and line beside the import's `LoadId`, because a message is a function of the variant's fields and cannot look a load up.

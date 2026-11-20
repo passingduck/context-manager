@@ -7,7 +7,7 @@ use cm_core::env::ScanEnv;
 use cm_core::probe_fs::{EntryKind, ProbeFs, fingerprint_of};
 use cm_core::scan::{Scanned, scan_with_parked};
 use cm_core::*;
-use cm_core::{search, simulate};
+use cm_core::{search, simulate, texts};
 
 use crate::apply::{Ctx, OsTrash, Trasher};
 use crate::history::History;
@@ -366,6 +366,35 @@ impl Api for Host {
         .map_err(join_error)?
     }
 
+    /// Answers `Stale` when a fresh scan's fingerprint differs from the one the client shows,
+    /// so a text never belongs to a different load than the one the client asked about.
+    async fn load_texts(&self, req: LoadTextsReq) -> Result<LoadTexts, ApiError> {
+        let agent = self.agent(&req.agent)?;
+        let scanned = self.scanned(req.cwd.clone()).await?;
+        if scanned.snapshot.fingerprint != req.fingerprint {
+            return Ok(LoadTexts::Stale);
+        }
+        let env = self.config.env.with_cwd(req.cwd);
+        tokio::task::spawn_blocking(move || {
+            let view = scanned
+                .snapshot
+                .agents
+                .iter()
+                .find(|view| view.agent == agent.id())
+                .ok_or(ApiError::NotFound)?;
+            let cx = ScanCx {
+                env: &env,
+                fs: scanned.fs(),
+                parked_dir: None,
+            };
+            Ok(LoadTexts::Current {
+                texts: texts::load_texts(agent, &cx, view, &req.file),
+            })
+        })
+        .await
+        .map_err(join_error)?
+    }
+
     async fn simulate(&self, req: SimReq) -> Result<Vec<Simulation>, ApiError> {
         let scanned = self.scanned(req.cwd.clone()).await?;
         let env = self.config.env.with_cwd(req.cwd);
@@ -566,6 +595,12 @@ mod tests {
                 cwd: cwd.clone(),
                 agent: claude.clone(),
             }),
+            Request::LoadTexts(LoadTextsReq {
+                cwd: cwd.clone(),
+                agent: claude.clone(),
+                file: nested.clone(),
+                fingerprint: snapshot.fingerprint.clone(),
+            }),
             Request::Simulate(SimReq {
                 cwd: cwd.clone(),
                 path: nested.clone(),
@@ -633,6 +668,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn load_texts_answers_for_the_snapshot_it_names_or_says_stale() {
+        let fx = hooked_fixture();
+        let host = host_with_path(&fx, false);
+        let cwd = fx.project();
+        let file = fx.project_path("CLAUDE.md");
+        let snapshot = host.scan(ScanReq { cwd: cwd.clone() }).await.unwrap();
+        let req = |fingerprint: Fingerprint| LoadTextsReq {
+            cwd: cwd.clone(),
+            agent: AgentId::parse("claude").unwrap(),
+            file: file.clone(),
+            fingerprint,
+        };
+        let LoadTexts::Current { texts } = host
+            .load_texts(req(snapshot.fingerprint.clone()))
+            .await
+            .unwrap()
+        else {
+            panic!("the snapshot is current");
+        };
+        assert_eq!(texts.len(), 1);
+        assert_eq!(
+            texts[0].text.as_deref(),
+            Some("# Rules\nSee [a](docs/a.md)")
+        );
+        assert!(texts[0].whole_file);
+
+        fx.write(&file, "# Rules, changed\n");
+        assert_eq!(
+            host.load_texts(req(snapshot.fingerprint)).await.unwrap(),
+            LoadTexts::Stale
+        );
+    }
+
+    #[tokio::test]
     async fn render_search_projects_and_sample_answer_from_a_fixture() {
         let fx = hooked_fixture();
         fx.write(
@@ -650,7 +719,7 @@ mod tests {
             })
             .await
             .unwrap();
-        assert!(blocks.iter().any(|b| b.text.contains("# Rules")));
+        assert!(blocks.iter().any(|b| b.text().contains("# Rules")));
 
         let found = host
             .search(SearchReq {

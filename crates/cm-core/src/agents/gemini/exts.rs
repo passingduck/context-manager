@@ -185,11 +185,10 @@ fn skills(b: &mut Builder, out: &mut Exts) {
         } else {
             (ExtStatus::Active, None)
         };
-        let snippet = format!(
-            "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <location>{}</location>\n  </skill>",
-            found.name,
-            found.description.clone().unwrap_or_default(),
-            found.file
+        let snippet = skill_entry(
+            &found.name,
+            found.description.as_deref().unwrap_or(""),
+            &found.file,
         );
         let listing = found.problem.is_none().then(|| {
             let id = b.next_id();
@@ -364,6 +363,13 @@ fn unquote(value: &str) -> String {
     }
 }
 
+/// One skill of the catalog in the system prompt (spec 5): the listing load's text.
+pub(super) fn skill_entry(name: &str, description: &str, file: &AbsPath) -> String {
+    format!(
+        "  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n    <location>{file}</location>\n  </skill>"
+    )
+}
+
 fn push_body(
     b: &mut Builder,
     found: &Found,
@@ -373,7 +379,7 @@ fn push_body(
     transformed: bool,
 ) -> LoadId {
     let id = b.next_id();
-    b.push(Load {
+    let id = b.push(Load {
         id,
         file: found.file.clone(),
         kind: doc,
@@ -391,7 +397,11 @@ fn push_body(
             tokens: tokens::count(&found.body),
             transformed,
         }),
-    })
+    });
+    if skip.is_none() {
+        b.texts.insert(id.clone(), found.body.clone());
+    }
+    id
 }
 
 // ---------------------------------------------------------------------------------------------

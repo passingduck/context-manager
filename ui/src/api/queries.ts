@@ -33,7 +33,14 @@ export const useRender = (cwd: AbsPath, agent: Agent, fingerprint: string, enabl
     placeholderData: keepPreviousData,
   });
 
-export const useSearch = (cwd: AbsPath, query: string, regex: boolean, caseSensitive: boolean) =>
+/** What the model receives from each load of one file. A stale answer waits for the next scan, whose fingerprint changes the key. */
+export const useLoadTexts = (cwd: AbsPath, agent: Agent, file: AbsPath, fingerprint: string) =>
+  useQuery({
+    queryKey: ["load-texts", cwd, agent, file, fingerprint],
+    queryFn: () => call("load_texts", { cwd, agent, file, fingerprint }),
+  });
+
+export const useSearch =(cwd: AbsPath, query: string, regex: boolean, caseSensitive: boolean) =>
   useQuery({
     queryKey: ["search", cwd, query, regex, caseSensitive],
     queryFn: () => call("search", { cwd, query, regex, caseSensitive }),
