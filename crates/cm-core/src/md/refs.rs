@@ -84,7 +84,7 @@ impl Run<'_> {
         claimed: &[Range<usize>],
         depth: u32,
     ) -> Vec<RefNode> {
-        let s = spans::scan(text);
+        let s = spans::scan(super::analyzed(text));
         let dir = file.parent().unwrap_or_else(AbsPath::root);
         let mut found: Vec<(RefKind, String, &spans::Span)> = Vec::new();
         for link in &s.links {

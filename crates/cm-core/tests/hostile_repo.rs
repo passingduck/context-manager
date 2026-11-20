@@ -65,7 +65,9 @@ static ONE_SCAN: Mutex<()> = Mutex::new(());
 fn scan_within(env: ScanEnv, case: &str, seconds: u64) -> Scanned {
     // The tokenizer loads once per process. Load it first so the wait measures the scan.
     tokens::count("warm up");
-    let _one = ONE_SCAN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _one = ONE_SCAN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(scan_full(&env));
@@ -347,5 +349,72 @@ fn a_skills_directory_of_50_000_entries_is_listed_to_the_entry_budget() {
             &Problem::ListingCapped { max: 5_000 }
         )],
         "one diagnostic names the skills directory and the budget of 5,000 entries"
+    );
+}
+
+const MIB: usize = 1024 * 1024;
+
+/// `bytes` of plain text in lines, with no token an agent follows.
+fn plain_text(bytes: usize) -> String {
+    let line = "plain words in a line of text\n";
+    let mut text = line.repeat(bytes / line.len() + 1);
+    text.truncate(bytes);
+    text
+}
+
+fn problems(scanned: &Scanned, pick: fn(&Problem) -> bool) -> Vec<(&Subject, &Problem)> {
+    scanned
+        .snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| pick(&d.problem))
+        .map(|d| (&d.at, &d.problem))
+        .collect()
+}
+
+#[test]
+fn a_2_mib_claude_md_is_counted_from_its_first_mib_and_says_so() {
+    let text = plain_text(2 * MIB);
+    let fx = project(&[("CLAUDE.md", &text)]);
+    let scanned = scan_within(fx.env(), "a 2 MiB CLAUDE.md", 3);
+
+    let root = fx.project_path("CLAUDE.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::TextPartlyAnalyzed { .. }
+        )),
+        [(
+            &Subject::File {
+                path: root.clone(),
+                line: None
+            },
+            &Problem::TextPartlyAnalyzed { max: MIB as u64 }
+        )],
+        "one diagnostic names CLAUDE.md and the analysis bound of 1 MiB"
+    );
+    let claude = view(&scanned, "claude");
+    let load = claude.loads.iter().find(|load| load.file == root).unwrap();
+    // The text is twice its first MiB, so the estimate is twice that count.
+    let expected = 2 * tokens::count(&text[..MIB]);
+    let delivered = load.delivered.as_ref().unwrap().tokens;
+    assert!(
+        delivered.abs_diff(expected) <= expected / 100,
+        "Claude counts CLAUDE.md as twice its first MiB: {delivered} against {expected}"
+    );
+    let block = claude
+        .session
+        .iter()
+        .find(|block| {
+            block
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::Load { load: id, .. } if *id == load.id))
+        })
+        .unwrap();
+    assert_eq!(
+        block.fidelity,
+        Fidelity::Approximate,
+        "the block that carries CLAUDE.md is marked as not exact"
     );
 }

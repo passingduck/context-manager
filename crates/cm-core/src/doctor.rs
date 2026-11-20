@@ -70,7 +70,7 @@ fn missing_links(input: &Input, out: &mut Vec<Diagnostic>) {
             continue;
         };
         let text = String::from_utf8_lossy(&bytes);
-        let found = spans::scan(&text);
+        let found = spans::scan(crate::md::analyzed(&text));
         let skip_lines = imports.get(file);
         let dir = file.parent().unwrap_or_else(AbsPath::root);
         let mut reported = BTreeSet::new();

@@ -752,6 +752,10 @@ variants! {
         /// A listing of this directory went no deeper than `max` levels, so the scan can miss
         /// files below that depth that the agent loads.
         ListingTooDeep { max: u32 },
+        /// The text of this file is over `max` bytes, on disk or where it reaches the model. The
+        /// scan counted the tokens of its first `max` bytes and estimated the rest, and it looked
+        /// for links only in those first bytes.
+        TextPartlyAnalyzed { max: u64 },
     }
 }
 
