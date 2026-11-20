@@ -21,10 +21,11 @@ use crate::probe_fs::{DirEntry, EntryKind, Exceeded, ProbeFs};
 pub const MAX_TREE_DEPTH: u32 = 8;
 
 /// A tree listing stops after this many entries. The largest real tree on the development
-/// machine, `~/.codex/skills`, has 958 entries in all, and Codex's own skill scan already stops a
-/// plugin hash at this many in a scan. Each entry can become a load, so the budget bounds the
-/// work an adapter does for one listing.
-pub const MAX_TREE_ENTRIES: usize = 5_000;
+/// machine, `~/.codex/skills`, has 960 entries in all, and Codex's own skill discovery stops
+/// after 2,000 directories. Each entry can become a load that the scan reads, parses and counts,
+/// so the budget bounds the work an adapter does for one listing: 5,000 skills took a debug
+/// scan 1.5 s on a quiet machine and over 3 s on a busy one.
+pub const MAX_TREE_ENTRIES: usize = 2_000;
 
 /// One entry of a tree listing.
 #[derive(Debug, Clone, PartialEq, Eq)]

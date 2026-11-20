@@ -331,7 +331,7 @@ fn a_skills_directory_of_50_000_entries_is_listed_to_the_entry_budget() {
         .iter()
         .filter(|ext| ext.file.starts_with(&skills))
         .count();
-    assert_eq!(listed, 5_000, "Claude lists the first 5,000 skills");
+    assert_eq!(listed, 2_000, "Claude lists the first 2,000 skills");
     let capped: Vec<_> = scanned
         .snapshot
         .diagnostics
@@ -346,9 +346,9 @@ fn a_skills_directory_of_50_000_entries_is_listed_to_the_entry_budget() {
                 path: skills.clone(),
                 line: None
             },
-            &Problem::ListingCapped { max: 5_000 }
+            &Problem::ListingCapped { max: 2_000 }
         )],
-        "one diagnostic names the skills directory and the budget of 5,000 entries"
+        "one diagnostic names the skills directory and the budget of 2,000 entries"
     );
 }
 
