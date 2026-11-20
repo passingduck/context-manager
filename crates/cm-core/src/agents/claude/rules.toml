@@ -5,6 +5,12 @@ ko = "Claude Code는 사용자 수준 파일을 CLAUDE_CONFIG_DIR 환경 변수�
 evidence = "docs/agents/claude-code.md section 1.1"
 
 [[rule]]
+id = "claude.instructions.nested_worktree"
+en = "The working directory is inside a nested worktree. For the directories above the worktree root but inside the main checkout, Claude Code reads only CLAUDE.local.md. It skips their CLAUDE.md files, because the worktree has its own copies."
+ko = "작업 디렉터리가 중첩된 워크트리 안에 있습니다. 워크트리 루트 위에 있고 메인 체크아웃 안에 있는 디렉터리에서는 Claude Code가 CLAUDE.local.md만 읽습니다. 워크트리에 같은 파일의 사본이 있으므로 그 디렉터리의 CLAUDE.md는 읽지 않습니다."
+evidence = "docs/agents/claude-code.md section 1.1 (CONFIRMED, RUN:wtnested)"
+
+[[rule]]
 id = "claude.access.managed_path_rule"
 en = "A managed rule with a paths list loads when Claude Code reads, writes or edits a file that matches one of its patterns. The patterns are matched against the path relative to the session's working directory."
 ko = "paths 목록이 있는 관리형 규칙은 Claude Code가 그 패턴에 맞는 파일을 읽거나 쓰거나 수정할 때 불러옵니다. 패턴은 세션의 작업 디렉터리를 기준으로 한 상대 경로에 대해 비교합니다."

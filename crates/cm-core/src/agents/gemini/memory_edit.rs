@@ -25,7 +25,9 @@ pub(super) fn add(
     };
     if !matches!(store.write, MemoryWrite::Direct) {
         return Err(ApiError::ReadOnly {
-            why: RuleRef::new("gemini.state_file"),
+            why: ReadOnlyReason::Rule {
+                rule: RuleRef::new("gemini.state_file"),
+            },
         });
     }
     let title = one_line(title);

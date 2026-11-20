@@ -2,6 +2,11 @@
 import type { AbsPath } from "./AbsPath";
 import type { ChangeId } from "./ChangeId";
 import type { Os } from "./Os";
+import type { RuleSpec } from "./RuleSpec";
 import type { Shell } from "./Shell";
 
-export type Session = { version: string, shell: Shell, readOnly: boolean, launchCwd: AbsPath, home: AbsPath, os: Os, pending: Array<ChangeId>, };
+export type Session = { version: string, shell: Shell, readOnly: boolean, launchCwd: AbsPath, home: AbsPath, os: Os, pending: Array<ChangeId>, 
+/**
+ * The rules that belong to no agent.
+ */
+coreRules: Array<RuleSpec>, };

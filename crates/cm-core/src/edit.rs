@@ -62,7 +62,7 @@ enum Disk {
     Absent,
     Text { text: String, rev: Revision },
     NotUtf8,
-    Unreadable(String),
+    Unreadable(ApiError),
 }
 
 impl Disk {
@@ -143,7 +143,7 @@ pub fn change_edit_of(edit: &Edit) -> ChangeEdit {
     }
 }
 
-fn invalid(field: &str, why: &str) -> ApiError {
+fn invalid(field: &str, why: &'static str) -> ApiError {
     ApiError::InvalidEdit {
         field: field.to_owned(),
         why: RuleRef::new(why),
@@ -151,16 +151,8 @@ fn invalid(field: &str, why: &str) -> ApiError {
 }
 
 fn read_only(why: &ReadOnlyWhy) -> ApiError {
-    let name = match why {
-        ReadOnlyWhy::Managed => "managed",
-        ReadOnlyWhy::PluginCache { .. } => "plugin_cache",
-        ReadOnlyWhy::Generated => "generated",
-        ReadOnlyWhy::AgentState => "agent_state",
-        ReadOnlyWhy::Synced => "synced",
-        ReadOnlyWhy::NotUtf8 => "not_utf8",
-    };
     ApiError::ReadOnly {
-        why: RuleRef::new(&format!("edit.read_only.{name}")),
+        why: ReadOnlyReason::File { why: why.clone() },
     }
 }
 
@@ -226,18 +218,18 @@ impl<'a> Planner<'a> {
     fn disk(&self, path: &AbsPath) -> Disk {
         match self.fs().stat(path) {
             Err(err) if err.is_not_found() => return Disk::Absent,
-            Err(err) => return Disk::Unreadable(err.detail),
+            Err(err) => return Disk::Unreadable(err.into()),
             Ok(stat) if stat.kind != EntryKind::File => {
-                return Disk::Unreadable("not a regular file".to_owned());
+                return Disk::Unreadable(invalid("path", "edit.not_regular_file"));
             }
             Ok(stat) if stat.len > MAX_READ_BYTES => {
-                return Disk::Unreadable("file is too big".to_owned());
+                return Disk::Unreadable(invalid("path", "edit.file_too_large"));
             }
             Ok(_) => {}
         }
         match self.fs().read(path) {
             Err(err) if err.is_not_found() => Disk::Absent,
-            Err(err) => Disk::Unreadable(err.detail),
+            Err(err) => Disk::Unreadable(err.into()),
             Ok(bytes) => match String::from_utf8(bytes.as_ref().clone()) {
                 Ok(text) => Disk::Text {
                     rev: Revision::of(text.as_bytes()),
@@ -252,7 +244,7 @@ impl<'a> Planner<'a> {
     fn editable_disk(&self, path: &AbsPath) -> Result<Disk, ApiError> {
         match self.disk(path) {
             Disk::NotUtf8 => Err(read_only(&ReadOnlyWhy::NotUtf8)),
-            Disk::Unreadable(detail) => Err(ApiError::Io { detail }),
+            Disk::Unreadable(err) => Err(err),
             ok => Ok(ok),
         }
     }

@@ -149,7 +149,9 @@ fn a_scratchpad_shaped_folder_is_refused() {
     assert_eq!(
         skip_of(&scan, &cwd.join("CLAUDE.md")),
         Skip::Invalid {
-            detail: "scratchpad".into()
+            why: Invalid::Location {
+                which: RefusedLocation::Scratchpad
+            }
         }
     );
 }
@@ -429,7 +431,7 @@ fn a_rule_whose_frontmatter_does_not_parse_never_loads_and_is_diagnosed() {
     assert_eq!(
         skip_of(&scan, &rule),
         Skip::Invalid {
-            detail: "frontmatter".into()
+            why: Invalid::Frontmatter
         }
     );
     assert!(scan.diagnostics.iter().any(|d| matches!(
@@ -475,8 +477,8 @@ fn nested_worktree_dirs_above_the_worktree_keep_only_their_local_file() {
     let (scan, _) = scan_with(&env);
     assert_eq!(
         skip_of(&scan, &main.join("CLAUDE.md")),
-        Skip::Invalid {
-            detail: "nested_worktree".into()
+        Skip::NotRead {
+            why: RuleRef::new("claude.instructions.nested_worktree")
         }
     );
     assert_eq!(

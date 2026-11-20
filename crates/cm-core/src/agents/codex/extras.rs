@@ -13,7 +13,7 @@ use crate::probe_fs::EntryKind;
 pub(super) const RULE_GUARD: &str = "codex.guard.trusted_hash";
 pub(super) const RULE_RUN_MCP: &str = "codex.hooks.run_mcp_unsupported";
 
-fn slot(id: &str, place: Place, kind: NewItemKind, scope: Scope, rule: &str) -> Slot {
+fn slot(id: &str, place: Place, kind: NewItemKind, scope: Scope, rule: &'static str) -> Slot {
     Slot {
         id: SlotId(id.to_owned()),
         place,

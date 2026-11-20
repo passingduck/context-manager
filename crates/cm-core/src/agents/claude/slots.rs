@@ -12,15 +12,16 @@ pub(super) fn slots(_cx: &ScanCx, setup: &Setup, memdir: &MemDir) -> Vec<Slot> {
     let cwd = &setup.cwd;
     let config = &setup.config;
     let mut out = Vec::new();
-    let mut add = |id: &str, place: Place, new_kind: NewItemKind, scope: Scope, rule: &str| {
-        out.push(Slot {
-            id: SlotId(format!("claude:{id}")),
-            place,
-            new_kind,
-            scope,
-            rule: RuleRef::new(rule),
-        });
-    };
+    let mut add =
+        |id: &str, place: Place, new_kind: NewItemKind, scope: Scope, rule: &'static str| {
+            out.push(Slot {
+                id: SlotId(format!("claude:{id}")),
+                place,
+                new_kind,
+                scope,
+                rule: RuleRef::new(rule),
+            });
+        };
     // Spec 1.1: instruction files.
     add(
         "instructions:project",

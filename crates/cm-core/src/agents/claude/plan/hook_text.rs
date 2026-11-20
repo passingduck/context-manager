@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use super::splice::{self, Kind, Node, Seg};
 use crate::model::*;
 
-pub(super) fn invalid(field: &str, why: &str) -> ApiError {
+pub(super) fn invalid(field: &str, why: &'static str) -> ApiError {
     ApiError::InvalidEdit {
         field: field.to_owned(),
         why: RuleRef::new(why),
