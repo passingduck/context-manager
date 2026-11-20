@@ -31,6 +31,9 @@ export async function confirmApply(page) {
   await page.eval(`[...document.querySelectorAll("[data-testid=apply-tick]")].forEach((c) => { if (!c.checked) c.click(); })`);
   await page.until(`document.querySelector("[data-testid=apply-confirm]")?.disabled === false`, "the confirm button to enable");
   await page.click("[data-testid=apply-confirm]");
+  // With no OS trash the dialog ends on a notice that lists what was not trashed, such as a parked record the tool removes.
+  await page.until(`!document.querySelector("[role=dialog]") || !!document.querySelector("[data-testid=apply-close]")`, "the dialog to close or show its notice", 15000);
+  if (await page.count("[data-testid=apply-close]")) await page.click("[data-testid=apply-close]");
   await page.waitGone("[role=dialog]", 15000);
 }
 
