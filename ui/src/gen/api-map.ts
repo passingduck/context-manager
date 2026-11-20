@@ -13,6 +13,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
 import type { KnownProject } from "./KnownProject";
 import type { LoadTexts } from "./LoadTexts";
 import type { LoadTextsReq } from "./LoadTextsReq";
+import type { PieceText } from "./PieceText";
 import type { PlanReq } from "./PlanReq";
 import type { Preview } from "./Preview";
 import type { ReadReq } from "./ReadReq";
@@ -27,6 +28,13 @@ import type { Session } from "./Session";
 import type { SimReq } from "./SimReq";
 import type { Simulation } from "./Simulation";
 import type { Snapshot } from "./Snapshot";
+import type { StepPieces } from "./StepPieces";
+import type { Trace } from "./Trace";
+import type { TraceInfo } from "./TraceInfo";
+import type { TracePieceReq } from "./TracePieceReq";
+import type { TraceReq } from "./TraceReq";
+import type { TraceStepReq } from "./TraceStepReq";
+import type { TracesReq } from "./TracesReq";
 import type { WatchReq } from "./WatchReq";
 
 export interface ApiMap {
@@ -46,6 +54,10 @@ export interface ApiMap {
   change: { args: ChangeReq; result: ChangeDetail };
   hook_sample: { args: SampleReq; result: JsonValue };
   run_hook: { args: RunReq; result: HookRun };
+  traces: { args: TracesReq; result: Array<TraceInfo> };
+  trace: { args: TraceReq; result: Trace };
+  trace_step: { args: TraceStepReq; result: StepPieces };
+  trace_piece: { args: TracePieceReq; result: PieceText };
 }
 
 export type Op = keyof ApiMap;

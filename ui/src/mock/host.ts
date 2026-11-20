@@ -174,5 +174,13 @@ export async function handle(request: Request): Promise<unknown> {
       return SAMPLES[request.args.event] ?? { hook_event_name: request.args.event };
     case "run_hook":
       return runHook(request.args.hook, request.args.input);
+    // The mock records no sessions.
+    case "traces":
+      return [];
+    case "trace":
+      return reject({ kind: "notFound" });
+    case "trace_step":
+    case "trace_piece":
+      return { kind: "stale" };
   }
 }

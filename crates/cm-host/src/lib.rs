@@ -1,6 +1,7 @@
 //! `cm-host` holds the effects: it implements [`Api`] over `cm-core`. The host keeps no state of
-//! record. A scan is a function of the filesystem and the environment, and the one cache it holds
-//! (the paths the last scan probed, per `cwd`) is rebuilt by any scan.
+//! record. A scan is a function of the filesystem and the environment. It holds two caches: the
+//! paths the last scan probed, per `cwd`, which any scan rebuilds, and the two traces opened last,
+//! which every use checks against the file.
 
 mod apply;
 mod fsio;
@@ -8,6 +9,7 @@ mod history;
 mod host;
 mod recovery;
 mod runner;
+mod traces;
 
 pub use apply::{OsTrash, Trasher};
 pub use history::History;

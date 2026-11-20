@@ -1119,6 +1119,191 @@ choices! {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Past sessions (design section 14)
+// ---------------------------------------------------------------------------------------------
+
+ids! {
+    /// The agent's own id of a session. For Claude Code the transcript's file stem.
+    pub struct TraceId(pub String);
+}
+
+records! {
+    /// One row of the session list. Read from the head and the tail of the record, never the
+    /// whole file.
+    pub struct TraceInfo {
+        pub agent: AgentId,
+        pub id: TraceId,
+        pub file: AbsPath,
+        pub bytes: u64,
+        /// The agent's own title for the session, else its first prompt. The operator's text.
+        pub title: Option<String>,
+        /// RFC 3339, as `ChangeRecord.at`.
+        pub started: Option<String>,
+        pub last: Option<String>,
+        /// Where the session started.
+        pub cwd: Option<AbsPath>,
+    }
+
+    /// A session, or one subagent of it. `part` is the agent's id for the subagent.
+    pub struct TraceKey {
+        pub agent: AgentId,
+        pub id: TraceId,
+        pub part: Option<String>,
+    }
+
+    pub struct Trace {
+        pub info: TraceInfo,
+        /// Bytes of the record this trace was built from. A detail request names it.
+        pub read: u64,
+        /// One per call of the model, in the order they were made.
+        pub steps: Vec<Step>,
+        pub boundaries: Vec<Boundary>,
+        /// Subagents recorded under the session.
+        pub parts: Vec<PartInfo>,
+        /// The 30 largest pieces, each at the step that sent it first.
+        pub top: Vec<TopPiece>,
+        pub problems: Vec<TraceProblem>,
+    }
+
+    pub struct Step {
+        pub at: String,
+        pub model: Option<String>,
+        /// `None`: the record holds no reply (interrupted, failed, still running).
+        pub usage: Option<Usage>,
+        /// `None`: the agent recorded no request for this reply.
+        pub sent: Option<Sent>,
+        pub reply: Vec<ReplyPiece>,
+    }
+
+    /// What the API reported. `input` is the part that was neither read from the cache nor
+    /// written to it.
+    pub struct Usage {
+        pub input: u64,
+        pub cache_read: u64,
+        pub cache_write: u64,
+        pub output: u64,
+        pub thinking: Option<u64>,
+    }
+
+    pub struct Sent {
+        /// The rebuilt request matches the digest the agent recorded for it.
+        pub exact: bool,
+        pub pieces: u32,
+        /// How many leading pieces equal the previous step's request, piece for piece. 0 when
+        /// the previous step has no request.
+        pub shared: u32,
+        /// Estimated tokens per kind.
+        pub by_kind: Vec<KindTotal>,
+        /// Indexes of the pieces that end at a cache mark.
+        pub marks: Vec<u32>,
+    }
+
+    pub struct KindTotal {
+        pub kind: PieceKind,
+        pub shared: u32,
+        pub fresh: u32,
+    }
+
+    pub struct ReplyPiece {
+        pub kind: PieceKind,
+        pub label: Option<String>,
+        pub bytes: u64,
+        pub tokens: u32,
+    }
+
+    /// A compaction. `before` is the index of the first step after it.
+    pub struct Boundary {
+        pub before: u32,
+        pub pre_tokens: Option<u64>,
+        pub post_tokens: Option<u64>,
+    }
+
+    pub struct PartInfo {
+        pub part: String,
+        pub label: Option<String>,
+        pub description: Option<String>,
+        pub bytes: u64,
+    }
+
+    pub struct TopPiece {
+        pub step: u32,
+        pub piece: u32,
+        pub kind: PieceKind,
+        pub label: Option<String>,
+        pub tokens: u32,
+    }
+
+    /// One piece of a request, in the order the model received them: system blocks, tool
+    /// definitions, messages. Named `Piece` in design section 14; `Piece` already names a
+    /// run of a session-start block.
+    pub struct TracePiece {
+        pub place: PiecePlace,
+        pub kind: PieceKind,
+        /// A short name from the record: the tool, the skill, the hook event.
+        pub label: Option<String>,
+        /// The file the piece came from, when the record names it.
+        pub file: Option<AbsPath>,
+        pub bytes: u64,
+        /// o200k estimate of this piece alone.
+        pub tokens: u32,
+        /// Its first 160 characters.
+        pub head: String,
+    }
+
+    pub struct TracesReq { pub cwd: AbsPath }
+    pub struct TraceReq { pub cwd: AbsPath, pub key: TraceKey }
+    /// `read` is `Trace.read` of the trace the client shows.
+    pub struct TraceStepReq { pub cwd: AbsPath, pub key: TraceKey, pub read: u64, pub step: u32 }
+    pub struct TracePieceReq { pub cwd: AbsPath, pub key: TraceKey, pub read: u64, pub step: u32, pub piece: PieceRef }
+}
+
+choices! {
+    pub enum Role { User, Model, System, Developer }
+
+    pub enum PieceKind {
+        System, ToolDefinition, Instructions, Catalog, Environment, Reminder, HookOutput,
+        UserText, Command, FileMention, ExtensionBody, Summary,
+        ModelText, Thinking, ToolCall, ToolResult, Frame, Other,
+    }
+}
+
+variants! {
+    pub enum TraceProblem {
+        /// Replies whose request the agent did not record.
+        NoRequests { steps: u32 },
+        /// Requests that do not match their digest, or hold a message that did not resolve.
+        Inexact { steps: u32 },
+        UnreadableLines { lines: u32 },
+        RecordTooLarge { bytes: u64, limit: u64 },
+    }
+
+    pub enum PiecePlace {
+        System { block: u32 },
+        Tool { index: u32 },
+        Message { message: u32, role: Role, block: u32 },
+    }
+
+    /// The answer of `trace_step`.
+    pub enum StepPieces {
+        Current { pieces: Vec<TracePiece> },
+        /// The record changed under the trace the request names. Open it again.
+        Stale,
+    }
+
+    pub enum PieceRef {
+        Sent { piece: u32 },
+        Reply { piece: u32 },
+    }
+
+    /// The answer of `trace_piece`.
+    pub enum PieceText {
+        /// At most 1 MiB of the text. `bytes` is the whole piece; `cut` says the text stops early.
+        Current { text: String, bytes: u64, cut: bool },
+        Stale,
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // API request arguments and errors
 // ---------------------------------------------------------------------------------------------
 

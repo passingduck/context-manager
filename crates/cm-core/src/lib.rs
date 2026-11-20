@@ -22,6 +22,7 @@ pub mod simulate;
 pub mod testing;
 pub mod texts;
 pub mod tokens;
+pub mod trace;
 pub mod walk;
 
 pub use api::{Api, Request, dispatch};

@@ -13,6 +13,7 @@ use crate::apply::{Ctx, OsTrash, Trasher};
 use crate::history::History;
 use crate::recovery;
 use crate::runner;
+use crate::traces::{self, TraceMemo};
 
 /// How long `watch` waits before it answers with the unchanged fingerprint (design section 8).
 pub const WATCH_TIMEOUT: Duration = Duration::from_secs(25);
@@ -89,6 +90,8 @@ pub struct Host {
     probes: Mutex<HashMap<AbsPath, Vec<AbsPath>>>,
     /// What `plan`, `apply`, `history` and `change` read and write.
     pub(crate) ctx: Arc<Ctx>,
+    /// The two traces opened last (design section 14).
+    traces: Arc<TraceMemo>,
     /// A test stops the apply pipeline after this step, as a crash would.
     #[cfg(test)]
     pub(crate) fail_after: Arc<Mutex<Option<crate::apply::Step>>>,
@@ -131,6 +134,7 @@ impl Host {
             config,
             probes: Mutex::new(HashMap::new()),
             ctx,
+            traces: Arc::new(TraceMemo::default()),
             #[cfg(test)]
             fail_after: Arc::new(Mutex::new(None)),
         };
@@ -473,6 +477,45 @@ impl Api for Host {
         .await
         .map_err(join_error)?
     }
+
+    async fn traces(&self, req: TracesReq) -> Result<Vec<TraceInfo>, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let agents = self.ctx.agents;
+        tokio::task::spawn_blocking(move || traces::traces(agents, &env))
+            .await
+            .map_err(join_error)
+    }
+
+    async fn trace(&self, req: TraceReq) -> Result<Trace, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || Ok(memo.open(agents, &env, &req.key)?.trace().clone()))
+            .await
+            .map_err(join_error)?
+    }
+
+    /// `Stale` when the record no longer has the length the client's trace was built from.
+    async fn trace_step(&self, req: TraceStepReq) -> Result<StepPieces, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || {
+            let open = memo.open(agents, &env, &req.key)?;
+            traces::step_pieces(&open, req.read, req.step)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    async fn trace_piece(&self, req: TracePieceReq) -> Result<PieceText, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || {
+            let open = memo.open(agents, &env, &req.key)?;
+            traces::piece_text(&open, req.read, req.step, req.piece)
+        })
+        .await
+        .map_err(join_error)?
+    }
 }
 
 #[cfg(test)]
@@ -582,6 +625,11 @@ mod tests {
         let snapshot = host.scan(ScanReq { cwd: cwd.clone() }).await.unwrap();
         let hook = snapshot.agents[0].hooks[0].id.clone();
         let claude = AgentId::parse("claude").unwrap();
+        let key = TraceKey {
+            agent: claude.clone(),
+            id: TraceId("none".into()),
+            part: None,
+        };
         let requests = vec![
             Request::Session(()),
             Request::Agents(()),
@@ -644,9 +692,27 @@ mod tests {
                 event: "Stop".into(),
             }),
             Request::RunHook(RunReq {
-                cwd,
+                cwd: cwd.clone(),
                 hook,
                 input: serde_json::json!({}),
+            }),
+            Request::Traces(TracesReq { cwd: cwd.clone() }),
+            Request::Trace(TraceReq {
+                cwd: cwd.clone(),
+                key: key.clone(),
+            }),
+            Request::TraceStep(TraceStepReq {
+                cwd: cwd.clone(),
+                key: key.clone(),
+                read: 0,
+                step: 0,
+            }),
+            Request::TracePiece(TracePieceReq {
+                cwd,
+                key,
+                read: 0,
+                step: 0,
+                piece: PieceRef::Sent { piece: 0 },
             }),
         ];
         assert_eq!(
