@@ -182,6 +182,18 @@ fn codex(t: &Tree) {
 fn gemini(t: &Tree) {
     let h = "home/.gemini";
     t.write(
+        &format!("{h}/projects.json"),
+        &json!({"projects": {t.abs("project").as_str(): "proj"}}).to_string(),
+    );
+    t.write(
+        &format!("{h}/tmp/proj/memory/MEMORY.md"),
+        "- [Note](note.md) - hook\n",
+    );
+    t.write(
+        &format!("{h}/tmp/proj/memory/note.md"),
+        "# Note\nbody @import.md\n",
+    );
+    t.write(
         &format!("{h}/settings.json"),
         "// my settings\n{\n\t\"hooks\": {\n\t\t\"BeforeTool\": [\n\t\t\t{ \"matcher\": \"^write\", \"hooks\": [ { \"type\": \"command\", \"command\": \"keep.sh\" } ] }\n\t\t],\n\t\t\"SessionStart\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"start.sh\" } ] } ]\n\t},\n\t\"hooksConfig\": { \"notifications\": true }\n}\n",
     );
