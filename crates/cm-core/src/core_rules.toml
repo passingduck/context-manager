@@ -3,7 +3,7 @@
 [[rule]]
 id = "edit.base_not_a_file"
 en = "A save needs the revision of a file or the absent marker as its base. A directory hash is not a base for a file."
-ko = "저장하려면 파일의 리비전이나 파일이 없다는 표시를 기준으로 보내야 합니다. 디렉터리 해시는 파일의 기준이 될 수 없습니다."
+ko = "저장 요청은 파일의 리비전을 기준으로 보냅니다. 파일이 없으면 없다는 표시를 보냅니다. 디렉터리 해시는 파일의 기준이 될 수 없습니다."
 evidence = "docs/design.md section 4 (Base: Absent, Rev for a file, Tree for a directory)"
 
 [[rule]]
@@ -21,29 +21,29 @@ evidence = "docs/design.md section 4 (an edit that no agent plans and no generic
 [[rule]]
 id = "edit.dangling_symlink"
 en = "The path is a link that points at a file that does not exist. The program does not create a file through a link, so fix or remove the link first."
-ko = "이 경로는 존재하지 않는 파일을 가리키는 링크입니다. 이 프로그램은 링크를 통해 파일을 만들지 않으므로, 먼저 링크를 고치거나 지워야 합니다."
+ko = "이 경로는 존재하지 않는 파일을 가리키는 링크입니다. 이 프로그램은 링크를 통해 파일을 만들지 않습니다. 먼저 링크를 고치거나 지워야 합니다."
 evidence = "docs/design.md section 4 (A path that is a symlink to nothing is an InvalidEdit)"
 
 [[rule]]
 id = "edit.not_regular_file"
 en = "The path is not a regular file. It may be a directory, a device, a named pipe or a socket, so the program does not write it."
-ko = "이 경로는 일반 파일이 아닙니다. 디렉터리, 장치, 이름 있는 파이프나 소켓일 수 있어서 이 프로그램은 쓰지 않습니다."
+ko = "이 경로는 일반 파일이 아닙니다. 디렉터리, 장치, 이름 있는 파이프나 소켓일 수 있습니다. 그래서 이 프로그램은 이 경로에 쓰지 않습니다."
 evidence = "docs/design.md section 4 (the plan reads a file as text before it writes)"
 
 [[rule]]
 id = "edit.file_too_large"
 en = "The file is larger than the read limit of the program, so the program does not edit it."
-ko = "파일이 이 프로그램의 읽기 한도보다 커서 이 프로그램은 수정하지 않습니다."
+ko = "파일이 이 프로그램의 읽기 한도보다 큽니다. 그래서 이 프로그램은 파일을 수정하지 않습니다."
 evidence = "docs/design.md section 3 (the scan reads at most MAX_READ_BYTES of a file)"
 
 [[rule]]
 id = "search.invalid_regex"
 en = "The search pattern is not a valid regular expression, or it is too large to compile."
-ko = "검색 패턴이 올바른 정규식이 아니거나 너무 커서 컴파일할 수 없습니다."
+ko = "검색 패턴이 올바른 정규식이 아닙니다. 너무 커서 컴파일할 수 없는 경우도 있습니다."
 evidence = "docs/design.md section 6 (search takes a regex flag and a query)"
 
 [[rule]]
 id = "hook.run_unsupported"
 en = "This agent has no invocation that the program can reproduce, so the program does not run its hooks."
-ko = "이 에이전트에는 이 프로그램이 똑같이 만들 수 있는 실행 방식이 없어서, 이 프로그램은 이 에이전트의 훅을 실행하지 않습니다."
+ko = "이 에이전트에는 이 프로그램이 똑같이 만들 수 있는 실행 방식이 없습니다. 그래서 이 프로그램은 이 에이전트의 훅을 실행하지 않습니다."
 evidence = "docs/design.md section 6 (run_hook runs a hook with the invocation its agent would use)"
