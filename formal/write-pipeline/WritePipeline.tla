@@ -27,7 +27,8 @@ CONSTANTS
     ExecuteBeforeJournal, \* step 4 runs before the pending record is written
     SkipUndo,             \* a failed apply aborts its record without restoring any file
     SealBeforeLastOp,     \* the sealed record is written before the last operation
-    RevertKeepsTarget     \* a revert never resolves the record it reverts
+    RevertKeepsTarget,    \* a revert never resolves the record it reverts
+    TornUnreported        \* a failed in-place write does not say it truncated the file
 
 -----------------------------------------------------------------------------
 (* Texts and files *)
@@ -88,7 +89,7 @@ vars == <<diskVars, histVars, procVars, boundVars, writeGhosts, runGhosts>>
 
 NoAct == [kind |-> "none", target |-> 0, ops |-> <<>>, id |-> 0,
           i |-> 0, targets |-> {}, rclean |-> FALSE, journaled |-> FALSE,
-          early |-> FALSE, done |-> 0, j |-> 0, clean |-> TRUE]
+          early |-> FALSE, done |-> 0, j |-> 0, clean |-> TRUE, changed |-> FALSE]
 NoRec == [list |-> <<>>, k |-> 0, i |-> 0, states |-> <<>>, refs |-> {}]
 
 \* What `History::all` shows for a change: a closed record hides a pending one.
@@ -114,12 +115,16 @@ CurOp(p) == act[p].ops[act[p].i]
 UndoOp(p) == act[p].ops[act[p].j]
 
 \* The operator's edit of f would land between the tool's hash check of f and its
-\* write of f, or between the undo's classification of f and its restore.
+\* write of f, between the undo's classification of f and its restore, or between an
+\* in-place write of f that failed after the truncate and the undo's classification of f,
+\* which the code runs right after the failure.
 InWindow(f) ==
     \E p \in Procs :
         \/ /\ pc[p] \in {"a_temp", "a_rename", "a_trunc", "a_inplace", "a_trash"}
            /\ CurOp(p).file = f
         \/ /\ pc[p] \in {"u_temp", "u_rename", "u_trunc", "u_inplace", "u_remove"}
+           /\ UndoOp(p).file = f
+        \/ /\ pc[p] = "u_classify" /\ act[p].changed /\ act[p].j > act[p].done
            /\ UndoOp(p).file = f
 
 -----------------------------------------------------------------------------
@@ -132,7 +137,8 @@ Observe(f, t) ==
 
 \* Every change the tool makes to an agent file goes through ToolWrite.
 \* why: "do" writes the change's own text, "undo" puts a before text back.
-\* cont: the second half of an in-place write, which continues the first.
+\* cont: the write continues an earlier write of the same change, as the second half of
+\* an in-place write does. What it replaced stays what the earlier write replaced.
 ToolWrite(p, f, t, c, why, cont) ==
     /\ disk' = [disk EXCEPT ![f] = t]
     /\ writer' = [writer EXCEPT ![f] = IF why = "do" THEN c ELSE 0]
@@ -207,11 +213,14 @@ AfterOp(p) ==
                        THEN "a_target_write" ELSE "a_seal_write")
             /\ SetAct(p, [a EXCEPT !.i = n + 1])
 
-\* The first step of the undo after operation act[p].i failed.
-\*   code: crates/cm-host/src/apply.rs Ctx::run, `self.undo(&mut record, done, ends[index])`
-StartUndo(p) ==
+\* The first step of the undo after operation act[p].i failed. `changed`: the failed
+\* operation returned that it had begun to change its file.
+\*   code: crates/cm-host/src/apply.rs Ctx::run,
+\*   `self.undo(&mut record, done, ends[index], failure.changed)`
+StartUndo(p, changed) ==
     /\ Goto(p, "u_classify")
-    /\ SetAct(p, [act[p] EXCEPT !.done = act[p].i - 1, !.j = act[p].i, !.clean = TRUE])
+    /\ SetAct(p, [act[p] EXCEPT !.done = act[p].i - 1, !.j = act[p].i, !.clean = TRUE,
+                               !.changed = changed])
 
 \* The undo moves to the operation before act[p].j, or closes the record.
 \*   code: crates/cm-host/src/apply.rs Ctx::undo
@@ -415,7 +424,7 @@ CheckHash(p) ==
                        ELSE IF op.file \in InPlace /\ disk[op.file] # Absent THEN "a_trunc"
                        ELSE "a_temp")
             /\ UNCHANGED act
-       ELSE StartUndo(p)
+       ELSE StartUndo(p, FALSE)
     /\ UNCHANGED <<diskVars, histVars, rec, lock, nextId, boundVars, writeGhosts, runGhosts>>
 
 \* Step 4, Write: create, write and sync the temp file beside the target.
@@ -426,7 +435,7 @@ WriteTemp(p) ==
           /\ Goto(p, "a_rename")
           /\ UNCHANGED <<act, failures, dist>>
        \/ /\ Fail(p)           \* atomic_write removes the temp file on failure
-          /\ StartUndo(p)
+          /\ StartUndo(p, FALSE)
           /\ UNCHANGED temps
     /\ UNCHANGED <<disk, histVars, rec, lock, nextId, crashes, outside, writeGhosts,
                    planned, fate, cleanRun, revertBroken>>
@@ -445,9 +454,9 @@ Rename(p) ==
                   /\ UNCHANGED failures
                \/ /\ Fail(p)
                   /\ temps' = temps \ {tmp}
-                  /\ StartUndo(p)
+                  /\ StartUndo(p, FALSE)
                   /\ UNCHANGED <<disk, writeGhosts>>
-          ELSE /\ StartUndo(p)      \* ENOENT: someone removed the temp file
+          ELSE /\ StartUndo(p, FALSE)      \* ENOENT: someone removed the temp file
                /\ UNCHANGED <<diskVars, writeGhosts, failures, dist>>
     /\ UNCHANGED <<histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
@@ -455,29 +464,31 @@ Rename(p) ==
 \* Step 4, Write of a file with more than one hard link: open it truncated. An open
 \* that fails leaves the file as it was, and the run undoes what it did ...
 \*   code: crates/cm-host/src/apply.rs Effects::write, `has_other_names`,
-\*   fsio.rs write_in_place, `OpenOptions::new().write(true).truncate(true).open`
+\*   fsio.rs write_in_place, `OpenOptions::new().write(true).truncate(true).open(target)?`
 Truncate(p) ==
     /\ pc[p] = "a_trunc"
     /\ \/ /\ ToolWrite(p, CurOp(p).file, Torn, act[p].id, "do", FALSE)
           /\ Goto(p, "a_inplace")
           /\ UNCHANGED <<act, failures>>
        \/ /\ Fail(p)
-          /\ StartUndo(p)
+          /\ StartUndo(p, FALSE)
           /\ UNCHANGED <<disk, writeGhosts>>
     /\ UNCHANGED <<temps, histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
 
 \* ... then write the new text into it and sync it. A failed write leaves the file half
-\* written. (A failed sync after a full write leaves the new text, which the undo finds
-\* at after and restores. The model leaves that case out.)
-\*   code: crates/cm-host/src/fsio.rs write_in_place, `file.write_all(bytes)?`, `file.sync_all()`
+\* written and returns that it changed the file. (A failed sync after a full write leaves
+\* the new text, which the undo finds at after and restores. The model leaves that case
+\* out.)
+\*   code: crates/cm-host/src/fsio.rs write_in_place, `file.write_all(bytes)`,
+\*   `file.sync_all()`, `Failed { err, changed: true }`
 WriteInPlace(p) ==
     /\ pc[p] = "a_inplace"
     /\ \/ /\ ToolWrite(p, CurOp(p).file, CurOp(p).after, act[p].id, "do", TRUE)
           /\ AfterOp(p)
           /\ UNCHANGED failures
        \/ /\ Fail(p)
-          /\ StartUndo(p)
+          /\ StartUndo(p, ~TornUnreported)
           /\ UNCHANGED <<disk, writeGhosts>>
     /\ UNCHANGED <<temps, histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
@@ -490,7 +501,7 @@ TrashFile(p) ==
           /\ AfterOp(p)
           /\ UNCHANGED failures
        \/ /\ Fail(p)
-          /\ StartUndo(p)
+          /\ StartUndo(p, FALSE)
           /\ UNCHANGED <<disk, writeGhosts>>
     /\ UNCHANGED <<temps, histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
@@ -555,19 +566,21 @@ ApplyReturn(p) ==
 (* The undo of a failed apply: design section 4, "A failed apply is not a crash" *)
 
 \* Classify the file of operation j, last first. At after: restore it. At before:
-\* nothing to do. At neither: someone else wrote it, unless it is the operation that
-\* failed, which did not write it.
+\* nothing to do. At neither: restore it when the failed operation changed it, as an
+\* in-place write that fails after the truncate does. Otherwise someone else wrote it,
+\* and only the failed operation, which did not write it, leaves the undo clean.
 \*   code: crates/cm-host/src/apply.rs Ctx::undo, recovery.rs classify
 UndoClassify(p) ==
     /\ pc[p] = "u_classify"
     /\ LET op == UndoOp(p)
            s == Classify(op)
-       IN IF s = "after" /\ ~SkipUndo
+           failed == act[p].j > act[p].done
+       IN IF ~SkipUndo /\ (s = "after" \/ (s = "other" /\ failed /\ act[p].changed))
           THEN /\ Goto(p, IF op.before = Absent THEN "u_remove"
                           ELSE IF op.file \in InPlace /\ disk[op.file] # Absent THEN "u_trunc"
                           ELSE "u_temp")
                /\ UNCHANGED act
-          ELSE UndoNext(p, s # "other" \/ act[p].j > act[p].done)
+          ELSE UndoNext(p, s # "other" \/ failed)
     /\ UNCHANGED <<diskVars, histVars, rec, lock, nextId, boundVars, writeGhosts, runGhosts>>
 
 \* Restore a before text: the temp file ...
@@ -603,11 +616,14 @@ UndoRename(p) ==
     /\ UNCHANGED <<histVars, rec, lock, nextId, crashes, outside, planned, fate,
                    cleanRun, revertBroken>>
 
-\* Restore a file with more than one hard link in place: truncate ...
+\* Restore a file with more than one hard link in place: truncate ... When the file holds
+\* the half-written text this change's failed write left, the restore continues that write:
+\* the text it replaced is still the one that write replaced.
 \*   code: crates/cm-host/src/apply.rs Ctx::restore, Effects::write, fsio.rs write_in_place
 UndoTruncate(p) ==
     /\ pc[p] = "u_trunc"
-    /\ ToolWrite(p, UndoOp(p).file, Torn, act[p].id, "undo", FALSE)
+    /\ LET f == UndoOp(p).file
+       IN ToolWrite(p, f, Torn, act[p].id, "undo", disk[f] = Torn /\ writer[f] = act[p].id)
     /\ Goto(p, "u_inplace")
     /\ UNCHANGED <<temps, histVars, act, rec, lock, nextId, boundVars, planned, fate,
                    cleanRun, revertBroken>>
