@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use crate::agents::ScanCx;
-use crate::md::refs::{self, RefNode};
+use crate::md::refs::{self, RefNode, RefTree};
 use crate::model::*;
 use crate::probe_fs::{MAX_READ_BYTES, ProbeError, ProbeErrorKind};
 use crate::scan::format_of;
@@ -23,10 +23,13 @@ pub fn reference_graph(
 ) -> Vec<Diagnostic> {
     let mut total = 0usize;
     let mut capped = false;
+    // A file that is a root more than once, in one agent or in several, is followed once.
+    let mut trees: HashMap<(AbsPath, Vec<Range<usize>>, AbsPath), RefTree> = HashMap::new();
     for view in views.iter_mut() {
         let loaded: HashSet<AbsPath> = view.loads.iter().map(|load| load.file.clone()).collect();
         let mut added: HashMap<AbsPath, LoadId> = HashMap::new();
         let roots = view.loads.len();
+        let imports = import_lines_by_host(&view.loads);
         for index in 0..roots {
             let root = view.loads[index].clone();
             if !reaches_model(&root) {
@@ -36,13 +39,17 @@ pub fn reference_graph(
                 continue;
             };
             let text = String::from_utf8_lossy(&bytes);
-            let claimed = import_lines(&view.loads[..roots], &root.id, &text);
+            let claimed = line_ranges(imports.get(&root.id).map_or(&[], Vec::as_slice), &text);
             let base = if root.file.starts_with(project_root) {
                 project_root.clone()
             } else {
                 root.file.parent().unwrap_or_else(AbsPath::root)
             };
-            let tree = refs::follow(&root.file, &text, &claimed, &base, cx.fs);
+            let tree = trees
+                .entry((root.file.clone(), claimed, base))
+                .or_insert_with_key(|(file, claimed, base)| {
+                    refs::follow(file, &text, claimed, base, cx.fs)
+                });
             capped |= tree.capped;
             let mut graph = Graph {
                 cx,
@@ -77,25 +84,31 @@ fn reaches_model(load: &Load) -> bool {
         && format_of(&load.file) == Format::Markdown
 }
 
-/// The byte ranges of the lines on which an adapter found an import of `host`. A link on such a
-/// line belongs to the adapter.
-fn import_lines(loads: &[Load], host: &LoadId, text: &str) -> Vec<Range<usize>> {
-    let mut lines: Vec<u32> = loads
-        .iter()
-        .filter_map(|load| match &load.via {
-            Via::Import { host: h, line, .. } if h == host => Some(*line),
-            _ => None,
-        })
-        .collect();
+/// For each host load, the sorted lines on which an adapter found an import of it. A link on
+/// such a line belongs to the adapter.
+fn import_lines_by_host(loads: &[Load]) -> HashMap<LoadId, Vec<u32>> {
+    let mut by_host: HashMap<LoadId, Vec<u32>> = HashMap::new();
+    for load in loads {
+        if let Via::Import { host, line, .. } = &load.via {
+            by_host.entry(host.clone()).or_default().push(*line);
+        }
+    }
+    for lines in by_host.values_mut() {
+        lines.sort_unstable();
+        lines.dedup();
+    }
+    by_host
+}
+
+/// The byte ranges of `text` that the sorted 1-based `lines` cover.
+fn line_ranges(lines: &[u32], text: &str) -> Vec<Range<usize>> {
     if lines.is_empty() {
         return Vec::new();
     }
-    lines.sort_unstable();
-    lines.dedup();
     let mut ranges = Vec::new();
     let mut start = 0usize;
     for (index, line) in text.split_inclusive('\n').enumerate() {
-        if lines.contains(&(index as u32 + 1)) {
+        if lines.binary_search(&(index as u32 + 1)).is_ok() {
             ranges.push(start..start + line.len());
         }
         start += line.len();

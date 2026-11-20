@@ -64,18 +64,19 @@ fn missing_links(input: &Input, out: &mut Vec<Diagnostic>) {
             }
         }
     }
+    let imports = import_lines(input);
     for (file, agents) in readers {
         let Ok(bytes) = input.cx.fs.read(file) else {
             continue;
         };
         let text = String::from_utf8_lossy(&bytes);
         let found = spans::scan(&text);
-        let skip_lines = import_lines(input, file);
+        let skip_lines = imports.get(file);
         let dir = file.parent().unwrap_or_else(AbsPath::root);
         let mut reported = BTreeSet::new();
         for link in &found.links {
             if found.in_code_or_comment(link.span.range.start)
-                || skip_lines.contains(&link.span.line)
+                || skip_lines.is_some_and(|lines| lines.contains(&link.span.line))
             {
                 continue;
             }
@@ -111,22 +112,19 @@ fn missing_links(input: &Input, out: &mut Vec<Diagnostic>) {
     }
 }
 
-/// The lines of `file` on which any agent found an import.
-fn import_lines(input: &Input, file: &AbsPath) -> BTreeSet<u32> {
-    let mut lines = BTreeSet::new();
+/// For each file, the lines on which any agent found an import.
+fn import_lines<'a>(input: &Input<'a>) -> BTreeMap<&'a AbsPath, BTreeSet<u32>> {
+    let mut by_file: BTreeMap<&AbsPath, BTreeSet<u32>> = BTreeMap::new();
     for view in input.views {
         for load in &view.loads {
             if let Via::Import { host, line, .. } = &load.via
-                && view
-                    .loads
-                    .get(host.0 as usize)
-                    .is_some_and(|host| host.file == *file)
+                && let Some(host) = view.loads.get(host.0 as usize)
             {
-                lines.insert(*line);
+                by_file.entry(&host.file).or_default().insert(*line);
             }
         }
     }
-    lines
+    by_file
 }
 
 /// Where a link target would be: beside the file, then from the project root. `None` for a
