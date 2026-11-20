@@ -418,3 +418,46 @@ fn a_2_mib_claude_md_is_counted_from_its_first_mib_and_says_so() {
         "the block that carries CLAUDE.md is marked as not exact"
     );
 }
+
+#[test]
+fn ten_links_to_one_8_mib_command_stop_at_the_scan_read_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    let names: Vec<AbsPath> = (0..10)
+        .map(|n| fx.project_path(&format!(".claude/commands/c{n}.md")))
+        .collect();
+    for name in &names {
+        fx.symlink(name, &fx.project_path("big.md"));
+    }
+    let scanned = scan_within(fx.env(), "ten links to one 8 MiB command", 3);
+
+    let max = 64 * MIB as u64;
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ReadBudgetExhausted { .. }
+        )),
+        [(&Subject::Agent, &Problem::ReadBudgetExhausted { max })],
+        "one diagnostic names the scan read budget of 64 MiB"
+    );
+    let refused = FileState::Unreadable {
+        error: "the scan read budget is spent".to_owned(),
+    };
+    let states: Vec<bool> = names
+        .iter()
+        .map(|name| match state_of(&scanned, name) {
+            Some(FileState::Present { .. }) => true,
+            Some(state) if *state == refused => false,
+            other => panic!("{name} has {other:?}"),
+        })
+        .collect();
+    // Seven or eight 8 MiB reads fit in 64 MiB, after the few small files the scan reads first.
+    let read = states.iter().filter(|read| **read).count();
+    assert!(
+        (7..=8).contains(&read) && states.iter().skip(read).all(|read| !read),
+        "the first links are read and every later one carries the budget reason: {states:?}"
+    );
+    assert!(
+        scanned.fs().bytes_read() <= max,
+        "the scan read at most 64 MiB"
+    );
+}

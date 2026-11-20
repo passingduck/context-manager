@@ -606,6 +606,7 @@ export const en = {
     globMatchesNothing: (v) => `The pattern ${v.glob} matches no file.`,
     walkCapped: (v) => `The project walk stopped after ${v.entries.toLocaleString("en-US")} entries, so some files may be missing here.`,
     listingCapped: (v) => `The scan listed only the first ${v.max.toLocaleString("en-US")} entries of this directory, so it can miss files below it that the agent loads.`,
+    readBudgetExhausted: (v) => `The scan stopped reading files after ${v.max.toLocaleString("en-US")} bytes, so the files it did not read show as unreadable.`,
     listingTooDeep: (v) => `The scan listed this directory only ${v.max} levels deep, so it can miss deeper files that the agent loads.`,
     textPartlyAnalyzed: (v) => `The text of this file is over ${v.max.toLocaleString("en-US")} bytes. The scan counted the tokens of that first part and estimated the rest, and it looked for links only in that first part.`,
   } satisfies Msgs<Problem>,
