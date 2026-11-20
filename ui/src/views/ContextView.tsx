@@ -1,17 +1,18 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type KeyboardEvent, type SetStateAction } from "react";
 import { useRender, useSimulate } from "../api/queries";
 import { useProject } from "../app/project";
 import { Badge, Chip, ErrorNote, Mono, PaneTitle } from "../components/ui";
 import type { AgentView } from "../gen/AgentView";
 import type { DocKind } from "../gen/DocKind";
 import type { Load } from "../gen/Load";
+import type { Piece } from "../gen/Piece";
 import type { Simulation } from "../gen/Simulation";
 import { useI18n } from "../i18n";
 import type { BundledKind } from "../i18n/en";
 import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
 import { buildPrefix, exact } from "../lib/prefix";
-import { activationTone, buildGroups, GROUPS, type GroupKey, LABEL_COLOR, statusTone, type Node } from "../lib/loads";
+import { activationTone, buildGroups, GROUPS, type GroupKey, isPicked, LABEL_COLOR, pick, type Picked, picked, sends, statusTone, type Node } from "../lib/loads";
 import type { Route } from "../lib/route";
 import { PrefixMap } from "./PrefixMap";
 import { NewMenu } from "../write/create";
@@ -77,7 +78,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
       <NewMenu go={go} />
       <div role="group" aria-label={t.context.title} className="flex overflow-hidden rounded border border-line text-[12px]">
         {(["tree", "order"] as const).map((mode) => (
-          <button key={mode} type="button" aria-pressed={route.mode === mode} onClick={() => go({ mode })} className="px-2 py-0.5 hover:bg-sunken aria-pressed:bg-accent-bg aria-pressed:font-semibold aria-pressed:text-accent">
+          <button key={mode} type="button" data-testid={`mode-${mode}`} aria-pressed={route.mode === mode} onClick={() => go({ mode })} className="px-2 py-0.5 hover:bg-sunken aria-pressed:bg-accent-bg aria-pressed:font-semibold aria-pressed:text-accent">
             {mode === "tree" ? t.context.modeTree : t.context.modeOrder}
           </button>
         ))}
@@ -106,7 +107,7 @@ export function ContextView({ route, go }: { route: Route; go: Go }) {
             <AgentHeader view={view} sim={byAgent.get(view.agent)} />
             <PrefixMap view={view} route={route} go={go} intro={view.agent === firstWithBlocks} />
             {route.mode === "tree" ? (
-              <AgentTree view={view} route={route} go={go} sim={byAgent.get(view.agent)} focused={focused} setFocused={setFocused} collapsed={collapsed} setCollapsed={setCollapsed} expanded={expanded} setExpanded={setExpanded} />
+              <AgentTree view={view} route={route} go={go} picked={picked(view, route)} sim={byAgent.get(view.agent)} focused={focused} setFocused={setFocused} collapsed={collapsed} setCollapsed={setCollapsed} expanded={expanded} setExpanded={setExpanded} />
             ) : (
               <OrderBlocks view={view} route={route} go={go} />
             )}
@@ -172,14 +173,15 @@ interface TreeProps {
   view: AgentView;
   route: Route;
   go: Go;
+  picked: Picked | null;
   sim: Simulation | undefined;
   focused: string;
   setFocused: (key: string) => void;
   collapsed: Set<string>;
   setCollapsed: (next: Set<string>) => void;
-  /** Keys of the listing bundles the operator opened. A bundle is closed until it is in here. */
+  /** Keys of the listing bundles that are open. A bundle is closed until it is in here. */
   expanded: Set<string>;
-  setExpanded: (next: Set<string>) => void;
+  setExpanded: Dispatch<SetStateAction<Set<string>>>;
 }
 
 const BUNDLE = "bundle:";
@@ -266,6 +268,11 @@ function BundleRows(props: TreeProps & { kind: BundledKind; group: GroupKey; mem
   const key = `${BUNDLE}${view.agent}:${group}:${kind}`;
   const open = expanded.has(key);
   const total = members.reduce((n, node) => n + (node.load.delivered?.tokens ?? 0), 0);
+  // A picked place inside the bundle opens it once, so the selected row shows after a reload or a click in the prefix map.
+  const holdsPick = members.some((node) => node.load.id === props.picked?.load?.id);
+  useEffect(() => {
+    if (holdsPick) setExpanded((old) => (old.has(key) ? old : new Set(old).add(key)));
+  }, [holdsPick, key, setExpanded]);
   const toggle = () => {
     const next = new Set(expanded);
     if (next.has(key)) next.delete(key);
@@ -314,12 +321,12 @@ function RowTree(props: TreeProps & { node: Node; depth: number }) {
 }
 
 function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string; hasChildren: boolean; open: boolean }) {
-  const { node, depth, view, route, go, sim, nodeKey, hasChildren, open, focused, setFocused, collapsed, setCollapsed } = props;
+  const { node, depth, view, go, sim, nodeKey, hasChildren, open, focused, setFocused, collapsed, setCollapsed } = props;
   const { t, d } = useI18n();
   const project = useProject();
   const load = node.load;
   const entry = project.snapshot.files[load.file];
-  const selected = route.sel === `file:${load.file}` && (route.ag === "" || route.ag === view.agent);
+  const selected = isPicked(props.picked, load);
   const fires = sim?.fired.includes(load.id) ?? false;
   const ext = load.via.kind === "listing" ? view.extensions.find((e) => load.via.kind === "listing" && e.id === load.via.ext) : undefined;
   const label = ext ? ext.name : (entry?.display ?? d(load.file));
@@ -352,14 +359,14 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
       aria-expanded={hasChildren ? open : undefined}
       tabIndex={isTabStop ? 0 : -1}
       onFocus={() => setFocused(nodeKey)}
-      onClick={() => go({ sel: `file:${load.file}`, ag: view.agent, ln: 0 })}
+      onClick={() => go(pick(view, load))}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          go({ sel: `file:${load.file}`, ag: view.agent, ln: 0 });
+          go(pick(view, load));
         }
       }}
-      title={say(t.status.detail, load.status, d)}
+      title={`${say(t.sends, sends(load), d)} ${say(t.activation.detail, load.when, d)}`}
       className={`flex min-h-7 cursor-default items-center gap-2 border-l-2 py-0.5 pr-3 hover:bg-subtle ${selected ? "border-accent bg-accent-bg" : fires ? "border-warn bg-warn-bg" : "border-transparent"}`}
       style={{ paddingLeft: `${8 + (depth - 1) * 18}px` }}
     >
@@ -381,7 +388,7 @@ function LoadRow(props: TreeProps & { node: Node; depth: number; nodeKey: string
       {fires && <Badge tone="warn">{t.context.firesOnPath}</Badge>}
       {ext && ext.status.kind !== "active" && ext.status.kind !== "shadowed" && <Badge tone={ext.status.kind === "conditional" ? "info" : "neutral"} title={say(t.extStatus, ext.status, d)}>{say(t.extStatusShort, ext.status, d)}</Badge>}
       {tone && (
-        <Badge tone={tone} title={say(t.status.detail, load.status, d)}>
+        <Badge tone={tone} title={say(t.sends, sends(load), d)}>
           {load.status.kind === "skipped" ? say(t.skipShort, load.status.skip, d) : load.status.kind === "truncated" ? `${say(t.status.badge, load.status, d)} ${load.status.kept}/${load.status.total}` : ""}
         </Badge>
       )}
@@ -399,12 +406,13 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
   const project = useProject();
   const render = useRender(project.cwd, view.agent, project.snapshot.fingerprint, true);
   const prefix = useMemo(() => buildPrefix(view), [view]);
+  const chosen = picked(view, route);
   if (view.session.length === 0) return <p className="px-3 py-2 text-muted">{t.context.noLoads}</p>;
   if (render.isError) return <ErrorNote error={render.error} onRetry={() => void render.refetch()} />;
   return (
     <ol className="space-y-2 px-3 pt-2" aria-label={t.context.blocksFor}>
       {view.session.map((block, index) => {
-        const text = render.data?.find((rendered) => rendered.label === block.label && rendered.delivery === block.delivery)?.pieces.map((piece) => piece.text).join("");
+        const pieces = render.data?.find((rendered) => rendered.label === block.label && rendered.delivery === block.delivery)?.pieces;
         return (
           <li key={block.label} className="rounded border border-line">
             <div className="flex flex-wrap items-center gap-2 border-b border-line bg-subtle px-2 py-1">
@@ -422,12 +430,16 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
                   ? []
                   : [
                       <li key={i}>
-                        <PartLink load={view.loads[part.load]} agent={view.agent} tokensValue={part.tokens} route={route} go={go} />
+                        <PartLink load={view.loads[part.load]} view={view} tokensValue={part.tokens} chosen={chosen} go={go} />
                       </li>,
                     ],
               )}
             </ul>
-            <LiteralText text={text ?? (render.isPending ? t.loading : t.context.renderFailed)} />
+            {pieces ? (
+              <LiteralText pieces={pieces} marked={(piece) => piece.kind === "load" && view.loads[piece.load] !== undefined && isPicked(chosen, view.loads[piece.load]!)} />
+            ) : (
+              <p className="px-2 py-1.5 text-muted">{render.isPending ? t.loading : t.context.renderFailed}</p>
+            )}
           </li>
         );
       })}
@@ -435,15 +447,32 @@ function OrderBlocks({ view, route, go }: { view: AgentView; route: Route; go: G
   );
 }
 
-/** The text the agent receives. Short by default; one click shows all of it in a box that scrolls. */
-function LiteralText({ text }: { text: string }) {
+/** The text the agent receives, piece by piece, with the picked load's pieces marked. Short by default; one click shows all of it in a box that scrolls. */
+function LiteralText({ pieces, marked }: { pieces: Piece[]; marked: (piece: Piece) => boolean }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLPreElement>(null);
+  const text = pieces.map((piece) => piece.text).join("");
   const long = text.split("\n").length > 6 || text.length > 600;
+  const marks = pieces.map(marked);
+  const key = marks.join();
+  // Scroll the box, not the page, to the first marked piece.
+  useEffect(() => {
+    const first = box.current?.querySelector<HTMLElement>("mark");
+    if (box.current && first) box.current.scrollTop = Math.max(0, first.offsetTop - 8);
+  }, [key, open]);
   return (
     <div>
-      <pre aria-label={t.context.literalText} className={`${open ? "max-h-[70vh]" : "max-h-32"} overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[12px] leading-5`}>
-        {text}
+      <pre ref={box} aria-label={t.context.literalText} data-testid="literal-text" className={`${open ? "max-h-[70vh]" : "max-h-32"} relative overflow-auto whitespace-pre-wrap break-words px-2 py-1.5 font-mono text-[12px] leading-5`}>
+        {pieces.map((piece, i) =>
+          marks[i] ? (
+            <mark key={i} data-testid="literal-mark" className="rounded-sm bg-accent-bg text-fg outline outline-1 outline-accent">
+              {piece.text}
+            </mark>
+          ) : (
+            piece.text
+          ),
+        )}
       </pre>
       {long && (
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="w-full border-t border-line px-2 py-1 text-left text-[12px] text-accent hover:bg-subtle">
@@ -454,12 +483,11 @@ function LiteralText({ text }: { text: string }) {
   );
 }
 
-function PartLink({ load, agent, tokensValue, route, go }: { load: Load | undefined; agent: string; tokensValue: number; route: Route; go: Go }) {
+function PartLink({ load, view, tokensValue, chosen, go }: { load: Load | undefined; view: AgentView; tokensValue: number; chosen: Picked | null; go: Go }) {
   const project = useProject();
   if (!load) return null;
-  const selected = route.sel === `file:${load.file}`;
   return (
-    <button type="button" onClick={() => go({ sel: `file:${load.file}`, ag: agent })} aria-pressed={selected} className="rounded border border-line px-1.5 py-px hover:bg-sunken aria-pressed:border-accent aria-pressed:bg-accent-bg">
+    <button type="button" onClick={() => go(pick(view, load))} aria-pressed={isPicked(chosen, load)} className="rounded border border-line px-1.5 py-px hover:bg-sunken aria-pressed:border-accent aria-pressed:bg-accent-bg">
       <Mono>{project.display(load.file)}</Mono> <span className="tabular-nums text-muted">{fmt.tokens(tokensValue)}</span>
     </button>
   );
