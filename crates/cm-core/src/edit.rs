@@ -20,7 +20,7 @@ use crate::agents::{Agent, PlanCx, find_in};
 use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeErrorKind, ProbeFs};
-use crate::scan::{MAX_READ_BYTES, Scanned};
+use crate::scan::Scanned;
 
 /// A directory trashed whole keeps its files as history blobs up to this many bytes. Over it,
 /// the OS trash is the only copy and the plan warns [`Warning::NotRevertible`].
@@ -235,17 +235,6 @@ impl<'a> Planner<'a> {
     }
 
     fn disk(&self, path: &AbsPath) -> Disk {
-        match self.fs().stat(path) {
-            Err(err) if err.is_not_found() => return Disk::Absent,
-            Err(err) => return Disk::Unreadable(err.into()),
-            Ok(stat) if stat.kind != EntryKind::File => {
-                return Disk::Unreadable(invalid("path", "edit.not_regular_file"));
-            }
-            Ok(stat) if stat.len > MAX_READ_BYTES => {
-                return Disk::Unreadable(invalid("path", "edit.file_too_large"));
-            }
-            Ok(_) => {}
-        }
         match self.fs().read(path) {
             Err(err) if err.is_not_found() => Disk::Absent,
             Err(err) => Disk::Unreadable(err.into()),
