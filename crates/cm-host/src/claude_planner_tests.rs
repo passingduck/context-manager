@@ -1,23 +1,12 @@
 //! The Claude planners end to end through the host: plan, apply, history and revert, on a
 //! fixture home with the real adapters. Nothing here touches a real agent home or data directory.
 
-use std::path::Path;
-use std::time::Duration;
-
 use cm_core::agents::registry;
 use cm_core::testing::Fixture;
 use cm_core::*;
 
-use crate::apply::Trasher;
-use crate::host::{Host, HostConfig};
-
-struct FileRemover;
-
-impl Trasher for FileRemover {
-    fn trash(&self, path: &Path) -> Result<(), String> {
-        std::fs::remove_file(path).map_err(|e| e.to_string())
-    }
-}
+use crate::e2e::{history, hooks_of, read, run};
+use crate::host::Host;
 
 fn host(fx: &Fixture) -> Host {
     // The managed directory is moved into the fixture so that no real policy is read.
@@ -25,53 +14,7 @@ fn host(fx: &Fixture) -> Host {
         "CONTEXT_MANAGER_MANAGED_DIR",
         fx.root().join("managed").as_str(),
     );
-    Host::with_parts(
-        HostConfig {
-            shell: Shell::Serve,
-            read_only: false,
-            env,
-            watch_timeout: Duration::from_secs(1),
-            data_dir: fx.root().join("data"),
-        },
-        registry(),
-        Box::new(FileRemover),
-    )
-}
-
-async fn run(host: &Host, fx: &Fixture, edit: Edit) -> (Preview, ChangeId) {
-    let preview = host
-        .plan(PlanReq {
-            cwd: fx.project(),
-            edit: edit.clone(),
-        })
-        .await
-        .unwrap();
-    let result = host
-        .apply(ApplyReq {
-            cwd: fx.project(),
-            edit,
-            digest: preview.digest.clone(),
-        })
-        .await
-        .unwrap();
-    match result {
-        ApplyResult::Applied { change, .. } => (preview, change),
-        other => panic!("expected Applied, got {other:?}"),
-    }
-}
-
-async fn claude_hooks(host: &Host, fx: &Fixture) -> Vec<Hook> {
-    let snapshot = host.scan(ScanReq { cwd: fx.project() }).await.unwrap();
-    snapshot
-        .agents
-        .into_iter()
-        .find(|v| v.agent == AgentId::parse("claude").unwrap())
-        .unwrap()
-        .hooks
-}
-
-fn read(path: &AbsPath) -> String {
-    std::fs::read_to_string(path.as_path()).unwrap()
+    crate::e2e::host(fx, env, registry())
 }
 
 #[tokio::test]
@@ -101,7 +44,7 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_starting
         added.starts_with(untouched),
         "the bytes before the entry stay"
     );
-    let hook = claude_hooks(&host, &fx)
+    let hook = hooks_of(&host, &fx, "claude")
         .await
         .into_iter()
         .find(|h| h.handler.summary == "added.sh")
@@ -122,7 +65,7 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_starting
     assert!(!read(&settings).contains("added.sh"));
     let record = fx.root().join("data/parked");
     assert_eq!(std::fs::read_dir(record.as_path()).unwrap().count(), 1);
-    let parked = claude_hooks(&host, &fx)
+    let parked = hooks_of(&host, &fx, "claude")
         .await
         .into_iter()
         .find(|h| h.handler.summary == "added.sh")
@@ -135,14 +78,7 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_starting
     );
 
     // History holds both changes, newest first.
-    let records = host
-        .history(HistoryReq {
-            cwd: None,
-            before: None,
-            limit: 10,
-        })
-        .await
-        .unwrap();
+    let records = history(&host).await;
     let edits: Vec<ChangeEdit> = records.iter().map(|r| r.summary.edit.clone()).collect();
     assert_eq!(edits, [ChangeEdit::SetHookEnabled, ChangeEdit::AddHook]);
     assert!(records.iter().all(|r| r.state == ChangeState::Sealed));

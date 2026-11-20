@@ -1,23 +1,12 @@
 //! The Codex planners through the host: plan, apply, history and revert over a temp home.
 
-use std::path::Path;
-use std::time::Duration;
-
 use cm_core::agents::Agent;
 use cm_core::agents::codex::Codex;
 use cm_core::testing::Fixture;
 use cm_core::*;
 
-use crate::apply::Trasher;
-use crate::host::{Host, HostConfig};
-
-struct NoTrash;
-
-impl Trasher for NoTrash {
-    fn trash(&self, _: &Path) -> Result<(), String> {
-        Err("a Codex hook edit never trashes".into())
-    }
-}
+use crate::e2e::{history, read, run};
+use crate::host::Host;
 
 const HOOKS_JSON: &str = "{\n  \"hooks\": {\n    \"Stop\": [\n      {\"hooks\": [{\"type\": \"command\", \"command\": \"echo stop\"}]}\n    ]\n  }\n}\n";
 const CONFIG: &str = "# mine\nmodel = \"gpt-5\"   # keep\n";
@@ -25,48 +14,12 @@ const CONFIG: &str = "# mine\nmodel = \"gpt-5\"   # keep\n";
 fn host(fx: &Fixture) -> Host {
     let agent: &'static dyn Agent = &Codex;
     let agents: &'static [&'static dyn Agent] = Box::leak(Box::new([agent]));
-    Host::with_parts(
-        HostConfig {
-            shell: Shell::Serve,
-            read_only: false,
-            env: env(fx),
-            watch_timeout: Duration::from_secs(1),
-            data_dir: fx.root().join("data"),
-        },
-        agents,
-        Box::new(NoTrash),
-    )
+    crate::e2e::host(fx, env(fx), agents)
 }
 
 fn env(fx: &Fixture) -> cm_core::env::ScanEnv {
     fx.env()
         .with_var("CODEX_HOME", fx.home_path(".codex").as_str())
-}
-
-fn read(path: &AbsPath) -> String {
-    std::fs::read_to_string(path.as_path()).unwrap()
-}
-
-async fn run(host: &Host, fx: &Fixture, edit: &Edit) -> ChangeId {
-    let preview = host
-        .plan(PlanReq {
-            cwd: fx.project(),
-            edit: edit.clone(),
-        })
-        .await
-        .unwrap();
-    match host
-        .apply(ApplyReq {
-            cwd: fx.project(),
-            edit: edit.clone(),
-            digest: preview.digest,
-        })
-        .await
-        .unwrap()
-    {
-        ApplyResult::Applied { change, .. } => change,
-        other => panic!("expected Applied, got {other:?}"),
-    }
 }
 
 #[tokio::test]
@@ -88,7 +41,7 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_bytes() 
             handler: serde_json::json!({"type": "command", "command": "echo added"}),
         },
     };
-    let added = run(&host, &fx, &add).await;
+    let (_, added) = run(&host, &fx, add).await;
     assert!(read(&hooks).contains("echo added") && read(&hooks).contains("echo stop"));
 
     let scanned = cm_core::scan::scan_with(&[&Codex as &dyn Agent], &env(&fx));
@@ -103,18 +56,11 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_bytes() 
         hook: stop,
         enabled: false,
     };
-    let switched = run(&host, &fx, &switch).await;
+    let (_, switched) = run(&host, &fx, switch.clone()).await;
     assert!(read(&config).contains("enabled = false"));
     assert!(read(&config).starts_with(CONFIG));
 
-    let records = host
-        .history(HistoryReq {
-            cwd: None,
-            before: None,
-            limit: 10,
-        })
-        .await
-        .unwrap();
+    let records = history(&host).await;
     let kinds: Vec<_> = records
         .iter()
         .map(|r| (r.id.clone(), r.summary.edit.clone()))
@@ -138,8 +84,8 @@ async fn a_hook_add_and_a_switch_are_recorded_and_a_revert_restores_the_bytes() 
         .unwrap();
     assert!(again.change_set.ops.is_empty());
 
-    run(&host, &fx, &Edit::Revert { change: switched }).await;
+    run(&host, &fx, Edit::Revert { change: switched }).await;
     assert_eq!(read(&config), CONFIG);
-    run(&host, &fx, &Edit::Revert { change: added }).await;
+    run(&host, &fx, Edit::Revert { change: added }).await;
     assert_eq!(read(&hooks), HOOKS_JSON);
 }

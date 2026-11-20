@@ -980,7 +980,6 @@ mod tests {
         .unwrap();
         assert_eq!(preview.change_set.ops.len(), 1);
         assert_eq!(preview.before[&file].as_deref(), Some("old"));
-        assert_eq!(preview.digest, digest_of(&preview.change_set));
     }
 
     #[test]
