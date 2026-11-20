@@ -90,24 +90,39 @@ impl<'a> LineIndex<'a> {
 
 pub fn scan(text: &str) -> Spans {
     let index = LineIndex::new(text);
-    let (fences, comments) = blocks(text, &index);
-    let mut masked = mask(
+    let (mut spans, mut masked) = regions_in(text, &index);
+    mask_in_place(
+        &mut masked,
+        spans.code_spans.iter().map(|s| s.range.clone()),
+    );
+    spans.links = links(&masked, &index);
+    spans.at_tokens = at_tokens(&masked, AtStyle::Claude, &index);
+    spans.paths = path_tokens(&masked, &spans.links, &index);
+    spans
+}
+
+/// The fences, block comments and code spans of [`scan`], without its links and tokens. Finding
+/// the tokens is most of the cost of a scan, and an import expansion or a strip needs only the
+/// regions.
+pub fn regions(text: &str) -> Spans {
+    regions_in(text, &LineIndex::new(text)).0
+}
+
+/// The regions, and `text` with the fences and block comments masked.
+fn regions_in(text: &str, index: &LineIndex) -> (Spans, String) {
+    let (fences, comments) = blocks(text, index);
+    let masked = mask(
         text,
         fences.iter().chain(&comments).map(|s| s.range.clone()),
     );
-    let code_spans = code_spans(&masked, &index);
-    mask_in_place(&mut masked, code_spans.iter().map(|s| s.range.clone()));
-    let links = links(&masked, &index);
-    let at = at_tokens(&masked, AtStyle::Claude, &index);
-    let paths = path_tokens(&masked, &links, &index);
-    Spans {
+    let code_spans = code_spans(&masked, index);
+    let spans = Spans {
         fences,
         comments,
         code_spans,
-        links,
-        at_tokens: at,
-        paths,
-    }
+        ..Spans::default()
+    };
+    (spans, masked)
 }
 
 /// Where a token may start and what ends it.

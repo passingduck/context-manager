@@ -37,3 +37,21 @@ libc = "0.2"
 
 [profile.release]
 lto = "thin"
+
+# A scan hashes and tokenizes every byte it reads. The crates that do that run optimized in debug
+# builds and tests, so that a test that bounds the time of a scan measures the scan's own work
+# and not an unoptimized hash or tokenizer, which run ten to twenty times slower.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.dev.package.tiktoken-rs]
+opt-level = 3
+
+[profile.dev.package.fancy-regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.bstr]
+opt-level = 3

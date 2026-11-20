@@ -21,15 +21,18 @@ use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeErrorKind, ProbeFs};
 use crate::scan::{MAX_READ_BYTES, Scanned};
+use crate::walk::{self, TreeLimits};
 
 /// A directory trashed whole keeps its files as history blobs up to this many bytes. Over it,
 /// the OS trash is the only copy and the plan warns [`Warning::NotRevertible`].
 pub const MAX_TREE_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The walk of a directory trashed whole stops at these limits. A tree it could not read to the
-/// end is not revertible (design section 4, step 4).
-const TREE_DEPTH: usize = 16;
-const TREE_ENTRIES: usize = 10_000;
+/// The listing of a directory trashed whole stops at these limits. A tree it could not read to
+/// the end is not revertible (design section 4, step 4).
+const TREE_LIMITS: TreeLimits = TreeLimits {
+    depth: 16,
+    entries: 10_000,
+};
 
 /// Where `Revert` reads a recorded change from. The host implements it over its history.
 pub trait ChangeSource {
@@ -250,10 +253,29 @@ impl<'a> Planner<'a> {
     }
 
     fn tree(&self, dir: &AbsPath) -> Tree {
+        let is_link = |path: &AbsPath| self.fs().stat(path).is_ok_and(|stat| stat.is_symlink);
+        // History cannot hold a link, and the files behind one are not inside the tree.
+        let listed =
+            walk::list_tree_with(self.fs(), dir, TREE_LIMITS, |entry| !is_link(&entry.path));
+        // A listing that stopped at a limit, met a directory it could not list or a name that is
+        // not UTF-8 can miss a file, and the history would hold no copy of it.
+        let mut complete = !listed.capped && !listed.partial;
         let mut files = Vec::new();
-        let mut seen = 0usize;
-        let mut complete = true;
-        self.walk(dir, 0, &mut seen, &mut files, &mut complete);
+        for entry in listed.entries {
+            if is_link(&entry.path) {
+                complete = false;
+                continue;
+            }
+            match entry.kind {
+                EntryKind::Dir => {}
+                EntryKind::File => match self.fs().read(&entry.path) {
+                    Ok(bytes) => files.push((entry.path, bytes.as_ref().clone())),
+                    Err(_) => complete = false,
+                },
+                // A broken symlink, a socket or a pipe: history cannot hold it.
+                EntryKind::Other => complete = false,
+            }
+        }
         files.sort_by(|a, b| a.0.cmp(&b.0));
         let mut hasher = Sha256::new();
         for (path, bytes) in &files {
@@ -267,50 +289,6 @@ impl<'a> Planner<'a> {
             files,
             hash: format!("tree:{}", crate::model::hex(&hasher.finalize())),
             complete,
-        }
-    }
-
-    fn walk(
-        &self,
-        dir: &AbsPath,
-        depth: usize,
-        seen: &mut usize,
-        out: &mut Vec<(AbsPath, Vec<u8>)>,
-        complete: &mut bool,
-    ) {
-        if depth > TREE_DEPTH {
-            *complete = false;
-            return;
-        }
-        let Ok(listing) = self.fs().listing(dir) else {
-            *complete = false;
-            return;
-        };
-        // A name that is not UTF-8 has no entry, so the history holds no copy of its file.
-        if listing.not_utf8 > 0 {
-            *complete = false;
-        }
-        for entry in listing.entries.iter() {
-            *seen += 1;
-            if *seen > TREE_ENTRIES {
-                *complete = false;
-                return;
-            }
-            let path = dir.join(&entry.name);
-            // History cannot hold a link, and the files behind one are not inside the tree.
-            if self.fs().stat(&path).is_ok_and(|stat| stat.is_symlink) {
-                *complete = false;
-                continue;
-            }
-            match entry.kind {
-                EntryKind::Dir => self.walk(&path, depth + 1, seen, out, complete),
-                EntryKind::File => match self.fs().read(&path) {
-                    Ok(bytes) => out.push((path, bytes.as_ref().clone())),
-                    Err(_) => *complete = false,
-                },
-                // A broken symlink, a socket or a pipe: history cannot hold it.
-                EntryKind::Other => *complete = false,
-            }
         }
     }
 

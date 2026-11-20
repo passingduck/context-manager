@@ -37,6 +37,12 @@ ko = "파일이 이 프로그램의 읽기 한도보다 큽니다. 그래서 이
 evidence = "docs/design.md section 3 (the scan reads at most MAX_READ_BYTES of a file)"
 
 [[rule]]
+id = "edit.read_budget_spent"
+en = "The request needs the program to read more than its read budget of 64 MiB in one pass, so the program does not plan it."
+ko = "이 요청을 처리하려면 프로그램이 한 번에 읽기 예산인 64 MiB보다 많이 읽어야 합니다. 그래서 이 프로그램은 이 요청을 계획하지 않습니다."
+evidence = "docs/design.md section 5 (ProbeFs refuses every read once the read budget is spent)"
+
+[[rule]]
 id = "search.invalid_regex"
 en = "The search pattern is not a valid regular expression, or it is too large to compile."
 ko = "검색 패턴이 올바른 정규식이 아닙니다. 너무 커서 컴파일할 수 없는 경우도 있습니다."

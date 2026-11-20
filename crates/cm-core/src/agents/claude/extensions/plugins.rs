@@ -8,6 +8,7 @@ use crate::agents::ScanCx;
 use crate::agents::claude::setup::{SettingsKind, Setup};
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::agents::claude) enum Origin {
@@ -213,11 +214,11 @@ pub(in crate::agents::claude) fn discover(cx: &ScanCx, setup: &Setup) -> Vec<Plu
         skill_roots.push(setup.cwd.join(".claude/skills"));
     }
     for base in skill_roots {
-        let Ok(entries) = cx.fs.list(&base) else {
-            continue;
-        };
-        for entry in entries.iter().filter(|e| e.kind == EntryKind::Dir) {
-            let root = base.join(&entry.name);
+        for entry in walk::list_dir(cx.fs, &base)
+            .into_iter()
+            .filter(|e| e.kind == EntryKind::Dir)
+        {
+            let root = entry.path;
             let manifest_file = root.join(".claude-plugin/plugin.json");
             let manifest = read_json(cx, &manifest_file);
             if manifest.is_some() {

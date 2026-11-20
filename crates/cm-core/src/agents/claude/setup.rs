@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::agents::ScanCx;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 /// Test-only override of the managed directory. It is not in `MOVING_VARS`, so a real process
 /// never sees it. Spec 5.1: this build of Claude Code has no override.
@@ -144,14 +145,12 @@ impl Setup {
             Scope::Managed,
         ));
         let mut managed_files = vec![managed.join("managed-settings.json")];
-        if let Ok(entries) = cx.fs.list(&managed.join("managed-settings.d")) {
-            for entry in entries.iter() {
-                if entry.kind != EntryKind::Dir
-                    && entry.name.ends_with(".json")
-                    && !entry.name.starts_with('.')
-                {
-                    managed_files.push(managed.join("managed-settings.d").join_name(&entry.name));
-                }
+        for entry in walk::list_dir(cx.fs, &managed.join("managed-settings.d")) {
+            if entry.kind != EntryKind::Dir
+                && entry.name().ends_with(".json")
+                && !entry.name().starts_with('.')
+            {
+                managed_files.push(managed.join("managed-settings.d").join_name(entry.name()));
             }
         }
         for path in managed_files.into_iter().rev() {

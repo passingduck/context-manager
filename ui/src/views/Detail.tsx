@@ -227,6 +227,7 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
           {state.kind === "absent" && <p className="p-4 text-muted">{t.detail.absent}</p>}
           {state.kind === "unreadable" && <p className="p-4 text-muted">{t.detail.unreadable(state.error)}</p>}
           {state.kind === "tooBig" && <p className="p-4 text-muted">{t.detail.tooBig(fmt.bytes(state.bytes))}</p>}
+          {state.kind === "budgetExhausted" && <p className="p-4 text-muted">{t.detail.budgetExhausted(state.limit)}</p>}
           {state.kind === "present" && file.isPending && <Loading />}
           {state.kind === "present" && file.isError && <ErrorNote error={file.error} />}
           {state.kind === "present" && disk !== null && showDiff && buffer && (

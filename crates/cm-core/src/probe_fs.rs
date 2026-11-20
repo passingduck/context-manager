@@ -1,12 +1,13 @@
 //! `ProbeFs`: the only way an adapter reads the disk.
 //!
 //! `read` returns the bytes of a regular file of at most [`MAX_READ_BYTES`] and a refusal for
-//! anything else, so no caller checks the kind or the size itself (design section 5). It caches
-//! bytes for the length of one scan, so two agents that read `AGENTS.md` see one revision. It
-//! records every path read, listed, checked or resolved, misses included. The fingerprint hashes
-//! the stat of exactly those paths.
+//! anything else, so no caller checks the kind or the size itself (design section 5). It counts
+//! the bytes it reads and refuses every file once a scan has read [`MAX_SCAN_READ_BYTES`]. It
+//! caches bytes for the length of one scan, so two agents that read `AGENTS.md` see one revision.
+//! It records every path read, listed, checked or resolved, misses included. The fingerprint
+//! hashes the stat of exactly those paths.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::{self, Read};
 use std::sync::{Arc, Mutex};
@@ -55,6 +56,19 @@ pub struct Listing {
 /// `read` refuses a larger file. A file is listed with its size and never read.
 pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 
+/// `read` refuses every file once one scan has read this many bytes. The cache holds what a scan
+/// read until the next scan, so this also bounds its memory. A scan of this repository with the
+/// development machine's full agent homes reads about 15 MB, most of it for one Codex plugin
+/// hash; links make a repository of one file and many names read that file once per name.
+pub const MAX_SCAN_READ_BYTES: u64 = 64 * 1024 * 1024;
+
+/// [`MAX_SCAN_READ_BYTES`] as the limit a refused file names.
+pub const SCAN_READ_LIMIT: Limit = Limit {
+    kind: LimitKind::ScanReadBytes,
+    value: MAX_SCAN_READ_BYTES,
+    unit: Unit::Bytes,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeErrorKind {
     Io(io::ErrorKind),
@@ -67,6 +81,8 @@ pub enum ProbeErrorKind {
     /// `stat` met a symlink whose target does not exist. A reader finds nothing there, so
     /// [`ProbeError::is_not_found`] holds. A writer must not create the target (design section 4).
     DanglingLink,
+    /// The scan had read [`MAX_SCAN_READ_BYTES`], so `read` did not open the file.
+    BudgetSpent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +123,9 @@ impl ProbeError {
                 },
             },
             ProbeErrorKind::DanglingLink => Skip::Missing,
+            ProbeErrorKind::BudgetSpent => Skip::BudgetExhausted {
+                limit: SCAN_READ_LIMIT,
+            },
         }
     }
 
@@ -121,6 +140,13 @@ impl ProbeError {
         ProbeError {
             kind: ProbeErrorKind::TooLarge { bytes },
             detail: "file is too big".to_owned(),
+        }
+    }
+
+    fn budget_spent() -> ProbeError {
+        ProbeError {
+            kind: ProbeErrorKind::BudgetSpent,
+            detail: "the scan read budget is spent".to_owned(),
         }
     }
 }
@@ -142,6 +168,7 @@ impl From<ProbeError> for ApiError {
             ProbeErrorKind::NotRegular => "edit.not_regular_file",
             ProbeErrorKind::TooLarge { .. } => "edit.file_too_large",
             ProbeErrorKind::DanglingLink => "edit.dangling_symlink",
+            ProbeErrorKind::BudgetSpent => "edit.read_budget_spent",
             ProbeErrorKind::Io(_) => return ApiError::Io { detail: err.detail },
         };
         ApiError::InvalidEdit {
@@ -158,6 +185,19 @@ pub struct Probe {
     pub hit: bool,
 }
 
+/// A budget that one scan ran out of. The scan reports each as a diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Exceeded {
+    /// `read` refused files once the scan had read `max` bytes.
+    Reads { max: u64 },
+    /// Import expansions stopped once they had added `max` bytes in this scan.
+    Expansions { max: u64 },
+    /// A tree listing of `dir` stopped at its entry budget.
+    ListingEntries { dir: AbsPath, max: u32 },
+    /// A tree listing of `dir` did not list directories deeper than `max`.
+    ListingDepth { dir: AbsPath, max: u32 },
+}
+
 type Cached<T> = Result<T, ProbeError>;
 
 #[derive(Default)]
@@ -167,6 +207,9 @@ struct State {
     stats: HashMap<AbsPath, Cached<Stat>>,
     real_paths: HashMap<AbsPath, Cached<AbsPath>>,
     probes: BTreeMap<AbsPath, bool>,
+    exceeded: BTreeSet<Exceeded>,
+    bytes_read: u64,
+    bytes_expanded: u64,
 }
 
 #[derive(Default)]
@@ -184,20 +227,26 @@ impl ProbeFs {
         if let Some(cached) = state.reads.get(path) {
             return cached.clone();
         }
-        let result = read_regular(path).map(Arc::new);
+        let left = MAX_SCAN_READ_BYTES.saturating_sub(state.bytes_read);
+        let result = read_regular(path, left).map(Arc::new);
+        match &result {
+            Ok(bytes) => state.bytes_read += bytes.len() as u64,
+            Err(err) if err.kind == ProbeErrorKind::BudgetSpent => {
+                state.exceeded.insert(Exceeded::Reads {
+                    max: MAX_SCAN_READ_BYTES,
+                });
+            }
+            Err(_) => {}
+        }
         state.probes.insert(path.clone(), result.is_ok());
         state.reads.insert(path.clone(), result.clone());
         result
     }
 
-    /// Entries sorted by name. A name that is not UTF-8 is left out: [`ProbeFs::listing`] counts
-    /// them.
-    pub fn list(&self, path: &AbsPath) -> Cached<Arc<Vec<DirEntry>>> {
-        self.listing(path).map(|listing| listing.entries)
-    }
-
-    /// The entries of `list`, with the count of names it left out.
-    pub fn listing(&self, path: &AbsPath) -> Cached<Listing> {
+    /// The entries of one directory, sorted by name, with the count of names that are not UTF-8
+    /// and have no entry. Only the listers in [`crate::walk`] call it: they bound what a listing
+    /// yields and visit each real directory once.
+    pub(crate) fn listing(&self, path: &AbsPath) -> Cached<Listing> {
         let mut state = self.state.lock().expect("probe state");
         if let Some(cached) = state.lists.get(path) {
             return cached.clone();
@@ -259,6 +308,34 @@ impl ProbeFs {
         self.record().into_iter().map(|probe| probe.path).collect()
     }
 
+    /// The bytes this scan has read from the disk. A cached read counts once.
+    pub fn bytes_read(&self) -> u64 {
+        self.state.lock().expect("probe state").bytes_read
+    }
+
+    /// Adds `bytes` to what the import expansions of this scan have added. Returns `false`, adds
+    /// nothing and records the exceeded budget when that would pass `max`.
+    pub(crate) fn charge_expansion(&self, bytes: u64, max: u64) -> bool {
+        let mut state = self.state.lock().expect("probe state");
+        if state.bytes_expanded.saturating_add(bytes) > max {
+            state.exceeded.insert(Exceeded::Expansions { max });
+            return false;
+        }
+        state.bytes_expanded += bytes;
+        true
+    }
+
+    pub(crate) fn note_exceeded(&self, exceeded: Exceeded) {
+        let mut state = self.state.lock().expect("probe state");
+        state.exceeded.insert(exceeded);
+    }
+
+    /// Every budget this scan ran out of, each once, in a stable order.
+    pub fn exceeded(&self) -> Vec<Exceeded> {
+        let state = self.state.lock().expect("probe state");
+        state.exceeded.iter().cloned().collect()
+    }
+
     /// Hash over the stat of every probed path, taken now.
     pub fn fingerprint(&self) -> Fingerprint {
         fingerprint_of(&self.probed())
@@ -304,8 +381,9 @@ fn link_count(_: &fs::Metadata) -> u64 {
 
 /// Checks the kind and the size before it opens the file: opening a named pipe blocks until a
 /// writer comes, and a device can stream without end. It reads one byte past the limit at most,
-/// whatever the stat said, because a file can grow after the stat.
-fn read_regular(path: &AbsPath) -> Cached<Vec<u8>> {
+/// whatever the stat said, because a file can grow after the stat. A file larger than
+/// `budget_left` is not read.
+fn read_regular(path: &AbsPath, budget_left: u64) -> Cached<Vec<u8>> {
     let meta = fs::metadata(path.as_path())?;
     if !meta.is_file() {
         return Err(ProbeError::not_regular());
@@ -313,12 +391,18 @@ fn read_regular(path: &AbsPath) -> Cached<Vec<u8>> {
     if meta.len() > MAX_READ_BYTES {
         return Err(ProbeError::too_large(meta.len()));
     }
+    if meta.len() > budget_left {
+        return Err(ProbeError::budget_spent());
+    }
     let mut bytes = Vec::with_capacity(meta.len() as usize);
     fs::File::open(path.as_path())?
         .take(MAX_READ_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_READ_BYTES {
         return Err(ProbeError::too_large(bytes.len() as u64));
+    }
+    if bytes.len() as u64 > budget_left {
+        return Err(ProbeError::budget_spent());
     }
     Ok(bytes)
 }
@@ -434,15 +518,45 @@ mod tests {
     }
 
     #[test]
-    fn list_is_sorted_and_real_path_resolves_symlinks() {
+    fn reads_stop_at_the_scan_budget_and_a_link_is_read_once_per_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let big = abs(&dir, "big.md");
+        std::fs::write(big.as_path(), vec![b'x'; MAX_READ_BYTES as usize]).unwrap();
+        let links = MAX_SCAN_READ_BYTES / MAX_READ_BYTES + 2;
+        let fs = ProbeFs::new();
+        let mut read = 0;
+        for n in 0..links {
+            let link = abs(&dir, &format!("l{n}.md"));
+            std::os::unix::fs::symlink(big.as_path(), link.as_path()).unwrap();
+            match fs.read(&link) {
+                Ok(_) => read += 1,
+                Err(err) => assert_eq!(err.kind, ProbeErrorKind::BudgetSpent),
+            }
+        }
+        assert_eq!(read, MAX_SCAN_READ_BYTES / MAX_READ_BYTES);
+        assert_eq!(fs.bytes_read(), MAX_SCAN_READ_BYTES);
+        assert_eq!(
+            fs.exceeded(),
+            [Exceeded::Reads {
+                max: MAX_SCAN_READ_BYTES
+            }]
+        );
+        // A refusal does not hide a missing file, and a cached file still reads.
+        assert!(fs.read(&abs(&dir, "gone.md")).unwrap_err().is_not_found());
+        assert!(fs.read(&abs(&dir, "l0.md")).is_ok());
+    }
+
+    #[test]
+    fn a_listing_is_sorted_and_real_path_resolves_symlinks() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(abs(&dir, "b").as_path(), "").unwrap();
         std::fs::write(abs(&dir, "a").as_path(), "").unwrap();
         std::os::unix::fs::symlink(abs(&dir, "a").as_path(), abs(&dir, "link").as_path()).unwrap();
         let fs = ProbeFs::new();
         let names: Vec<_> = fs
-            .list(&abs(&dir, ""))
+            .listing(&abs(&dir, ""))
             .unwrap()
+            .entries
             .iter()
             .map(|e| e.name.clone())
             .collect();

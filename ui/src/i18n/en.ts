@@ -53,6 +53,7 @@ const limitKind: Record<LimitKind, string> = {
   listingEntryChars: "catalog entry length limit",
   listingBudgetChars: "catalog budget",
   importDepth: "import depth limit",
+  scanReadBytes: "scan read budget",
 };
 const unit: Record<Unit, string> = { bytes: "bytes", chars: "characters", lines: "lines", tokens: "tokens", hops: "levels" };
 const limit = (l: Limit) => `${limitKind[l.kind]} of ${l.value.toLocaleString("en-US")} ${unit[l.unit]}`;
@@ -432,6 +433,7 @@ export const en = {
     absent: "This file does not exist yet.",
     unreadable: (error: string) => `This file cannot be read: ${error}.`,
     tooBig: (size: string) => `This file is ${size}, which is too big to open.`,
+    budgetExhausted: (l: Limit) => `The scan did not read this file, because it had used up the ${limit(l)} before it.`,
     symlink: (target: string) => `This path is a symbolic link. Writes go to ${target}.`,
     save: "Save",
     revert: "Revert",
@@ -642,6 +644,7 @@ export const en = {
     importOutsideRoot: (v) => `The import ${v.raw} points outside the allowed root.`,
     importTooDeep: (v) => `Imports nest deeper than the limit of ${v.max} levels.`,
     importBudgetExhausted: (v) => `The scan read only the first ${v.max.toLocaleString("en-US")} imports of this file, so the size shown for it can be smaller than what the agent loads.`,
+    importBytesExhausted: (v) => `The scan read this file and its imports only up to ${v.max.toLocaleString("en-US")} bytes in all, so the size shown for it can be smaller than what the agent loads.`,
     importCycle: (v, d) => `Imports loop back to ${d(v.path)}.`,
     importNeedsApproval: (v) => `The import ${v.raw} needs your approval before the agent loads it.`,
     accidentalImport: (v) => `The text ${v.raw} looks like an import, but it is probably not meant to be one.`,
@@ -668,6 +671,11 @@ export const en = {
     projectUntrusted: (v) => `The folder is not trusted, so the agent skips ${v.skipped.length} project ${v.skipped.length === 1 ? "setting" : "settings"}.`,
     globMatchesNothing: (v) => `The pattern ${v.glob} matches no file.`,
     walkCapped: (v) => `The project walk stopped after ${v.entries.toLocaleString("en-US")} entries, so some files may be missing here.`,
+    listingCapped: (v) => `The scan listed only the first ${v.max.toLocaleString("en-US")} entries of this directory, so it can miss files below it that the agent loads.`,
+    scanExpansionExhausted: (v) => `The scan stopped expanding imports after ${v.max.toLocaleString("en-US")} bytes in all, so the files it expanded after that show fewer imports than the agent loads.`,
+    readBudgetExhausted: (v) => `The scan stopped reading files after ${v.max.toLocaleString("en-US")} bytes, so the files after that show as not read.`,
+    listingTooDeep: (v) => `The scan listed this directory only ${v.max} levels deep, so it can miss deeper files that the agent loads.`,
+    textPartlyAnalyzed: (v) => `The text of this file is over ${v.max.toLocaleString("en-US")} bytes. The scan counted the tokens of that first part and estimated the rest, and it looked for links only in that first part.`,
     bodyAlsoImported: (v, d) => `Line ${v.line} of ${d(v.host)} imports this body, so the model receives it with every session and again when the item is invoked. Remove the import line, or keep the text in an instruction file instead of a skill.`,
   } satisfies Msgs<Problem>,
   hookBlock,

@@ -3,7 +3,7 @@
 //! (design section 8, "resource exhaustion by repository content").
 
 use std::io::Write;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use cm_core::env::ScanEnv;
@@ -53,23 +53,40 @@ fn project(files: &[(&str, &str)]) -> Fixture {
     fx
 }
 
-/// Runs the scan on a worker thread and waits a second for it.
-fn scan_within_a_second(env: ScanEnv, case: &str) -> Scanned {
+/// Wall-clock limits for one scan, in seconds. A scan that keeps its budgets needs well under a
+/// second of processor time. The limits leave room for a machine that runs several test suites at
+/// once: at load 20 a fixed scan was measured at up to 4.2 s.
+const LIGHT: u64 = 5;
+const HEAVY: u64 = 10;
+
+/// Runs a scan that reads little on a worker thread and waits `LIGHT` seconds for it.
+fn scan_light(env: ScanEnv, case: &str) -> Scanned {
+    scan_within(env, case, LIGHT)
+}
+
+/// One scan at a time, so that the wait measures one scan and not the other tests' scans.
+static ONE_SCAN: Mutex<()> = Mutex::new(());
+
+/// Runs the scan on a worker thread and waits `seconds` for it.
+fn scan_within(env: ScanEnv, case: &str, seconds: u64) -> Scanned {
     // The tokenizer loads once per process. Load it first so the wait measures the scan.
     tokens::count("warm up");
+    let _one = ONE_SCAN
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(scan_full(&env));
     });
-    match rx.recv_timeout(Duration::from_secs(1)) {
+    match rx.recv_timeout(Duration::from_secs(seconds)) {
         Ok(scanned) => scanned,
         Err(_) => {
-            // A scan stuck on a device keeps allocating, so the process ends here instead of
-            // leaving it to grow while the other tests run. Writing to stderr directly keeps the
-            // message, which the test harness would otherwise hold back.
+            // A stuck scan keeps allocating, so the process ends here instead of leaving it to
+            // grow while the other tests run. Writing to stderr directly keeps the message, which
+            // the test harness would otherwise hold back.
             let _ = writeln!(
                 std::io::stderr(),
-                "{case}: the scan did not return within a second"
+                "{case}: the scan did not return within {seconds} s"
             );
             std::process::exit(101);
         }
@@ -92,7 +109,7 @@ fn a_link_to_a_device_at_a_read_path_is_refused_without_reading() {
         let fx = project(files);
         let path = fx.project_path(rel);
         fx.symlink(&path, &AbsPath::parse("/dev/zero").unwrap());
-        let scanned = scan_within_a_second(fx.env(), &format!("a link to /dev/zero at {rel}"));
+        let scanned = scan_light(fx.env(), &format!("a link to /dev/zero at {rel}"));
         assert_eq!(
             state_of(&scanned, &path),
             Some(&unreadable_not_regular()),
@@ -112,7 +129,7 @@ fn a_named_pipe_at_a_read_path_is_refused_without_opening() {
             .status()
             .expect("run mkfifo");
         assert!(made.success(), "mkfifo {path}");
-        let scanned = scan_within_a_second(fx.env(), &format!("a named pipe at {rel}"));
+        let scanned = scan_light(fx.env(), &format!("a named pipe at {rel}"));
         assert_eq!(
             state_of(&scanned, &path),
             Some(&unreadable_not_regular()),
@@ -128,7 +145,7 @@ fn a_settings_file_over_8_mib_is_listed_and_not_read() {
     let text = format!("{head}{}\"}}", "x".repeat(size - head.len() - 2));
     let fx = project(&[(".claude/settings.json", &text)]);
     let path = fx.project_path(".claude/settings.json");
-    let scanned = scan_within_a_second(fx.env(), "a 9 MiB settings file");
+    let scanned = scan_light(fx.env(), "a 9 MiB settings file");
 
     assert_eq!(
         state_of(&scanned, &path),
@@ -173,7 +190,7 @@ fn view<'a>(scanned: &'a Scanned, agent: &str) -> &'a AgentView {
 fn gemini_imports_that_multiply_stop_at_the_node_budget() {
     let fx = project(&[]);
     fan_out(&fx, "GEMINI", 10);
-    let scanned = scan_within_a_second(fx.env(), "Gemini imports that multiply, k = 10");
+    let scanned = scan_light(fx.env(), "Gemini imports that multiply, k = 10");
 
     let root = fx.project_path("GEMINI.md");
     let budget: Vec<_> = scanned
@@ -222,7 +239,7 @@ fn claude_imports_of_the_same_shape_stay_linear() {
     for k in [10, 40] {
         let fx = project(&[]);
         fan_out(&fx, "CLAUDE", k);
-        let scanned = scan_within_a_second(
+        let scanned = scan_light(
             fx.env(),
             &format!("Claude imports of the fan-out shape, k = {k}"),
         );
@@ -235,4 +252,391 @@ fn claude_imports_of_the_same_shape_stay_linear() {
         // four files that load, and k too deep in the fifth.
         assert_eq!(imports, 5 * k, "Claude import loads for k = {k}");
     }
+}
+
+/// One listed directory of each agent: the directory, the agent that lists it, and the one item
+/// in it.
+const LISTED_DIRS: &[(&str, &str, &str, &str)] = &[
+    (".claude/commands", "claude", "c.md", "hi\n"),
+    (
+        ".codex/agents",
+        "codex",
+        "c.toml",
+        "name = \"c\"\ndescription = \"d\"\ndeveloper_instructions = \"p\"\n",
+    ),
+    (".gemini/commands", "gemini", "c.toml", "prompt = \"p\"\n"),
+    (
+        ".claude/skills",
+        "claude",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+    (
+        ".agents/skills",
+        "codex",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+    (
+        ".gemini/skills",
+        "gemini",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+];
+
+#[test]
+fn links_that_loop_in_a_listed_directory_list_it_once() {
+    for (dir, agent, item, text) in LISTED_DIRS {
+        let fx = project(&[(&format!("{dir}/{item}"), text)]);
+        fx.write(
+            &fx.home_path(".codex/config.toml"),
+            &format!(
+                "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+                fx.project()
+            ),
+        );
+        for n in 0..6 {
+            fx.symlink(
+                &fx.project_path(&format!("{dir}/l{n}")),
+                &fx.project_path(dir),
+            );
+        }
+        let scanned = scan_within(fx.env(), &format!("six links to . in {dir}"), HEAVY);
+        let under = fx.project_path(dir);
+        let items: Vec<&AbsPath> = view(&scanned, agent)
+            .extensions
+            .iter()
+            .map(|ext| &ext.file)
+            .filter(|file| file.starts_with(&under))
+            .collect();
+        assert_eq!(
+            items,
+            [&fx.project_path(&format!("{dir}/{item}"))],
+            "{agent} lists the one item of {dir} once"
+        );
+    }
+}
+
+#[test]
+fn a_skills_directory_of_50_000_entries_is_listed_to_the_entry_budget() {
+    let fx = project(&[]);
+    let skills = fx.project_path(".claude/skills");
+    for n in 0..50_000 {
+        let dir = skills.join(&format!("s{n:05}"));
+        std::fs::create_dir_all(dir.as_path()).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md").as_path(),
+            format!("---\nname: s{n:05}\ndescription: d\n---\n"),
+        )
+        .unwrap();
+    }
+    let scanned = scan_within(fx.env(), "a skills directory of 50,000 entries", HEAVY);
+    let listed = view(&scanned, "claude")
+        .extensions
+        .iter()
+        .filter(|ext| ext.file.starts_with(&skills))
+        .count();
+    assert_eq!(listed, 2_000, "Claude lists the first 2,000 skills");
+    let capped: Vec<_> = scanned
+        .snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.problem, Problem::ListingCapped { .. }))
+        .map(|d| (&d.at, &d.problem))
+        .collect();
+    assert_eq!(
+        capped,
+        [(
+            &Subject::File {
+                path: skills.clone(),
+                line: None
+            },
+            &Problem::ListingCapped { max: 2_000 }
+        )],
+        "one diagnostic names the skills directory and the budget of 2,000 entries"
+    );
+}
+
+const MIB: usize = 1024 * 1024;
+
+/// `bytes` of plain text in lines, with no token an agent follows.
+fn plain_text(bytes: usize) -> String {
+    let line = "plain words in a line of text\n";
+    let mut text = line.repeat(bytes / line.len() + 1);
+    text.truncate(bytes);
+    text
+}
+
+fn problems(scanned: &Scanned, pick: fn(&Problem) -> bool) -> Vec<(&Subject, &Problem)> {
+    scanned
+        .snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| pick(&d.problem))
+        .map(|d| (&d.at, &d.problem))
+        .collect()
+}
+
+#[test]
+fn a_2_mib_claude_md_is_counted_from_its_first_mib_and_says_so() {
+    let text = plain_text(2 * MIB);
+    let fx = project(&[("CLAUDE.md", &text)]);
+    let scanned = scan_within(fx.env(), "a 2 MiB CLAUDE.md", HEAVY);
+
+    let root = fx.project_path("CLAUDE.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::TextPartlyAnalyzed { .. }
+        )),
+        [(
+            &Subject::File {
+                path: root.clone(),
+                line: None
+            },
+            &Problem::TextPartlyAnalyzed { max: MIB as u64 }
+        )],
+        "one diagnostic names CLAUDE.md and the analysis bound of 1 MiB"
+    );
+    let claude = view(&scanned, "claude");
+    let load = claude.loads.iter().find(|load| load.file == root).unwrap();
+    // The text is twice its first MiB, so the estimate is twice that count.
+    let expected = 2 * tokens::count(&text[..MIB]);
+    let delivered = load.delivered.as_ref().unwrap().tokens;
+    assert!(
+        delivered.abs_diff(expected) <= expected / 100,
+        "Claude counts CLAUDE.md as twice its first MiB: {delivered} against {expected}"
+    );
+    let block = claude
+        .session
+        .iter()
+        .find(|block| {
+            block
+                .parts
+                .iter()
+                .any(|part| matches!(part, Part::Load { load: id, .. } if *id == load.id))
+        })
+        .unwrap();
+    assert_eq!(
+        block.fidelity,
+        Fidelity::Approximate,
+        "the block that carries CLAUDE.md is marked as not exact"
+    );
+}
+
+#[test]
+fn ten_links_to_one_8_mib_command_stop_at_the_scan_read_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    let names: Vec<AbsPath> = (0..10)
+        .map(|n| fx.project_path(&format!(".claude/commands/c{n}.md")))
+        .collect();
+    for name in &names {
+        fx.symlink(name, &fx.project_path("big.md"));
+    }
+    let scanned = scan_within(fx.env(), "ten links to one 8 MiB command", HEAVY);
+
+    let max = 64 * MIB as u64;
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ReadBudgetExhausted { .. }
+        )),
+        [(&Subject::Agent, &Problem::ReadBudgetExhausted { max })],
+        "one diagnostic names the scan read budget of 64 MiB"
+    );
+    let refused = FileState::BudgetExhausted {
+        limit: Limit {
+            kind: LimitKind::ScanReadBytes,
+            value: max,
+            unit: Unit::Bytes,
+        },
+    };
+    let states: Vec<bool> = names
+        .iter()
+        .map(|name| match state_of(&scanned, name) {
+            Some(FileState::Present { .. }) => true,
+            Some(state) if *state == refused => false,
+            other => panic!("{name} has {other:?}"),
+        })
+        .collect();
+    // Seven or eight 8 MiB reads fit in 64 MiB, after the few small files the scan reads first.
+    let read = states.iter().filter(|read| **read).count();
+    assert!(
+        (7..=8).contains(&read) && states.iter().skip(read).all(|read| !read),
+        "the first links are read and every later one carries the budget reason: {states:?}"
+    );
+    assert!(
+        scanned.fs().bytes_read() <= max,
+        "the scan read at most 64 MiB"
+    );
+}
+
+/// `GEMINI.md` or `CLAUDE.md` with `lines` lines, each made by `line` from its number.
+fn root_file(fx: &Fixture, name: &str, lines: usize, line: impl Fn(usize) -> String) {
+    let text: String = (0..lines).map(|n| line(n) + "\n").collect();
+    fx.write(&fx.project_path(name), &text);
+}
+
+/// `count` links `l<n>.md` in the project, each to `target`.
+fn links_to(fx: &Fixture, target: &str, count: usize) {
+    for n in 0..count {
+        fx.symlink(
+            &fx.project_path(&format!("l{n}.md")),
+            &fx.project_path(target),
+        );
+    }
+}
+
+fn at_file(path: &AbsPath) -> Subject {
+    Subject::File {
+        path: path.clone(),
+        line: None,
+    }
+}
+
+#[test]
+fn a_gemini_md_that_imports_one_1_mib_file_on_1_000_lines_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(MIB))]);
+    root_file(&fx, "GEMINI.md", 1_000, |_| "@./big.md".to_owned());
+    let scanned = scan_within(
+        fx.env(),
+        "GEMINI.md that imports a 1 MiB file 1,000 times",
+        HEAVY,
+    );
+
+    let root = fx.project_path("GEMINI.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names GEMINI.md and the expansion budget of 4 MiB"
+    );
+    // GEMINI.md is 10 kB, so three imports of 1 MiB fit in 4 MiB and the fourth does not.
+    let big = fx.project_path("big.md");
+    let imports = view(&scanned, "gemini")
+        .loads
+        .iter()
+        .filter(|load| load.file == big)
+        .count();
+    assert_eq!(imports, 3, "Gemini loads big.md three times");
+}
+
+#[test]
+fn a_gemini_md_that_imports_1_000_links_to_one_8_mib_file_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 1_000);
+    root_file(&fx, "GEMINI.md", 1_000, |n| format!("@./l{n}.md"));
+    let scanned = scan_within(
+        fx.env(),
+        "GEMINI.md that imports 1,000 links to an 8 MiB file",
+        HEAVY,
+    );
+
+    let root = fx.project_path("GEMINI.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names GEMINI.md and the expansion budget of 4 MiB"
+    );
+}
+
+#[test]
+fn a_claude_md_that_imports_500_links_to_one_8_mib_file_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 500);
+    root_file(&fx, "CLAUDE.md", 500, |n| format!("@l{n}.md"));
+    let scanned = scan_within(
+        fx.env(),
+        "CLAUDE.md that imports 500 links to an 8 MiB file",
+        HEAVY,
+    );
+
+    let root = fx.project_path("CLAUDE.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names CLAUDE.md and the expansion budget of 4 MiB"
+    );
+}
+
+#[test]
+fn a_hundred_gemini_md_files_that_import_one_1_mib_file_stop_at_the_scan_expansion_budget() {
+    let fx = project(&[("big.md", &plain_text(MIB))]);
+    for n in 0..100 {
+        fx.write(
+            &fx.project_path(&format!("d{n}/GEMINI.md")),
+            "@../big.md\n@../big.md\n@../big.md\n",
+        );
+    }
+    let scanned = scan_within(
+        fx.env(),
+        "100 GEMINI.md files that import a 1 MiB file",
+        HEAVY,
+    );
+
+    let max = 8 * MIB as u64;
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ScanExpansionExhausted { .. }
+        )),
+        [(&Subject::Agent, &Problem::ScanExpansionExhausted { max })],
+        "one diagnostic names the scan expansion budget of 8 MiB"
+    );
+    // Each import adds the whole 1 MiB file, so eight fit in 8 MiB.
+    let big = fx.project_path("big.md");
+    let imports = view(&scanned, "gemini")
+        .loads
+        .iter()
+        .filter(|load| load.file == big && matches!(load.via, Via::Import { .. }))
+        .count();
+    assert_eq!(imports, 8, "Gemini expands big.md eight times in all");
+}
+
+#[test]
+fn a_claude_md_that_links_500_links_to_one_8_mib_file_follows_the_file_once() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 500);
+    root_file(&fx, "CLAUDE.md", 500, |n| format!("[part {n}](l{n}.md)"));
+    let scanned = scan_within(
+        fx.env(),
+        "CLAUDE.md that links 500 links to an 8 MiB file",
+        HEAVY,
+    );
+
+    let references: Vec<&AbsPath> = view(&scanned, "claude")
+        .loads
+        .iter()
+        .filter(|load| matches!(load.via, Via::Reference { .. }))
+        .map(|load| &load.file)
+        .collect();
+    assert_eq!(
+        references,
+        [&fx.project_path("l0.md")],
+        "Claude references the one file behind 500 links once"
+    );
 }

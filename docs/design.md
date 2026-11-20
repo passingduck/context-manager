@@ -93,6 +93,7 @@ pub enum FileState {
     Absent,                                    // a probed location, or the target of a broken import
     Unreadable { error: String },
     TooBig { bytes: u64 },                     // over 8 MiB: listed, never read
+    BudgetExhausted { limit: Limit },          // the scan read budget was spent before this file
 }
 pub enum EditPolicy { Editable, ReadOnly(ReadOnlyWhy) }
 pub enum ReadOnlyWhy { Managed, PluginCache { plugin: String }, Generated, AgentState, Synced, NotUtf8 }
@@ -169,7 +170,7 @@ pub enum Skip {
 }
 pub struct Limit { pub kind: LimitKind, pub value: u64, pub unit: Unit }   // Unit: Bytes | Chars | Lines | Tokens | Hops
 pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, MaxFileBytes,
-                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth }
+                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth, ScanReadBytes }
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
 /// `parts` count the same pieces `render` returns, in the same order, and `tokens` is their sum.
@@ -263,6 +264,8 @@ pub enum Problem {
     ParseError { format: Format, detail: String, fatal_for_agent: bool },
     FrontmatterInvalid { field: String }, LegacyLocation { why: RuleRef }, ProjectUntrusted { skipped: Vec<RuleRef> },
     GlobMatchesNothing { glob: String }, WalkCapped { entries: u32 },
+    ImportBudgetExhausted { max: u32 }, ImportBytesExhausted { max: u64 }, ScanExpansionExhausted { max: u64 },
+    ListingCapped { max: u32 }, ListingTooDeep { max: u32 }, ReadBudgetExhausted { max: u64 }, TextPartlyAnalyzed { max: u64 },
     BodyAlsoImported { import: LoadId, host: AbsPath, line: u32 },   // a listed item whose body an import also loads at session start
 }
 
@@ -804,6 +807,10 @@ Three candidates wrote this design independently against one grounding file: one
 - Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
 - Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.
+- Scan budgets unit: the directory lister is `walk::list_tree` (and `walk::list_dir` for one level). Flat listings go through it as well, so every adapter listing has the entry budget of 2,000 and the depth limit of 8, and a test fails on any `.listing(` call outside `walk.rs` and `probe_fs.rs`: `ProbeFs::listing` is the one-level read under the lister, crate-private, and `ProbeFs::list` is gone. The plan's tree of a directory trashed whole lists through `walk::list_tree_with` at its own limits (depth 16, 10,000 entries); a listing it could not finish is `partial` and the tree is not revertible. The Codex plugin content hash lists through `walk::list_tree_with` with no depth limit and its own entry limit (5,000 in a scan, 200,000 in `inspect`), because Codex hashes the whole tree and a capped tree has no hash. It still lists each real directory once.
+- Scan budgets unit: the counting bound is a bound on text analysis, `md::MAX_ANALYZED_BYTES` (1 MiB). Past it a token count is an estimate from the first MiB, and the reference pass and the missing-link check look for links only in the first MiB, because a span scan costs as much per byte as a count. One `TextPartlyAnalyzed` diagnostic per file says both, and a session block whose loads deliver more than the bound is `Approximate`. A text of at least 64 KiB is counted once per content, keyed by the hash of its first MiB.
+- Scan budgets unit: besides the 4 MiB per root file, import expansion has a budget of 8 MiB for the whole scan (`imports::MAX_SCAN_EXPANDED_BYTES`), charged in `ProbeFs` by the expander. Gemini expands every context file on its own, so a hundred directories whose GEMINI.md imports one 1 MiB file three times took 58 s and 370 MB without it. A root that the shared budget stopped carries no diagnostic of its own; the scan reports one `ScanExpansionExhausted`.
+- Scan budgets unit: the reference pass knows a file by its real path, so links that all point at one file are one reference under the first name that reaches it. Before, 500 links to one 8 MiB file were 500 references of 8 MiB each.
 - Load text unit: a block's `tokens` is the sum of its pieces' counts, each piece counted alone, for every agent. Claude and Gemini counted the joined text before, so their block totals move by a few tokens at the joins. `parts` now follow the pieces in order, so a header between two files is glue in its place instead of a share of the next file's part.
 - Load text unit: the frame of a load is not its text. Claude's `Contents of <path> (<label>):` header and the `- ` of a listing line, Codex's line break after a catalog line and Gemini's `--- Context from: <p> ---` lines are frame. A Gemini context file's `Delivered` now counts its text without that frame.
 - Load text unit: a Gemini import is inlined into its host's text, so it has no piece of its own. `load_texts` returns the imported file with its own imports inlined, which is a run of the host's piece.

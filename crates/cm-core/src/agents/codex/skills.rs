@@ -10,6 +10,7 @@ use crate::agents::{Pieces, ScanCx};
 use crate::limits::cut_bytes_lossy;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 pub(super) const RULE_ROOT_PROJECT: &str = "codex.skills.root.project";
 pub(super) const RULE_ROOT_USER: &str = "codex.skills.root.user";
@@ -21,10 +22,11 @@ pub(super) const RULE_DISABLED: &str = "codex.skills.disabled";
 pub(super) const RULE_EXPLICIT_ONLY: &str = "codex.skills.explicit_only";
 pub(super) const RULE_REJECTED: &str = "codex.skills.rejected";
 
-/// Spec 5.1: `MAX_SCAN_DEPTH`, `MAX_SKILLS_DIRS_PER_ROOT`, `MAX_SKILLS_ENTRIES_PER_ROOT`.
-const MAX_DEPTH: usize = 6;
+/// Spec 5.1: `MAX_SCAN_DEPTH`, `MAX_SKILLS_DIRS_PER_ROOT`. Codex also stops at
+/// `MAX_SKILLS_ENTRIES_PER_ROOT` (20,000), which the scan's own entry budget is below.
+const MAX_DEPTH: u32 = 6;
 const MAX_DIRS: usize = 2000;
-const MAX_ENTRIES: usize = 20_000;
+const _: () = assert!(walk::MAX_TREE_ENTRIES <= 20_000);
 const MAX_NAME_CHARS: usize = 64;
 /// `MAX_SKILL_PROMPT_BYTES`: the body Codex injects when the user names a skill.
 const MAX_BODY_BYTES: u64 = 8_000;
@@ -144,46 +146,31 @@ fn roots(cx: &ScanCx, setup: &Setup, plugins: &[Plugin]) -> Vec<Root> {
     roots
 }
 
-/// Spec 5.1: recursive `SKILL.md` search, depth 6, hidden directories skipped.
+/// Spec 5.1: recursive `SKILL.md` search, depth 6, at most 2,000 directories, hidden directories
+/// skipped. Also returns the directories that hold a plugin manifest directory.
 fn discover(cx: &ScanCx, root: &Root) -> (Vec<AbsPath>, Vec<AbsPath>) {
+    let mut dirs_listed = 1usize;
+    let entries = walk::list_tree(cx.fs, &root.path, |e| {
+        if e.name().starts_with('.') || e.depth() >= MAX_DEPTH || dirs_listed >= MAX_DIRS {
+            return false;
+        }
+        // Spec 5.1: system roots ignore directory symlinks.
+        if root.scope == RootScope::System && cx.fs.stat(&e.path).is_ok_and(|s| s.is_symlink) {
+            return false;
+        }
+        dirs_listed += 1;
+        true
+    });
     let mut files = Vec::new();
     let mut plugin_roots = Vec::new();
-    let mut stack = vec![(root.path.clone(), 0usize)];
-    let (mut dirs_seen, mut entries_seen) = (0usize, 0usize);
-    while let Some((dir, depth)) = stack.pop() {
-        dirs_seen += 1;
-        if dirs_seen > MAX_DIRS {
-            break;
-        }
-        let Ok(list) = cx.fs.list(&dir) else { continue };
-        let mut children = Vec::new();
-        for entry in list.iter() {
-            entries_seen += 1;
-            if entries_seen > MAX_ENTRIES {
-                break;
+    for entry in entries {
+        match entry.kind {
+            EntryKind::File if entry.name() == "SKILL.md" => files.push(entry.path),
+            EntryKind::Dir if MANIFEST_DIRS.contains(&entry.name()) => {
+                plugin_roots.extend(entry.path.parent());
             }
-            let path = dir.join(&entry.name);
-            match entry.kind {
-                EntryKind::File if entry.name == "SKILL.md" => files.push(path),
-                EntryKind::Dir => {
-                    if MANIFEST_DIRS.contains(&entry.name.as_str()) {
-                        plugin_roots.push(dir.clone());
-                    }
-                    if entry.name.starts_with('.') || depth + 1 >= MAX_DEPTH {
-                        continue;
-                    }
-                    // Spec 5.1: system roots ignore directory symlinks.
-                    if root.scope == RootScope::System
-                        && cx.fs.stat(&path).map(|s| s.is_symlink).unwrap_or(false)
-                    {
-                        continue;
-                    }
-                    children.push((path, depth + 1));
-                }
-                _ => {}
-            }
+            _ => {}
         }
-        stack.extend(children.into_iter().rev());
     }
     (files, plugin_roots)
 }
