@@ -456,7 +456,7 @@ fn a_rule_with_all_star_paths_loads_at_start_and_frontmatter_is_stripped() {
         fs: &fs,
         parked_dir: None,
     };
-    let text = &Claude.render(&cx, &scan.view)[0].text;
+    let text = &Claude.render(&cx, &scan.view)[0].text();
     assert!(text.contains("STAR") && !text.contains("---"));
 }
 
@@ -883,7 +883,7 @@ fn render_matches_the_session_blocks_and_symlinks_show_their_target() {
     };
     let blocks = Claude.render(&cx, &scan.view);
     assert_eq!(blocks.len(), 1);
-    let text = &blocks[0].text;
+    let text = &blocks[0].text();
     let want = format!(
         "<system-reminder>\n{}\n\nContents of {}/CLAUDE.md (project instructions, checked into the codebase):\n\nHELLO\n\nContents of {} (project instructions, checked into the codebase):\n\nSHARED\n\nContents of {}/CLAUDE.local.md (user's private project instructions, not checked in):\n\nMINE\n</system-reminder>",
         render::INTRO,

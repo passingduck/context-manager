@@ -7,6 +7,7 @@ import type { ChangeEdit } from "../gen/ChangeEdit";
 import type { ChangeState } from "../gen/ChangeState";
 import type { Delivery } from "../gen/Delivery";
 import type { Unsized } from "../gen/Unsized";
+import type { Sends } from "../lib/loads";
 import type { DisabledBy } from "../gen/DisabledBy";
 import type { DocKind } from "../gen/DocKind";
 import type { ExtKind } from "../gen/ExtKind";
@@ -382,7 +383,7 @@ export const en = {
     legendApprox: "Hatched: rebuilt text, size is an estimate",
     legendGlue: "Thin gray: glue between files",
     legendStub: "Broken edge: not to scale",
-    legendSelected: "Outline: selected file",
+    legendSelected: "Outline: what you selected",
     empty: "This agent sends nothing at session start here, so there is no prefix to map.",
     kind: "Kind",
     tokens: "Tokens",
@@ -402,6 +403,8 @@ export const en = {
     rowsLabel: "Where each file sits in the prefix",
     detailTitle: "Place in the prefix",
     detailLine: (range: string, after: string) => `${range}. After it: ${after}.`,
+    places: (n: number) => `This file sits in ${n} places in the prefix.`,
+    notInPrefix: "The selected item loads later, so it is not in the prefix.",
   },
   detail: {
     empty: "Select a row to see why it loads and what it contains.",
@@ -420,7 +423,11 @@ export const en = {
     notLoaded: "No agent loads this file by itself.",
     cutAt: (kept: number, total: number, u: string, l: string) => `Cut after ${kept.toLocaleString("en-US")} of ${total.toLocaleString("en-US")} ${u}, because of the ${l}.`,
     cutLine: (line: number) => `The cut falls at line ${line}.`,
-    text: "File text",
+    text: "Whole file, for editing",
+    textReadOnly: "Whole file",
+    picked: "Selected",
+    receives: (n: string) => `What the model receives here, ${n} tokens`,
+    sameAsFile: "The text sent here is the whole file, which the editor below shows.",
     readFailed: "The file text could not be read.",
     absent: "This file does not exist yet.",
     unreadable: (error: string) => `This file cannot be read: ${error}.`,
@@ -576,12 +583,15 @@ export const en = {
       truncated: () => "Cut",
       skipped: () => "Not loaded",
     } satisfies Msgs<LoadStatus>,
-    detail: {
-      loaded: () => "The agent loads this file whole.",
-      truncated: (v) => `The agent loads only the first ${v.kept.toLocaleString("en-US")} of ${v.total.toLocaleString("en-US")} ${unit[v.limit.unit]}, because of the ${limit(v.limit)}.`,
-      skipped: () => "The agent does not load this file.",
-    } satisfies Msgs<LoadStatus>,
   },
+  sends: {
+    line: () => "The model receives one line made from the name and the description.",
+    body: () => "The model receives the text without its frontmatter or comments.",
+    whole: () => "The model receives the whole file.",
+    mayRead: () => "The model may read this file by itself.",
+    part: (v) => `The model receives only the first ${v.kept.toLocaleString("en-US")} of ${v.total.toLocaleString("en-US")} ${unit[v.limit.unit]}, because of the ${limit(v.limit)}.`,
+    nothing: () => "The model receives nothing from here.",
+  } satisfies Msgs<Sends>,
   skip: {
     shadowed: (v, d) => `Shadowed by ${d(v.by)}.`,
     budgetExhausted: (v) => `The ${limit(v.limit)} was used up before this file.`,
@@ -658,6 +668,7 @@ export const en = {
     projectUntrusted: (v) => `The folder is not trusted, so the agent skips ${v.skipped.length} project ${v.skipped.length === 1 ? "setting" : "settings"}.`,
     globMatchesNothing: (v) => `The pattern ${v.glob} matches no file.`,
     walkCapped: (v) => `The project walk stopped after ${v.entries.toLocaleString("en-US")} entries, so some files may be missing here.`,
+    bodyAlsoImported: (v, d) => `Line ${v.line} of ${d(v.host)} imports this body, so the model receives it with every session and again when the item is invoked. Remove the import line, or keep the text in an instruction file instead of a skill.`,
   } satisfies Msgs<Problem>,
   hookBlock,
   hookState: {

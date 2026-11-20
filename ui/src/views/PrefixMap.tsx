@@ -5,7 +5,7 @@ import type { AgentView } from "../gen/AgentView";
 import type { Load } from "../gen/Load";
 import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
-import { LABEL_COLOR } from "../lib/loads";
+import { isPicked, LABEL_COLOR, pick, picked } from "../lib/loads";
 import { buildPrefix, buildRows, exact, stubsBefore, ticks, unsizedAfter, type Prefix, type Seg } from "../lib/prefix";
 import type { Route } from "../lib/route";
 
@@ -64,12 +64,12 @@ function Strip({ view, prefix, route, go, intro }: { view: AgentView; prefix: Pr
   const { segs, total } = prefix;
   const place = scale(prefix);
   const files = segs.filter((seg) => seg.load);
-  const selectedFile = route.sel.startsWith("file:") ? route.sel.slice(5) : "";
-  const isSelected = (seg: Seg) => seg.load !== null && seg.load.file === selectedFile && (route.ag === "" || route.ag === view.agent);
+  const chosen = picked(view, route);
+  const isSelected = (seg: Seg) => seg.load !== null && isPicked(chosen, seg.load);
   const active = hover ?? focus;
   const activeSeg = active === null ? null : segs[active];
   const tabStop = focus ?? files.find(isSelected)?.index ?? files[0]?.index;
-  const select = (seg: Seg) => seg.load && go({ sel: `file:${seg.load.file}`, ag: view.agent, ln: 0 });
+  const select = (seg: Seg) => seg.load && go(pick(view, seg.load));
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     event.stopPropagation();

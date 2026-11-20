@@ -2,8 +2,9 @@
 import type { BlockLabel } from "./BlockLabel";
 import type { Delivery } from "./Delivery";
 import type { Fidelity } from "./Fidelity";
+import type { Piece } from "./Piece";
 
 /**
- * The literal text of one session-start block.
+ * The literal text of one session-start block, as the ordered pieces it is made of.
  */
-export type RenderedBlock = { delivery: Delivery, label: BlockLabel, text: string, tokens: number, fidelity: Fidelity, };
+export type RenderedBlock = { delivery: Delivery, label: BlockLabel, pieces: Array<Piece>, tokens: number, fidelity: Fidelity, };

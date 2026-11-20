@@ -4,12 +4,12 @@
 use serde_json::Value;
 
 use super::catalog;
+use super::extensions::body_of;
+use super::instructions::delivered_text;
 use super::memory::cut_index;
 use super::setup::Setup;
-use crate::agents::ScanCx;
-use crate::md::strip::strip;
+use crate::agents::{Pieces, ScanCx, assemble};
 use crate::model::*;
-use crate::tokens;
 
 /// Spec 1.2: the sentence that opens the block.
 pub(super) const INTRO: &str = "Codebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior and you MUST follow them exactly as written.";
@@ -20,6 +20,16 @@ const MANAGED_SETTINGS_PATH: &str = "<managed-settings>";
 pub(super) struct Built {
     pub rendered: RenderedBlock,
     pub block: ContextBlock,
+}
+
+pub(super) fn built(
+    delivery: Delivery,
+    label: BlockLabel,
+    fidelity: Fidelity,
+    pieces: Pieces,
+) -> Built {
+    let (block, rendered) = assemble(delivery, label, fidelity, pieces);
+    Built { rendered, block }
 }
 
 /// Spec 1.2, label table.
@@ -53,8 +63,11 @@ fn delivered(load: &Load) -> bool {
     )
 }
 
-/// The text of one load as Claude Code sends it, without its header.
-fn text_of(cx: &ScanCx, load: &Load) -> Option<String> {
+/// The text Claude Code sends for one delivered load, without the header or list mark around
+/// it. The scan counts the same text: `instructions::delivered_text` and the on-demand cut for
+/// instruction files, `cut_index` for a memory index, `body_of` for a body on invoke. A listing
+/// line is not file text, so it has no case here: the catalog builds it.
+pub(super) fn text_of(cx: &ScanCx, load: &Load) -> Option<String> {
     let bytes = cx.fs.read(&load.file).ok()?;
     let raw = String::from_utf8_lossy(&bytes);
     if matches!(&load.via, Via::Discovery { rule } if rule.0 == "claude.discovery.managed_setting")
@@ -64,7 +77,21 @@ fn text_of(cx: &ScanCx, load: &Load) -> Option<String> {
     }
     Some(match load.kind {
         DocKind::MemoryIndex => cut_index(&raw).content,
-        _ => strip(&raw).text.trim().to_owned(),
+        DocKind::Instructions | DocKind::Rule => {
+            let (text, _) = delivered_text(&raw);
+            match &load.status {
+                // Spec 1.3: a file that loads on demand is cut at the limit, in characters.
+                LoadStatus::Truncated { limit, .. } if limit.kind == LimitKind::OnDemandChars => {
+                    crate::limits::cut_chars(&text, limit.value).text
+                }
+                _ => text,
+            }
+        }
+        DocKind::SkillBody | DocKind::CommandBody | DocKind::SubagentPrompt => {
+            body_of(&raw).to_owned()
+        }
+        // Memory topic files and references: the model reads the file as it is.
+        _ => raw.into_owned(),
     })
 }
 
@@ -97,10 +124,10 @@ pub(super) fn session(
 }
 
 /// The instruction block and the memory block of the first user message. The reminder opens in
-/// the first block and closes in the last.
+/// the first block and closes in the last. Each file gets a `Contents of` header, which is frame.
 pub(super) fn build(cx: &ScanCx, loads: &[Load]) -> Vec<Built> {
-    let mut files: Vec<(LoadId, String)> = Vec::new();
-    let mut memory: Option<(LoadId, String)> = None;
+    let mut files: Vec<(&Load, String)> = Vec::new();
+    let mut memory: Option<(&Load, String)> = None;
     for load in loads {
         let session_text = matches!(
             load.kind,
@@ -112,90 +139,51 @@ pub(super) fn build(cx: &ScanCx, loads: &[Load]) -> Vec<Built> {
         let Some(text) = text_of(cx, load) else {
             continue;
         };
-        let piece = format!(
-            "Contents of {} ({}):\n\n{text}",
-            shown_path(cx, load),
-            label_of(load)
-        );
         if load.kind == DocKind::MemoryIndex {
-            memory = Some((load.id.clone(), piece));
+            memory = Some((load, text));
         } else {
-            files.push((load.id.clone(), piece));
+            files.push((load, text));
         }
     }
     if files.is_empty() && memory.is_none() {
         return Vec::new();
     }
-    let mut first = format!("<system-reminder>\n{INTRO}");
-    for (_, piece) in &files {
-        first.push_str("\n\n");
-        first.push_str(piece);
+    let header = |load: &Load| {
+        format!(
+            "Contents of {} ({}):\n\n",
+            shown_path(cx, load),
+            label_of(load)
+        )
+    };
+    let mut first = Pieces::default();
+    first.frame(&format!("<system-reminder>\n{INTRO}"));
+    for (load, text) in files {
+        first.frame("\n\n");
+        first.frame(&header(load));
+        first.load(load.id.clone(), text);
     }
-    let mut out = Vec::new();
-    let mut second = None;
-    match &memory {
-        Some((_, piece)) => second = Some(format!("{piece}\n</system-reminder>")),
-        None => first.push_str("\n</system-reminder>"),
+    if memory.is_none() {
+        first.frame("\n</system-reminder>");
     }
-    out.push(built(
+    let mut out = vec![built(
+        Delivery::UserMessage,
         BlockLabel::Instructions,
-        first,
-        files
-            .iter()
-            .map(|(id, piece)| (id.clone(), piece.as_str()))
-            .collect(),
         Fidelity::Exact,
-    ));
-    if let (Some(text), Some((id, piece))) = (second, &memory) {
+        first,
+    )];
+    if let Some((load, text)) = memory {
+        let mut second = Pieces::default();
+        second.frame(&header(load));
+        second.load(load.id.clone(), text);
+        second.frame("\n</system-reminder>");
         out.push(built(
+            Delivery::UserMessage,
             BlockLabel::Memory,
-            text,
-            vec![(id.clone(), piece.as_str())],
             Fidelity::Exact,
+            second,
         ));
     }
     out
-}
-
-pub(super) fn built(
-    label: BlockLabel,
-    text: String,
-    pieces: Vec<(LoadId, &str)>,
-    fidelity: Fidelity,
-) -> Built {
-    let total = tokens::count(&text);
-    let mut parts: Vec<Part> = Vec::new();
-    let mut in_loads = 0u32;
-    let mut load_parts = Vec::new();
-    for (id, piece) in pieces {
-        let t = tokens::count(piece);
-        in_loads += t;
-        load_parts.push(Part::Load {
-            load: id,
-            tokens: t,
-        });
-    }
-    parts.push(Part::Glue {
-        tokens: total.saturating_sub(in_loads),
-    });
-    parts.extend(load_parts);
-    Built {
-        rendered: RenderedBlock {
-            delivery: Delivery::UserMessage,
-            label,
-            text: text.clone(),
-            tokens: total,
-            fidelity,
-        },
-        block: ContextBlock {
-            delivery: Delivery::UserMessage,
-            label,
-            parts,
-            tokens: total,
-            fidelity,
-            preceded_by: Vec::new(),
-        },
-    }
 }
 
 pub(super) fn budget(blocks: &[Built], loads: &[Load]) -> Budget {

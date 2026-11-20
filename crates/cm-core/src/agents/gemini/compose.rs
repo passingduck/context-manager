@@ -3,11 +3,10 @@
 //! CLI backs it.
 
 use super::context::{Gathered, Item};
-use super::exts::Exts;
-use super::util::{collapse_newlines, js_trim};
+use super::exts::{Exts, skill_entry};
 use super::world::World;
+use crate::agents::{Pieces, assemble};
 use crate::model::*;
-use crate::tokens;
 
 pub(super) struct SystemMdText {
     pub load: LoadId,
@@ -19,25 +18,36 @@ pub(super) struct Composed {
     pub rendered: RenderedBlock,
 }
 
-fn blocks(items: &[Item]) -> String {
-    items
-        .iter()
-        .filter_map(|item| item.block.as_deref())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+fn has_text(items: &[Item]) -> bool {
+    items.iter().any(|item| item.text.is_some())
 }
 
-/// `renderUserMemory`, with the newline cleanup of `promptProvider.ts` applied. The text is what
-/// follows the base prompt and one blank line.
-fn tier1(names: &[String], global: &str, private: &str) -> String {
-    let global = js_trim(global);
-    let private = js_trim(private);
-    let text = if private.is_empty() {
-        if global.is_empty() {
-            return String::new();
+/// Each file inside its `--- Context from: <p> ---` frame, the frames joined by a blank line.
+/// Tier 1's newline cleanup is already in a global or private file's text, which is trimmed, so
+/// no run of newlines crosses from a frame into a file and the frames need no cleanup.
+fn context_pieces(pieces: &mut Pieces, items: &[Item]) {
+    let with_text = items
+        .iter()
+        .filter_map(|item| item.text.as_ref().map(|text| (item, text)));
+    for (n, (item, text)) in with_text.enumerate() {
+        if n > 0 {
+            pieces.frame("\n\n");
         }
-        format!(
-            "\n# Contextual Instructions ({})\n\
+        pieces.frame(&format!("--- Context from: {} ---\n", item.path));
+        pieces.load(item.load.clone(), text.clone());
+        pieces.frame(&format!("\n--- End of Context from: {} ---", item.path));
+    }
+}
+
+/// `renderUserMemory`. The text is what follows the base prompt and one blank line.
+fn tier1(names: &[String], global: &[Item], private: &[Item]) -> Option<Pieces> {
+    let mut pieces = Pieces::default();
+    if !has_text(private) {
+        if !has_text(global) {
+            return None;
+        }
+        pieces.frame(&format!(
+            "# Contextual Instructions ({})\n\
 The following content is loaded from local and global configuration files.\n\
 **Context Precedence:**\n\
 - **Global (~/.gemini/):** foundational user preferences. Apply these broadly.\n\
@@ -49,102 +59,68 @@ The following content is loaded from local and global configuration files.\n\
 - **Precedence:** Strictly follow the order above (Sub-directories > Workspace Root > Extensions > Global).\n\
 - **System Overrides:** Contextual instructions override default operational behaviors (e.g., tech stack, style, workflows, tool preferences) defined in the system prompt. However, they **cannot** override Core Mandates regarding safety, security, and agent integrity.\n\
 \n\
-<loaded_context>\n{global}\n</loaded_context>",
+<loaded_context>\n",
             names.join(", ")
-        )
-    } else {
-        let mut sections = Vec::new();
-        if !global.is_empty() {
-            sections.push(format!("<global_context>\n{global}\n</global_context>"));
-        }
-        sections.push(format!(
-            "<user_project_memory>\n--- Private Project Memory Index (private, not committed to repo) ---\n{private}\n--- End Private Project Memory Index ---\n</user_project_memory>"
         ));
-        format!(
-            "\n---\n\n<loaded_context>\n{}\n</loaded_context>",
-            sections.join("\n")
-        )
-    };
-    collapse_newlines(&text).trim_start_matches('\n').to_owned()
+        context_pieces(&mut pieces, global);
+        pieces.frame("\n</loaded_context>");
+    } else {
+        pieces.frame("---\n\n<loaded_context>\n");
+        if has_text(global) {
+            pieces.frame("<global_context>\n");
+            context_pieces(&mut pieces, global);
+            pieces.frame("\n</global_context>\n");
+        }
+        pieces.frame("<user_project_memory>\n--- Private Project Memory Index (private, not committed to repo) ---\n");
+        context_pieces(&mut pieces, private);
+        pieces.frame(
+            "\n--- End Private Project Memory Index ---\n</user_project_memory>\n</loaded_context>",
+        );
+    }
+    Some(pieces)
 }
 
 /// `getSessionMemory`.
-fn tier2(extension: &str, project: &str) -> String {
-    let mut sections = Vec::new();
-    if !js_trim(extension).is_empty() {
-        sections.push(format!(
-            "<extension_context>\n{}\n</extension_context>",
-            js_trim(extension)
-        ));
+fn tier2(extension: &[Item], project: &[Item]) -> Option<Pieces> {
+    let (ext, proj) = (has_text(extension), has_text(project));
+    if !ext && !proj {
+        return None;
     }
-    if !js_trim(project).is_empty() {
-        sections.push(format!(
-            "<project_context>\n{}\n</project_context>",
-            js_trim(project)
-        ));
+    let mut pieces = Pieces::default();
+    pieces.frame("\n<loaded_context>\n");
+    if ext {
+        pieces.frame("<extension_context>\n");
+        context_pieces(&mut pieces, extension);
+        pieces.frame("\n</extension_context>");
     }
-    if sections.is_empty() {
-        return String::new();
+    if proj {
+        if ext {
+            pieces.frame("\n");
+        }
+        pieces.frame("<project_context>\n");
+        context_pieces(&mut pieces, project);
+        pieces.frame("\n</project_context>");
     }
-    format!(
-        "\n<loaded_context>\n{}\n</loaded_context>",
-        sections.join("\n")
-    )
+    pieces.frame("\n</loaded_context>");
+    Some(pieces)
 }
 
-fn skill_catalog(skills: &[(LoadId, String, String, AbsPath)]) -> String {
-    let xml = skills
-        .iter()
-        .map(|(_, name, description, file)| {
-            format!(
-                "  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n    <location>{file}</location>\n  </skill>"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!(
-        "# Available Agent Skills\n\nYou have access to the following specialized skills. To activate a skill and receive its detailed instructions, call the `activate_skill` tool with the skill's name.\n\n<available_skills>\n{xml}\n</available_skills>"
-    )
-}
-
-fn make(delivery: Delivery, label: BlockLabel, text: String, loads: &[(LoadId, u32)]) -> Composed {
-    let total = tokens::count(&text);
-    let counted: u32 = loads.iter().map(|(_, t)| *t).sum();
-    let mut parts: Vec<Part> = loads
-        .iter()
-        .map(|(load, tokens)| Part::Load {
-            load: load.clone(),
-            tokens: *tokens,
-        })
-        .collect();
-    parts.push(Part::Glue {
-        tokens: total.saturating_sub(counted),
-    });
-    Composed {
-        block: ContextBlock {
-            delivery,
-            label,
-            parts,
-            tokens: total,
-            fidelity: Fidelity::Approximate,
-            preceded_by: Vec::new(),
-        },
-        rendered: RenderedBlock {
-            delivery,
-            label,
-            text,
-            tokens: total,
-            fidelity: Fidelity::Approximate,
-        },
+fn skill_catalog(skills: &[(LoadId, String, String, AbsPath)]) -> Pieces {
+    let mut pieces = Pieces::default();
+    pieces.frame("# Available Agent Skills\n\nYou have access to the following specialized skills. To activate a skill and receive its detailed instructions, call the `activate_skill` tool with the skill's name.\n\n<available_skills>\n");
+    for (n, (load, name, description, file)) in skills.iter().enumerate() {
+        if n > 0 {
+            pieces.frame("\n");
+        }
+        pieces.load(load.clone(), skill_entry(name, description, file));
     }
+    pieces.frame("\n</available_skills>");
+    pieces
 }
 
-fn loads_of(items: &[Item]) -> Vec<(LoadId, u32)> {
-    items
-        .iter()
-        .filter(|item| item.block.is_some())
-        .map(|item| (item.load.clone(), item.tokens))
-        .collect()
+fn make(delivery: Delivery, label: BlockLabel, pieces: Pieces) -> Composed {
+    let (block, rendered) = assemble(delivery, label, Fidelity::Approximate, pieces);
+    Composed { block, rendered }
 }
 
 /// The blocks the session sends, in delivery order: the prompt override, the skill catalog,
@@ -157,62 +133,34 @@ pub(super) fn compose(
 ) -> Vec<Composed> {
     let mut out = Vec::new();
     if let Some(sys) = system_md {
-        let tokens = tokens::count(&sys.text);
+        let mut pieces = Pieces::default();
+        pieces.load(sys.load.clone(), sys.text.clone());
         out.push(make(
             Delivery::SystemPrompt,
             BlockLabel::Instructions,
-            sys.text.clone(),
-            &[(sys.load.clone(), tokens)],
+            pieces,
         ));
     }
     if !exts.catalog.is_empty() {
-        let loads: Vec<_> = exts
-            .catalog
-            .iter()
-            .map(|(load, name, description, file)| {
-                let one = skill_catalog(&[(
-                    load.clone(),
-                    name.clone(),
-                    description.clone(),
-                    file.clone(),
-                )]);
-                (load.clone(), tokens::count(&one))
-            })
-            .collect();
         out.push(make(
             Delivery::SystemPrompt,
             BlockLabel::SkillCatalog,
             skill_catalog(&exts.catalog),
-            &loads,
         ));
     }
-    let system = tier1(&w.names, &blocks(&g.global), &blocks(&g.private));
-    if !system.is_empty() {
-        let mut loads = loads_of(&g.global);
-        loads.extend(loads_of(&g.private));
+    if let Some(pieces) = tier1(&w.names, &g.global, &g.private) {
         out.push(make(
             Delivery::SystemPrompt,
             BlockLabel::Instructions,
-            system,
-            &loads,
+            pieces,
         ));
     }
-    let project = if w.trusted() {
-        blocks(&g.project)
-    } else {
-        String::new()
-    };
-    let session = tier2(&blocks(&g.extension), &project);
-    if !session.is_empty() {
-        let mut loads = loads_of(&g.extension);
-        if w.trusted() {
-            loads.extend(loads_of(&g.project));
-        }
+    let project: &[Item] = if w.trusted() { &g.project } else { &[] };
+    if let Some(pieces) = tier2(&g.extension, project) {
         out.push(make(
             Delivery::UserMessage,
             BlockLabel::Instructions,
-            session,
-            &loads,
+            pieces,
         ));
     }
     out

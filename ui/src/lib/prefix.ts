@@ -1,8 +1,8 @@
-import type { AbsPath } from "../gen/AbsPath";
 import type { AgentView } from "../gen/AgentView";
 import type { ContextBlock } from "../gen/ContextBlock";
 import type { Load } from "../gen/Load";
 import type { Unsized } from "../gen/Unsized";
+import { isPicked, type Picked } from "./loads";
 
 /** One file or one run of glue in the session-start prefix. `start` and `end` count tokens from the first block the scan knows. */
 export interface Seg {
@@ -94,11 +94,19 @@ export function stubsBefore(prefix: Prefix, tokens: number, side: "before" | "af
   return prefix.stubs.filter((stub) => stub.at < tokens || (side === "after" && stub.at === tokens)).length;
 }
 
-/** Where a file sits in one agent's prefix, or null when it is not part of it. Counts its first segment. */
-export function positionOf(view: AgentView, file: AbsPath): { seg: Seg; total: number; after: number; unsized: Unsized[] } | null {
+export interface Position {
+  seg: Seg;
+  total: number;
+  after: number;
+  unsized: Unsized[];
+}
+
+/** Where the picked place sits in one agent's prefix: one segment for a picked load, every segment of the file for a file. Empty when none is part of it. */
+export function positionsOf(view: AgentView, picked: Picked): Position[] {
   const prefix = buildPrefix(view);
-  const seg = prefix.segs.find((s) => s.load?.file === file);
-  return seg ? { seg, total: prefix.total, after: prefix.total - seg.end, unsized: unsizedAfter(prefix, seg.end) } : null;
+  return prefix.segs
+    .filter((seg) => seg.load !== null && isPicked(picked, seg.load))
+    .map((seg) => ({ seg, total: prefix.total, after: prefix.total - seg.end, unsized: unsizedAfter(prefix, seg.end) }));
 }
 
 /** Tick values for an axis over `total` tokens: about six steps of 1, 2 or 5 times a power of ten. */
