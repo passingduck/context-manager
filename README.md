@@ -52,11 +52,11 @@ Then open the printed URL on your laptop. `--host` with a non-loopback address p
 
 For each agent it finds in the project and your home directory, it shows:
 
-- **Context.** Every instruction file, rule and import, grouped by when it loads: at session start, when the agent touches a file, when you invoke it, or only if the agent chooses to read it. It shows the literal session-start text, the token budget as a sum, and the files that were skipped, shadowed or truncated, with the reason.
+- **Context.** Every instruction file, rule and import, grouped by when it loads: at session start, when the agent touches a file, when you invoke it, or only if the agent chooses to read it. It shows the literal session-start text, a bar of where each file sits in that text, the token budget as a sum, and the files that were skipped, shadowed or truncated, with the reason. A file that loads in more than one place, such as a skill body that an instruction file also imports, shows each place with the text the model receives there.
 - **Memory.** The memory stores and their entries.
 - **Hooks.** Every hook with its event, matcher, handler and state, an on and off switch, a form for a new hook, and a test run.
 - **Extensions.** Skills, commands and subagents.
-- **Doctor.** Problems such as a hook program that does not exist, a settings file that does not parse, or a link to a file that does not exist.
+- **Doctor.** Problems such as a hook program that does not exist, a settings file that does not parse, a link to a file that does not exist, or a skill whose body an import also loads in every session.
 - **History.** Every change the tool made, with a diff and a revert.
 - **Search and the path simulator.** Search across what the agents load, and a question of the form "which files load if the agent opens this path".
 
@@ -67,10 +67,16 @@ You can add, edit and delete any file the agents read, except files the agents o
 1. **Preview.** Every edit is planned first. You see the exact diff and every warning before anything is written. The write applies only if the plan is still the one you previewed.
 2. **Conflict.** If the file changed on disk after you opened it, the save becomes a conflict that shows the current text. It never overwrites.
 3. **Trash.** A deleted file goes to the operating system trash. Where no trash exists, such as a Linux server without a desktop, a file or directory whose content the history holds completely is removed and the result lists it as not trashed. A directory the history cannot hold completely, such as one with a binary file, is not removed, and the operation fails. Set `CONTEXT_MANAGER_NO_OS_TRASH` before the program starts to make it treat the OS trash as not available. This switch never deletes anything that a revert cannot bring back.
-4. **History.** Before a change applies, the tool stores the old content. A change that was interrupted is finished or reported when the tool starts.
+4. **History.** Before a change applies, the tool stores the old content. A change that fails is undone, and its record says that it was cancelled. A change that was interrupted, for example by a crash, is never finished later without you. When the tool starts, it only looks at the files. If every file holds its new text, it marks the change complete. If every file holds its old text, it marks the change cancelled. Otherwise it lists the change as unfinished, and you revert it or apply the edit again.
 5. **Revert.** A history entry reverts as a new change with its own preview. A deleted file comes back from the history copy, so emptying the trash does not break it.
 
 The tool only writes through this path, and it never writes an approval for you: no trust hash, no trust file and no acknowledgement file.
+
+Three cases behave differently:
+
+- A path that is a symbolic link to a file that does not exist is refused.
+- A file with more than one hard link is written in place, so that every name keeps the change. That write is not atomic, and the preview warns about it.
+- Two instances of the tool can share one data directory. A lock keeps one instance from closing a change that the other is still writing.
 
 ## What switching a hook off does
 
@@ -89,11 +95,20 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 ## What is verified and what is not
 
 - **Codex CLI.** Checked against the installed CLI. The session-start text matches `codex debug prompt-input` byte for byte, and the hook list and hook hashes match `hooks/list`.
-- **Claude Code.** Checked against the installed binary, run against a local sink in seven scenarios. After each planned settings change, `claude doctor` accepts the file.
+- **Claude Code.** Checked against the installed binary, run against a local sink in ten scenarios. After each planned settings change, `claude doctor` accepts the file.
 - **Gemini CLI.** Never run. Its rules come from the source at tag v0.69.0, and the adapter's tests check them against fixtures only.
 - **The write flows.** Driven through the real UI in headless Chrome on a throwaway home directory, never on a real agent home.
+- **The write pipeline.** Besides its tests, a TLA+ model of apply, undo, recovery, revert and the lock is checked with TLC: every order of the steps of two instances, with one crash, one failed file operation and two outside edits. `formal/write-pipeline/run.sh` runs it in a few minutes. A pass covers those bounds and nothing beyond them. The model has two open findings, which are the first two limits below.
 - **Token counts.** Estimates made with the o200k tokenizer. Claude and Gemini use other tokenizers, so their real counts differ.
 - **Linux.** The headless build is only compile-checked with `scripts/check-linux.sh`. It was never run on Linux, and the trash behavior on a headless Linux host is untested.
+
+## Limits
+
+- **A failed in-place write.** When the write of a file with more than one hard link fails partway, for example on a full disk, the file is left half-written and the history says the change was cancelled. The text from before is in the history, but the tool does not offer it as a revert.
+- **The write window.** The tool checks a file's hash and then renames the new file over it. An edit by another program between those two steps is overwritten and is not kept in the history. The window is about one system call wide.
+- **A hook's test run.** A test run that exceeds its time limit is stopped by killing the hook's process group. A hook that starts a process in a new session, with `setsid`, can leave that process running.
+- **A new Claude Code memory** always gets `metadata.type: project`.
+- **Large or hostile repositories.** A scan reads at most 8 MiB of one file and 64 MiB in all. It lists at most 2,000 entries and 8 levels of one directory tree, and walks at most 20,000 entries of the project. Import expansion stops at 4 MiB for one file and 8 MiB for a scan. When a budget is spent, the scan goes on, and the Doctor says which budget it was.
 
 ## License
 
