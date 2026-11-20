@@ -31,25 +31,6 @@ fn which(bin: &str) -> Option<PathBuf> {
         })
 }
 
-/// Gives a fixture home the operator's macOS keychains. Claude Code stores credentials with
-/// `security`, which looks for keychains under `$HOME/Library/Keychains`; without them macOS
-/// shows a "keychain not found" dialog on every run.
-fn link_keychains(home: &Path) {
-    if !cfg!(target_os = "macos") || home.join("Library/Keychains").exists() {
-        return;
-    }
-    let Ok(real) = std::env::var("HOME") else {
-        return;
-    };
-    std::fs::create_dir_all(home.join("Library")).expect("create fixture Library");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        Path::new(&real).join("Library/Keychains"),
-        home.join("Library/Keychains"),
-    )
-    .expect("link fixture keychains");
-}
-
 struct Rig {
     fx: Fixture,
     parked: AbsPath,
@@ -91,7 +72,6 @@ impl Rig {
 
     /// What `claude doctor` prints under the fixture config directory.
     fn doctor(&self, claude: &Path) -> String {
-        link_keychains(self.fx.home().as_path());
         let out = Command::new(claude)
             .arg("doctor")
             .current_dir(self.fx.project().as_path())

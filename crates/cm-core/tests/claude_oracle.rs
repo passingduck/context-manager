@@ -488,25 +488,6 @@ fn which(bin: &str) -> Option<PathBuf> {
         })
 }
 
-/// Gives a fixture home the operator's macOS keychains. Claude Code stores credentials with
-/// `security`, which looks for keychains under `$HOME/Library/Keychains`; without them macOS
-/// shows a "keychain not found" dialog on every run.
-fn link_keychains(home: &Path) {
-    if !cfg!(target_os = "macos") || home.join("Library/Keychains").exists() {
-        return;
-    }
-    let Ok(real) = std::env::var("HOME") else {
-        return;
-    };
-    std::fs::create_dir_all(home.join("Library")).expect("create fixture Library");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(
-        Path::new(&real).join("Library/Keychains"),
-        home.join("Library/Keychains"),
-    )
-    .expect("link fixture keychains");
-}
-
 struct Run {
     reminder: String,
     requests: Vec<Captured>,
@@ -515,7 +496,6 @@ struct Run {
 
 /// Runs `claude -p` in `cwd` against a fresh sink. `home` and `cfg` come from the tree.
 fn run_claude(claude: &Path, t: &Tree, cwd: &Path) -> Run {
-    link_keychains(&t.home());
     let sink = Listener::start(true);
     let tripwire = Listener::start(false);
     let status = Command::new("perl")
