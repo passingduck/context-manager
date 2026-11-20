@@ -127,11 +127,7 @@ impl Case {
     fn rendered(&self, cwd: &AbsPath) -> Vec<RenderedBlock> {
         let env = self.env(cwd);
         let fs = ProbeFs::new();
-        let cx = ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        };
+        let cx = ScanCx::new(&env, &fs);
         let view = Codex.scan(&cx).view;
         Codex.render(&cx, &view)
     }
@@ -226,11 +222,7 @@ fn oracle_an_empty_project_override_shadows_agents_md() {
     // The scan says why: the override takes the directory.
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let scan = Codex.scan(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    });
+    let scan = Codex.scan(&ScanCx::new(&env, &fs));
     let shadowed = scan
         .view
         .loads
@@ -288,11 +280,7 @@ fn oracle_an_untrusted_project_skips_project_files_and_unknown_trust_loads_them(
     assert!(text.contains("GLOBAL") && !text.contains("ROOT"));
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let scan = Codex.scan(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    });
+    let scan = Codex.scan(&ScanCx::new(&env, &fs));
     assert_eq!(scan.view.trust.level, TrustLevel::Untrusted);
     assert!(scan.view.trust.recorded_in.is_some());
 }
@@ -314,11 +302,7 @@ fn oracle_the_byte_budget_cuts_the_crossing_file_and_drops_the_rest() {
 
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let scan = Codex.scan(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    });
+    let scan = Codex.scan(&ScanCx::new(&env, &fs));
     let status = |suffix: &str| {
         scan.view
             .loads
@@ -538,13 +522,7 @@ fn oracle_skill_catalog_lines_across_three_roots() {
     // Two loads per skill (design section 3).
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let view = Codex
-        .scan(&ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        })
-        .view;
+    let view = Codex.scan(&ScanCx::new(&env, &fs)).view;
     let root = view
         .extensions
         .iter()
@@ -686,24 +664,20 @@ fn oracle_rows(list: &[Value]) -> BTreeMap<String, Row> {
 fn our_rows(case: &Case, cwd: &AbsPath) -> BTreeMap<String, Row> {
     let env = case.env(cwd);
     let fs = ProbeFs::new();
-    inspect_hooks(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    })
-    .into_iter()
-    .map(|h| {
-        (
-            h.key,
-            Row {
-                enabled: h.enabled,
-                trust: trust_word(h.trust).to_owned(),
-                hash: h.current_hash,
-                source: h.source_path.to_string(),
-            },
-        )
-    })
-    .collect()
+    inspect_hooks(&ScanCx::new(&env, &fs))
+        .into_iter()
+        .map(|h| {
+            (
+                h.key,
+                Row {
+                    enabled: h.enabled,
+                    trust: trust_word(h.trust).to_owned(),
+                    hash: h.current_hash,
+                    source: h.source_path.to_string(),
+                },
+            )
+        })
+        .collect()
 }
 
 fn hooks_case() -> (Case, AbsPath, AbsPath) {
@@ -816,13 +790,7 @@ fn oracle_hooks_with_state_trusted_modified_and_disabled() {
     // The scan's hook list agrees with the inspection.
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let view = Codex
-        .scan(&ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        })
-        .view;
+    let view = Codex.scan(&ScanCx::new(&env, &fs)).view;
     let active = view
         .hooks
         .iter()
@@ -869,13 +837,7 @@ fn oracle_project_hooks_of_an_unknown_project_are_not_listed() {
     assert!(our_rows(&case, &cwd).is_empty());
     let env = case.env(&cwd);
     let fs = ProbeFs::new();
-    let view = Codex
-        .scan(&ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        })
-        .view;
+    let view = Codex.scan(&ScanCx::new(&env, &fs)).view;
     assert_eq!(view.hooks.len(), 1);
     assert!(matches!(
         view.hooks[0].state,
@@ -971,11 +933,7 @@ fn hook_by_command(case: &Case, cwd: &AbsPath, command: &str) -> Hook {
     let env = case.env(cwd);
     let fs = ProbeFs::new();
     Codex
-        .scan(&ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        })
+        .scan(&ScanCx::new(&env, &fs))
         .view
         .hooks
         .into_iter()

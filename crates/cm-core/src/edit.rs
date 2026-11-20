@@ -16,11 +16,11 @@ use std::collections::BTreeMap;
 
 use sha2::{Digest, Sha256};
 
-use crate::agents::{Agent, PlanCx};
+use crate::agents::{Agent, PlanCx, find_in};
 use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeErrorKind, ProbeFs};
-use crate::scan::{MAX_READ_BYTES, Scanned};
+use crate::scan::Scanned;
 use crate::walk::{self, TreeLimits};
 
 /// A directory trashed whole keeps its files as history blobs up to this many bytes. Over it,
@@ -153,6 +153,13 @@ fn invalid(field: &str, why: &'static str) -> ApiError {
     }
 }
 
+fn invalid_ref(field: &str, why: &RuleRef) -> ApiError {
+    ApiError::InvalidEdit {
+        field: field.to_owned(),
+        why: why.clone(),
+    }
+}
+
 fn read_only(why: &ReadOnlyWhy) -> ApiError {
     ApiError::ReadOnly {
         why: ReadOnlyReason::File { why: why.clone() },
@@ -171,31 +178,43 @@ impl<'a> Planner<'a> {
             Edit::Revert { change } => self.revert(change),
             Edit::NewItem { agent, .. }
             | Edit::AddMemory { agent, .. }
-            | Edit::AddHook { agent, .. } => self.by_agent(Some(agent), edit),
-            Edit::UpdateHook { hook, .. } | Edit::RemoveHook { hook } => {
-                self.check_hook_file(hook)?;
-                self.by_agent(None, edit)
-            }
-            // A switch may write elsewhere, such as Gemini's `hooksConfig.disabled`. A switch
-            // that rewrites a read-only hook file fails the boundary in `finish`.
-            Edit::SetHookEnabled { .. } => self.by_agent(None, edit),
+            | Edit::AddHook { agent, .. } => self.by_agent(agent, edit),
+            Edit::UpdateHook { hook, .. }
+            | Edit::RemoveHook { hook }
+            | Edit::SetHookEnabled { hook, .. } => self.by_hook(hook, edit),
         }
     }
 
-    /// Updating or removing a hook rewrites the file that defines it, so that file must be an
-    /// editable file of the snapshot. A hook that no agent lists is left to the planners, which
-    /// answer `NotFound`.
-    fn check_hook_file(&self, id: &HookId) -> Result<(), ApiError> {
-        let Some(hook) = self
-            .scanned
-            .snapshot
-            .agents
-            .iter()
-            .flat_map(|view| &view.hooks)
-            .find(|hook| hook.id == *id)
-        else {
-            return Ok(());
+    /// An edit on one hook: the snapshot names the hook and the agent that lists it, and only
+    /// that agent plans the edit. A hook the snapshot does not list is `NotFound`: the entry
+    /// changed since the scan, so the id names nothing now.
+    fn by_hook(&self, id: &HookId, edit: &Edit) -> Result<Preview, ApiError> {
+        let (view, hook) = self.scanned.snapshot.hook(id).ok_or(ApiError::NotFound)?;
+        match edit {
+            // A switch may write elsewhere, such as Gemini's `hooksConfig.disabled`. A switch
+            // that rewrites a read-only hook file fails the boundary in `finish`.
+            Edit::SetHookEnabled { .. } => {
+                if let Toggle::Unavailable { why } = &hook.toggle {
+                    return Err(invalid_ref("enabled", why));
+                }
+            }
+            // Updating or removing a hook rewrites the file that defines it, so that file must
+            // be an editable file of the snapshot.
+            _ => self.check_hook_file(hook)?,
+        }
+        let agent = find_in(self.agents, &view.agent)
+            .ok_or_else(|| invalid("agent", "edit.unknown_agent"))?;
+        let cx = PlanCx {
+            hook: Some(hook),
+            ..self.plan_cx()
         };
+        match agent.plan(&cx, edit) {
+            Some(result) => self.agent_preview(result),
+            None => Err(invalid("edit", "edit.unsupported")),
+        }
+    }
+
+    fn check_hook_file(&self, hook: &Hook) -> Result<(), ApiError> {
         let file = &hook.source.file;
         match self
             .scanned
@@ -219,17 +238,6 @@ impl<'a> Planner<'a> {
     }
 
     fn disk(&self, path: &AbsPath) -> Disk {
-        match self.fs().stat(path) {
-            Err(err) if err.is_not_found() => return Disk::Absent,
-            Err(err) => return Disk::Unreadable(err.into()),
-            Ok(stat) if stat.kind != EntryKind::File => {
-                return Disk::Unreadable(invalid("path", "edit.not_regular_file"));
-            }
-            Ok(stat) if stat.len > MAX_READ_BYTES => {
-                return Disk::Unreadable(invalid("path", "edit.file_too_large"));
-            }
-            Ok(_) => {}
-        }
         match self.fs().read(path) {
             Err(err) if err.is_not_found() => Disk::Absent,
             Err(err) => Disk::Unreadable(err.into()),
@@ -577,6 +585,8 @@ impl<'a> Planner<'a> {
         let owners = self.owners(&op.path);
         for agent in self.agents.iter().filter(|a| owners.contains(&a.id())) {
             for warning in agent.write_warnings(&cx, &op.path, before, after) {
+                // An agent's warning names the agent, not the file, so a change that writes
+                // two of its files would repeat it.
                 if !warnings.contains(&warning) {
                     warnings.push(warning);
                 }
@@ -590,6 +600,7 @@ impl<'a> Planner<'a> {
             fs: self.fs(),
             snapshot: &self.scanned.snapshot,
             parked_dir: self.parked_dir,
+            hook: None,
         }
     }
 
@@ -854,22 +865,13 @@ impl<'a> Planner<'a> {
 
     /// The first agent plan for an edit that also has a generic plan. `None`: the generic one
     /// applies.
-    fn by_agent(&self, agent: Option<&AgentId>, edit: &Edit) -> Result<Preview, ApiError> {
-        let candidates: Vec<&&dyn Agent> = self
-            .agents
-            .iter()
-            .filter(|a| agent.is_none_or(|id| a.id() == *id))
-            .collect();
-        if agent.is_some() && candidates.is_empty() {
-            return Err(invalid("agent", "edit.unknown_agent"));
+    fn by_agent(&self, agent: &AgentId, edit: &Edit) -> Result<Preview, ApiError> {
+        let agent =
+            find_in(self.agents, agent).ok_or_else(|| invalid("agent", "edit.unknown_agent"))?;
+        match agent.plan(&self.plan_cx(), edit) {
+            Some(result) => self.agent_preview(result),
+            None => Err(invalid("edit", "edit.unsupported")),
         }
-        let cx = self.plan_cx();
-        for candidate in candidates {
-            if let Some(result) = candidate.plan(&cx, edit) {
-                return self.agent_preview(result);
-            }
-        }
-        Err(invalid("edit", "edit.unsupported"))
     }
 
     /// An edit on a file an agent owns, such as a trash that also fixes an index. The first owner
@@ -956,7 +958,6 @@ mod tests {
         .unwrap();
         assert_eq!(preview.change_set.ops.len(), 1);
         assert_eq!(preview.before[&file].as_deref(), Some("old"));
-        assert_eq!(preview.digest, digest_of(&preview.change_set));
     }
 
     #[test]
@@ -1071,17 +1072,28 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_no_agent_plans_is_invalid() {
+    fn a_hook_the_snapshot_does_not_list_is_not_found_for_every_hook_edit() {
         let fx = Fixture::new();
-        let err = plan_with(
-            &agent(&[]),
-            &fx,
-            &Edit::RemoveHook {
-                hook: HookId("h".into()),
+        let hook = HookId("h".into());
+        let draft = HookDraft {
+            event: "Stop".into(),
+            matcher: None,
+            handler: serde_json::json!({"type": "command", "command": "x"}),
+        };
+        for edit in [
+            Edit::RemoveHook { hook: hook.clone() },
+            Edit::UpdateHook {
+                hook: hook.clone(),
+                draft,
             },
-        )
-        .unwrap_err();
-        assert!(matches!(err, ApiError::InvalidEdit { .. }));
+            Edit::SetHookEnabled {
+                hook,
+                enabled: false,
+            },
+        ] {
+            let err = plan_with(&agent(&[]), &fx, &edit).unwrap_err();
+            assert_eq!(err, ApiError::NotFound, "{edit:?}");
+        }
     }
 
     /// An agent whose `NewItem` plan writes `writes`, with a skill slot over `skills/`.

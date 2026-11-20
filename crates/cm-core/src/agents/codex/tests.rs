@@ -35,11 +35,7 @@ impl Home {
     fn scan(&self) -> AgentScan {
         let env = self.env();
         let fs = ProbeFs::new();
-        Codex.scan(&ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        })
+        Codex.scan(&ScanCx::new(&env, &fs))
     }
 
     fn trust_project(&self) {
@@ -332,11 +328,7 @@ fn known_projects_come_from_the_projects_table() {
     );
     let env = home.env();
     let fs = ProbeFs::new();
-    let projects = Codex.known_projects(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    });
+    let projects = Codex.known_projects(&ScanCx::new(&env, &fs));
     let names: Vec<_> = projects.iter().map(|p| p.as_str().to_owned()).collect();
     assert_eq!(names, ["/work/a", "/work/b"]);
 }
@@ -436,11 +428,7 @@ fn sample_input_carries_the_fields_each_event_requires() {
     let home = Home::new();
     let env = home.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     for event in hooks::EVENTS {
         let input = Codex.sample_input(event, &cx);
         assert_eq!(input["hook_event_name"], event);
@@ -461,11 +449,7 @@ fn a_command_hook_runs_through_the_login_shell_in_the_session_directory() {
     let scan = home.scan();
     let env = home.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let command = scan
         .view
         .hooks

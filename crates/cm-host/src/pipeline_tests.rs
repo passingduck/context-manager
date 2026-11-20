@@ -1371,7 +1371,7 @@ async fn a_read_only_host_refuses_apply_and_still_plans() {
 }
 
 #[tokio::test]
-async fn an_agent_edit_nobody_plans_is_invalid_through_the_host() {
+async fn a_hook_edit_for_a_hook_no_agent_lists_is_not_found_through_the_host() {
     let fx = Fixture::new();
     let host = host(&fx, TestAgent::default());
     let err = plan(
@@ -1384,5 +1384,5 @@ async fn an_agent_edit_nobody_plans_is_invalid_through_the_host() {
     )
     .await
     .unwrap_err();
-    assert!(matches!(err, ApiError::InvalidEdit { .. }));
+    assert_eq!(err, ApiError::NotFound);
 }

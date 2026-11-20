@@ -275,7 +275,11 @@ fn toml_add_and_remove_round_trip_and_keep_comments_and_state() {
         draft: draft("PreToolUse", Some("Write"), "echo new"),
     });
     assert!(preview.warnings.contains(&Warning::HookTrustReset));
-    assert!(preview.warnings.contains(&also_writes()));
+    assert!(
+        preview
+            .warnings
+            .contains(&Warning::AgentAlsoWrites { agent: me() })
+    );
     let after = home.state();
     let (gone, added) = changed(TOML_FILE, &after);
     assert!(gone.is_empty(), "an add removes no byte: {gone:?}");
@@ -440,15 +444,11 @@ fn a_switch_never_touches_an_existing_trusted_hash() {
     let hook = home.hook("echo one");
     let env = home.env();
     let fs = crate::probe_fs::ProbeFs::new();
-    let key = crate::agents::codex::inspect_hooks(&ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    })
-    .into_iter()
-    .find(|i| i.key.ends_with("pre_tool_use:0:0"))
-    .unwrap()
-    .key;
+    let key = crate::agents::codex::inspect_hooks(&ScanCx::new(&env, &fs))
+        .into_iter()
+        .find(|i| i.key.ends_with("pre_tool_use:0:0"))
+        .unwrap()
+        .key;
     let start = format!("[hooks.state.\"{key}\"]\ntrusted_hash = \"sha256:abc\"\n");
     home.write("config.toml", &start);
     home.run(&Edit::SetHookEnabled {
@@ -477,7 +477,46 @@ fn a_managed_or_unsupported_hook_cannot_be_switched() {
             enabled: false,
         })
         .unwrap_err();
-    assert!(matches!(err, ApiError::InvalidEdit { .. }), "{err:?}");
+    assert_eq!(
+        err,
+        ApiError::InvalidEdit {
+            field: "enabled".into(),
+            why: RuleRef::new("codex.hooks.toggle_unsupported")
+        }
+    );
+}
+
+#[test]
+fn switching_a_plugin_hook_writes_the_user_config_and_no_other_file() {
+    let home = Home::new();
+    home.write(
+        "config.toml",
+        "[features]\nhooks = true\n\n[plugins.\"demo@mkt\"]\nenabled = true\n",
+    );
+    let root = "plugins/cache/mkt/demo/1.0.0";
+    home.write(
+        &format!("{root}/.codex-plugin/plugin.json"),
+        r#"{"name":"demo","hooks":"./hooks/hooks.json"}"#,
+    );
+    home.write(
+        &format!("{root}/hooks/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plug.sh"}]}]}}"#,
+    );
+    let hook = home.hook("plug.sh");
+    assert_eq!(
+        hook.source.scope,
+        Scope::Plugin {
+            id: "demo@mkt".into()
+        }
+    );
+    let preview = home
+        .plan(&Edit::SetHookEnabled {
+            hook: hook.id,
+            enabled: false,
+        })
+        .unwrap();
+    let written: Vec<_> = preview.change_set.ops.iter().map(|op| &op.path).collect();
+    assert_eq!(written, [&home.codex("config.toml")]);
 }
 
 // --- stale ids and bad drafts -------------------------------------------------------------

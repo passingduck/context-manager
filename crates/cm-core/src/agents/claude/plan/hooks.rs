@@ -23,30 +23,6 @@ fn checked(draft: &HookDraft) -> Result<Option<String>, ApiError> {
     Ok(draft.matcher.clone().filter(|m| !m.is_empty()))
 }
 
-enum Found<'a> {
-    Mine(&'a Hook),
-    /// Another agent's hook: this adapter does not plan it.
-    Foreign,
-    Missing,
-}
-
-fn find<'a>(cx: &'a PlanCx, id: &HookId) -> Found<'a> {
-    let mut foreign = false;
-    for view in &cx.snapshot.agents {
-        if let Some(hook) = view.hooks.iter().find(|h| h.id == *id) {
-            if view.agent == super::claude() {
-                return Found::Mine(hook);
-            }
-            foreign = true;
-        }
-    }
-    if foreign {
-        Found::Foreign
-    } else {
-        Found::Missing
-    }
-}
-
 fn claude_view<'a>(cx: &'a PlanCx) -> Option<&'a AgentView> {
     cx.snapshot
         .agents
@@ -74,11 +50,6 @@ fn settings_warnings(file: &AbsPath) -> Vec<Warning> {
         out.push(takes_effect("claude.takes_effect.settings_live"));
     } else {
         out.push(takes_effect("claude.takes_effect.reload_plugins"));
-    }
-    if name == "settings.local.json" {
-        out.push(Warning::AgentAlsoWrites {
-            agent: super::claude(),
-        });
     }
     out
 }
@@ -131,20 +102,6 @@ pub(super) fn add(
 pub(super) fn update(
     cx: &PlanCx,
     edit: &Edit,
-    id: &HookId,
-    draft: &HookDraft,
-) -> Option<Result<Preview, ApiError>> {
-    let hook = match find(cx, id) {
-        Found::Mine(hook) => hook,
-        Found::Foreign => return None,
-        Found::Missing => return Some(Err(ApiError::NotFound)),
-    };
-    Some(update_hook(cx, edit, hook, draft))
-}
-
-fn update_hook(
-    cx: &PlanCx,
-    edit: &Edit,
     hook: &Hook,
     draft: &HookDraft,
 ) -> Result<Preview, ApiError> {
@@ -186,16 +143,7 @@ fn update_hook(
     Ok(preview(edit, ops, settings_warnings(file)))
 }
 
-pub(super) fn remove(cx: &PlanCx, edit: &Edit, id: &HookId) -> Option<Result<Preview, ApiError>> {
-    let hook = match find(cx, id) {
-        Found::Mine(hook) => hook,
-        Found::Foreign => return None,
-        Found::Missing => return Some(Err(ApiError::NotFound)),
-    };
-    Some(remove_hook(cx, edit, hook))
-}
-
-fn remove_hook(cx: &PlanCx, edit: &Edit, hook: &Hook) -> Result<Preview, ApiError> {
+pub(super) fn remove(cx: &PlanCx, edit: &Edit, hook: &Hook) -> Result<Preview, ApiError> {
     let file = &hook.source.file;
     if let Locator::Parked { key } = &hook.source.at {
         let mut record = Record::read(cx, file)?;
@@ -325,24 +273,9 @@ fn event_len(text: &str, event: &str) -> usize {
 pub(super) fn set_enabled(
     cx: &PlanCx,
     edit: &Edit,
-    id: &HookId,
+    hook: &Hook,
     enabled: bool,
-) -> Option<Result<Preview, ApiError>> {
-    let hook = match find(cx, id) {
-        Found::Mine(hook) => hook,
-        Found::Foreign => return None,
-        Found::Missing => return Some(Err(ApiError::NotFound)),
-    };
-    Some(switch(cx, edit, hook, enabled))
-}
-
-fn switch(cx: &PlanCx, edit: &Edit, hook: &Hook, enabled: bool) -> Result<Preview, ApiError> {
-    if let Toggle::Unavailable { why } = &hook.toggle {
-        return Err(ApiError::InvalidEdit {
-            field: "enabled".to_owned(),
-            why: why.clone(),
-        });
-    }
+) -> Result<Preview, ApiError> {
     let parked = matches!(
         hook.state,
         HookState::Disabled {

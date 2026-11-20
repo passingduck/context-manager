@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 
 use super::{
     Agent, AgentScan, PlanCx, ScanCx, assemble, file_text, home_dir, presence, rules_from,
+    unbudgeted,
 };
 use crate::model::*;
 use out::{Out, me};
@@ -98,23 +99,6 @@ fn compute(cx: &ScanCx) -> Computed {
                 assemble(block.delivery, block.label, fidelity, block.pieces)
             })
             .unzip();
-    let by_label = {
-        let mut by: Vec<(BlockLabel, u32)> = Vec::new();
-        for block in &session {
-            match by.iter_mut().find(|(l, _)| *l == block.label) {
-                Some((_, n)) => *n += block.tokens,
-                None => by.push((block.label, block.tokens)),
-            }
-        }
-        by
-    };
-    let budget = Budget {
-        session_start: session.iter().map(|b| b.tokens).sum(),
-        by_label,
-        on_access_max: 0,
-        method: TokenMethod::O200kEstimate,
-    };
-
     // Subagents after skills, as the extension list reads.
     let view = AgentView {
         agent: me(),
@@ -124,7 +108,7 @@ fn compute(cx: &ScanCx) -> Computed {
         assumptions: std::mem::take(&mut out.assumptions),
         loads: std::mem::take(&mut out.loads),
         session,
-        budget,
+        budget: unbudgeted(),
         hooks: std::mem::take(&mut out.hooks),
         hook_files: std::mem::take(&mut out.hook_files),
         memory: std::mem::take(&mut out.memory),
@@ -243,6 +227,16 @@ impl Agent for Codex {
 
     fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>> {
         plan::plan(cx, edit)
+    }
+
+    fn write_warnings(
+        &self,
+        cx: &PlanCx,
+        path: &AbsPath,
+        _before: Option<&str>,
+        _after: Option<&str>,
+    ) -> Vec<Warning> {
+        plan::write_warnings(cx, path)
     }
 
     fn guard(

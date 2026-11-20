@@ -35,11 +35,7 @@ fn run_simulation(fx: &Fixture, env: &env::ScanEnv, target: &AbsPath) -> Vec<Sim
         cm_core::scan::scan_with(&agents, env)
     };
     let fs = scanned.fs();
-    let cx = ScanCx {
-        env,
-        fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(env, fs);
     let _ = fx;
     simulate(registry(), &cx, &scanned.snapshot, target)
 }
@@ -167,11 +163,7 @@ fn a_scan_builds_its_on_access_loads_from_the_same_rule_as_the_simulator() {
     let env = fx.env().with_var("GEMINI_CLI_TRUST_WORKSPACE", "true");
     let scanned = scan_full(&env);
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let dirs: Vec<AbsPath> = cm_core::walk::walk(&env.cwd, &fs).dirs().cloned().collect();
     for agent in registry() {
         let view = view(&scanned, agent.id().as_str());

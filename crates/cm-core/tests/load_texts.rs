@@ -28,11 +28,7 @@ impl Run {
     }
 
     fn cx(&self) -> ScanCx<'_> {
-        ScanCx {
-            env: &self.env,
-            fs: self.scanned.fs(),
-            parked_dir: None,
-        }
+        ScanCx::new(&self.env, self.scanned.fs())
     }
 
     fn view(&self, agent: &str) -> &AgentView {
