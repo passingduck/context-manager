@@ -1165,6 +1165,31 @@ mod tests {
         );
     }
 
+    /// A file in a subdirectory is no item: a change that creates `src/GEMINI.md` may write that
+    /// file and nothing else in `src/`.
+    #[test]
+    fn an_agent_plan_that_creates_a_subdirectory_file_may_not_write_beside_it() {
+        let fx = Fixture::new();
+        let src = fx.project_path("src");
+        let agent = TestAgent {
+            slot: Some(Place::InSubdir {
+                dir: fx.project(),
+                file: "GEMINI.md".into(),
+            }),
+            writes: vec![
+                (src.join("GEMINI.md"), "context".to_owned()),
+                (src.join("main.rs"), "fn main() {}".to_owned()),
+            ],
+            ..TestAgent::default()
+        };
+        assert_eq!(
+            plan_with(&agent, &fx, &new_item()).unwrap_err(),
+            ApiError::OutsideBoundary {
+                path: src.join("main.rs")
+            }
+        );
+    }
+
     /// Design section 4, step 4: a tree the plan could not capture completely is not revertible.
     #[test]
     fn a_skill_with_a_file_deeper_than_the_walk_is_not_revertible() {
