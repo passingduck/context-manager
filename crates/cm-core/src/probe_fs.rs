@@ -51,6 +51,9 @@ pub enum ProbeErrorKind {
     TooLarge {
         bytes: u64,
     },
+    /// `stat` met a symlink whose target does not exist. A reader finds nothing there, so
+    /// [`ProbeError::is_not_found`] holds. A writer must not create the target (design section 4).
+    DanglingLink,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,7 +64,10 @@ pub struct ProbeError {
 
 impl ProbeError {
     pub fn is_not_found(&self) -> bool {
-        self.kind == ProbeErrorKind::Io(io::ErrorKind::NotFound)
+        matches!(
+            self.kind,
+            ProbeErrorKind::Io(io::ErrorKind::NotFound) | ProbeErrorKind::DanglingLink
+        )
     }
 
     fn not_regular() -> ProbeError {
@@ -245,10 +251,17 @@ fn read_regular(path: &AbsPath) -> Cached<Vec<u8>> {
 }
 
 fn stat_path(path: &AbsPath) -> Cached<Stat> {
-    let meta = fs::metadata(path.as_path())?;
-    let is_symlink = fs::symlink_metadata(path.as_path())
-        .map(|m| m.is_symlink())
-        .unwrap_or(false);
+    let is_symlink = fs::symlink_metadata(path.as_path()).is_ok_and(|m| m.is_symlink());
+    let meta = match fs::metadata(path.as_path()) {
+        Ok(meta) => meta,
+        Err(err) if is_symlink && err.kind() == io::ErrorKind::NotFound => {
+            return Err(ProbeError {
+                kind: ProbeErrorKind::DanglingLink,
+                detail: err.to_string(),
+            });
+        }
+        Err(err) => return Err(err.into()),
+    };
     Ok(Stat {
         kind: kind_of(meta.file_type()),
         is_symlink,
@@ -357,5 +370,15 @@ mod tests {
         assert_eq!(names, ["a", "b", "link"]);
         assert_eq!(fs.real_path(&abs(&dir, "link")).unwrap(), abs(&dir, "a"));
         assert!(fs.stat(&abs(&dir, "link")).unwrap().is_symlink);
+    }
+
+    #[test]
+    fn a_symlink_to_nothing_is_not_found_and_says_it_is_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let link = abs(&dir, "CLAUDE.md");
+        std::os::unix::fs::symlink("missing/target.md", link.as_path()).unwrap();
+        let err = ProbeFs::new().stat(&link).unwrap_err();
+        assert_eq!(err.kind, ProbeErrorKind::DanglingLink);
+        assert!(err.is_not_found());
     }
 }

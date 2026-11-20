@@ -976,6 +976,156 @@ async fn a_symlinked_file_is_written_through_and_the_link_survives() {
     assert_eq!(read(&link), "new");
 }
 
+/// Design section 4: a path that is a symlink to nothing is an `InvalidEdit`. The tool does not
+/// create a file through a link, so nothing appears outside the project.
+#[tokio::test]
+async fn a_save_through_a_symlink_to_nothing_is_refused_and_creates_nothing() {
+    let fx = Fixture::new();
+    let link = fx.project_path("CLAUDE.md");
+    let outside = fx.root().join("outside");
+    fx.mkdir(&outside);
+    std::os::unix::fs::symlink("../outside/newdir/planted.md", link.as_path()).unwrap();
+    let host = host(&fx, claims(&[&link]));
+    let edit = Edit::Save {
+        path: link.clone(),
+        base: Base::Absent,
+        text: "operator text\n".into(),
+    };
+
+    let err = plan(&host, &fx, &edit).await.unwrap_err();
+    assert_eq!(
+        err,
+        ApiError::InvalidEdit {
+            field: "path".into(),
+            why: RuleRef::new("edit.dangling_symlink"),
+        }
+    );
+    assert_eq!(
+        apply(&host, &fx, &edit, "any digest").await.unwrap_err(),
+        err
+    );
+    assert!(
+        !outside.join("newdir").as_path().exists(),
+        "a save created a directory outside the project"
+    );
+    assert!(
+        std::fs::symlink_metadata(link.as_path())
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(history(&host).await.is_empty());
+}
+
+/// The link to nothing appears after the plan. The write refuses it as well, and the change is
+/// undone.
+#[tokio::test]
+async fn a_symlink_to_nothing_that_appears_during_an_apply_creates_nothing() {
+    let fx = Fixture::new();
+    let link = fx.project_path("CLAUDE.md");
+    let outside = fx.root().join("outside");
+    fx.mkdir(&outside);
+    let host = host(&fx, claims(&[&link]));
+    let edit = Edit::Save {
+        path: link.clone(),
+        base: Base::Absent,
+        text: "operator text\n".into(),
+    };
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+
+    let result = host
+        .ctx
+        .apply(&fx.project(), &edit, &preview.digest, &|step| {
+            if step == Step::Pending {
+                std::os::unix::fs::symlink("../outside/newdir/planted.md", link.as_path()).unwrap();
+            }
+            Ok(())
+        });
+    assert!(matches!(result, Err(ApiError::Io { .. })), "{result:?}");
+    assert!(
+        !outside.join("newdir").as_path().exists(),
+        "an apply created a directory outside the project"
+    );
+    assert_eq!(history(&host).await[0].state, ChangeState::Aborted);
+}
+
+/// Design section 4, `Warning::ThroughSymlink`: a directory above the path, below the project
+/// root, is a link. The preview names the place the write lands.
+#[tokio::test]
+async fn a_save_under_a_symlinked_directory_names_the_place_it_lands() {
+    let fx = Fixture::new();
+    let elsewhere = fx.root().join("elsewhere/commands");
+    fx.mkdir(&elsewhere);
+    let dir = fx.project_path(".claude/commands");
+    fx.symlink(&dir, &elsewhere);
+    let path = dir.join("deploy.md");
+    let host = host(
+        &fx,
+        TestAgent {
+            slot: Some(Place::NamedFile {
+                dir,
+                ext: "md".into(),
+            }),
+            ..TestAgent::default()
+        },
+    );
+    let edit = Edit::Save {
+        path: path.clone(),
+        base: Base::Absent,
+        text: "go".into(),
+    };
+
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::ThroughSymlink {
+            target: elsewhere.join("deploy.md")
+        }),
+        "the preview does not say where the write lands: {:?}",
+        preview.warnings
+    );
+    applied(apply(&host, &fx, &edit, &preview.digest).await.unwrap());
+    assert_eq!(read(&elsewhere.join("deploy.md")), "go");
+}
+
+/// A link at or above the project root is where the user keeps the project, as macOS `/tmp` is.
+/// A write below it does not go through a link, and the preview does not warn.
+#[tokio::test]
+async fn a_project_below_a_symlinked_directory_gets_no_symlink_warning() {
+    let fx = Fixture::new();
+    let linked = fx.root().join("linked");
+    fx.mkdir(&fx.root().join("real/project"));
+    fx.symlink(&linked, &fx.root().join("real"));
+    let project = linked.join("project");
+    let file = project.join("CLAUDE.md");
+    fx.write(&file, "old");
+    let host = Host::with_parts(
+        HostConfig {
+            shell: Shell::Serve,
+            read_only: false,
+            env: cm_core::env::ScanEnv::for_fixture(fx.home(), project.clone()),
+            watch_timeout: Duration::from_secs(1),
+            data_dir: fx.root().join("data"),
+        },
+        agents(claims(&[&file])),
+        Box::new(FakeTrash::default()),
+    );
+
+    let preview = host
+        .plan(PlanReq {
+            cwd: project,
+            edit: save(&file, "old", "new"),
+        })
+        .await
+        .unwrap();
+    assert!(
+        !preview
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Warning::ThroughSymlink { .. })),
+        "{:?}",
+        preview.warnings
+    );
+}
+
 #[tokio::test]
 async fn the_mode_bits_of_a_file_survive_a_write() {
     let fx = Fixture::new();

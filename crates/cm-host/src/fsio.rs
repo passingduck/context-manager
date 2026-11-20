@@ -68,15 +68,14 @@ pub fn write_data_file(target: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write(target, &tmp, bytes, DATA_FILE_MODE)
 }
 
-/// Where a write to `path` lands: the target of a symlink, else `path` itself. A dangling link
-/// resolves one level, so the write creates its target.
+/// Where a write to `path` lands: the target of a symlink, else `path` itself. A symlink to
+/// nothing resolves to itself: the tool does not create a file through a link (design section 4).
 pub fn write_target(path: &AbsPath) -> PathBuf {
     let plain = path.as_path();
     match fs::symlink_metadata(plain) {
-        Ok(meta) if meta.is_symlink() => fs::canonicalize(plain).unwrap_or_else(|_| {
-            let link = fs::read_link(plain).unwrap_or_default();
-            plain.parent().map_or(link.clone(), |dir| dir.join(&link))
-        }),
+        Ok(meta) if meta.is_symlink() => {
+            fs::canonicalize(plain).unwrap_or_else(|_| plain.to_path_buf())
+        }
         _ => plain.to_path_buf(),
     }
 }

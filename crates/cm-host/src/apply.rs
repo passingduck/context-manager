@@ -397,6 +397,10 @@ impl Effects<'_> {
     /// link survives. The mode bits of an existing file are kept.
     pub fn write(&self, path: &AbsPath, bytes: &[u8], tag: &str) -> std::io::Result<()> {
         let target = write_target(path);
+        // A symlink to nothing that appeared after the plan. The plan refuses one already there.
+        if target.is_symlink() {
+            return Err(std::io::ErrorKind::NotFound.into());
+        }
         let own = path.starts_with(self.data_dir);
         if let Some(dir) = target.parent() {
             if own {

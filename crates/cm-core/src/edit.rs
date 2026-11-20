@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 use crate::agents::{Agent, PlanCx};
 use crate::env::ScanEnv;
 use crate::model::*;
-use crate::probe_fs::{EntryKind, ProbeFs};
+use crate::probe_fs::{EntryKind, ProbeErrorKind, ProbeFs};
 use crate::scan::{MAX_READ_BYTES, Scanned};
 
 /// A directory trashed whole keeps its files as history blobs up to this many bytes. Over it,
@@ -507,13 +507,11 @@ impl<'a> Planner<'a> {
                 Action::TrashDir => self.check_dir(&op.path, mode)?,
                 _ => self.check_path(&op.path, mode, &ops)?,
             }
+            let landing = self.landing(&op.path)?;
             self.verify(op, &mut before)?;
             self.guard_op(op, &before)?;
             self.add_write_warnings(op, &before, &mut warnings);
-            let through = self.fs().stat(&op.path).ok().filter(|s| s.is_symlink);
-            if through.is_some()
-                && let Ok(target) = self.fs().real_path(&op.path)
-            {
+            if let Some(target) = landing {
                 warnings.push(Warning::ThroughSymlink { target });
             }
             let users = self.users(&op.path);
@@ -522,6 +520,57 @@ impl<'a> Planner<'a> {
             }
         }
         Ok(self.preview(summary, ops, before, warnings, conflicts))
+    }
+
+    /// The root a path lies below: the deepest of the home directory, the project root and `cwd`
+    /// that holds it. A symlink at or above a root, such as macOS `/tmp` or a home directory that
+    /// is a link, is where the user keeps the tree, not a link a write goes through.
+    fn root_of(&self, path: &AbsPath) -> Option<AbsPath> {
+        [
+            Some(&self.env.home),
+            self.scanned.snapshot.git_root.as_ref(),
+            Some(&self.env.cwd),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|root| path.starts_with(root) && path != *root)
+        .max_by_key(|root| root.as_str().len())
+        .cloned()
+    }
+
+    /// Where an operation on `path` lands when the path's own entry, or a directory above it
+    /// below its root, is a symlink (design section 4, `Warning::ThroughSymlink`). `None` when no
+    /// link is on the way. A symlink to nothing on the way is an `InvalidEdit`: the tool does not
+    /// create a file through a link. A path below no root is checked at its own entry only.
+    fn landing(&self, path: &AbsPath) -> Result<Option<AbsPath>, ApiError> {
+        let mut on_the_way = vec![path.clone()];
+        if let Some(root) = self.root_of(path) {
+            while let Some(dir) = on_the_way
+                .last()
+                .and_then(AbsPath::parent)
+                .filter(|dir| *dir != root)
+            {
+                on_the_way.push(dir);
+            }
+        }
+        let mut linked = false;
+        for entry in &on_the_way {
+            match self.fs().stat(entry) {
+                Ok(stat) => linked |= stat.is_symlink,
+                Err(err) if err.kind == ProbeErrorKind::DanglingLink => {
+                    return Err(invalid("path", "edit.dangling_symlink"));
+                }
+                Err(_) => {}
+            }
+        }
+        if !linked {
+            return Ok(None);
+        }
+        // The deepest entry that exists, resolved, with the rest of the path below it.
+        Ok(on_the_way.iter().find_map(|entry| {
+            let real = self.fs().real_path(entry).ok()?;
+            Some(real.join(path.as_str()[entry.as_str().len()..].trim_start_matches('/')))
+        }))
     }
 
     /// Each owner of the file adds its warnings for the write, once.
