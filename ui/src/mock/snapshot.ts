@@ -139,7 +139,7 @@ c.add(P("docs/missing-style.md"), "instructions", project, { kind: "import", hos
 c.add(H("shared/team-notes.md"), "instructions", user, { kind: "import", host: cProj, line: 22, depth: 1 }, { kind: "withHost" }, skipped({ kind: "needsApproval" }));
 c.add(P("CLAUDE.local.md"), "instructions", { kind: "local" }, discovery("claude.memory.local"), start, skipped({ kind: "empty" }));
 c.add(P(".claude/rules/always.md"), "rule", project, discovery("claude.rules.project"), start);
-c.add(P(".claude/rules/broken.md"), "rule", project, discovery("claude.rules.project"), start, skipped({ kind: "invalid", detail: "paths must be a list of patterns" }));
+c.add(P(".claude/rules/broken.md"), "rule", project, discovery("claude.rules.project"), start, skipped({ kind: "invalid", why: { kind: "frontmatter" } }));
 c.add(P(".claude/rules/typescript.md"), "rule", project, discovery("claude.rules.project"), { kind: "onAccess", rule: { kind: "glob", base: CWD, patterns: ["**/*.ts", "**/*.tsx"] } }, { kind: "loaded" }, true);
 const cApi = c.add(P("src/api/CLAUDE.md"), "instructions", project, discovery("claude.memory.project"), { kind: "onAccess", rule: { kind: "underDir", dir: P("src/api") } });
 c.add(P("AGENTS.md"), "instructions", project, { kind: "import", host: cApi, line: 2, depth: 1 }, { kind: "withHost" }, skipped({ kind: "alreadyLoaded", first: cAgents }));
@@ -286,9 +286,6 @@ const claudeRules: RuleSpec[] = [
   rule("claude.hooks.plugin_toggle", "A plugin owns this hook. Turn the plugin off to stop the hook.", "이 훅은 플러그인이 소유합니다. 훅을 멈추려면 플러그인을 꺼야 합니다."),
   rule("claude.hooks.managed", "A managed policy owns this hook, so nobody can switch it here.", "관리 정책이 이 훅을 소유하므로 여기서는 아무도 켜고 끌 수 없습니다."),
   rule("claude.home.config", "The configuration directory of the agent.", "에이전트의 설정 디렉터리입니다."),
-  rule("host.read_only", "The host runs with --read-only, so it refuses every change.", "호스트가 --read-only로 실행 중이므로 모든 변경을 거부합니다."),
-  rule("host.read_only_file", "The agent or a plugin owns this file, so this tool does not change it.", "에이전트나 플러그인이 이 파일을 소유하므로 이 도구는 파일을 바꾸지 않습니다."),
-  rule("host.invalid_hook", "The hook entry has the wrong shape for this agent's settings file.", "이 훅 항목은 에이전트 설정 파일에 맞는 모양이 아닙니다."),
   rule("claude.effect.next_session", "A new session reads this file again. A running session keeps the old text until you run /memory reload.", "새 세션을 시작하면 이 파일을 다시 읽습니다. 이미 실행 중인 세션은 /memory reload를 실행할 때까지 이전 내용을 씁니다."),
   rule("claude.rules.glob_fires", "A path rule fires because this path matches its pattern.", "이 경로가 패턴에 맞기 때문에 경로 규칙이 발동합니다."),
 ];
@@ -424,5 +421,9 @@ export const snapshot: Snapshot = {
   diagnostics,
   walk: { dirs: 412, files: 3_180, capped: false },
 };
+
+export const coreRules: RuleSpec[] = [
+  rule("edit.unsupported", "No agent can plan this edit for this target.", "어떤 에이전트도 이 대상에 대한 이 수정을 계획할 수 없습니다."),
+];
 
 export const allRules: RuleSpec[] = agentInfos.flatMap((info) => info.rules);

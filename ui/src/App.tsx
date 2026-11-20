@@ -65,7 +65,7 @@ export function App() {
   const value = useMemo(
     () =>
       session.data && agents.data && scan.data && cwd
-        ? { cwd, home: session.data.home, snapshot: scan.data, infos: agents.data, readOnly: session.data.readOnly }
+        ? { cwd, home: session.data.home, snapshot: scan.data, infos: agents.data, coreRules: session.data.coreRules, readOnly: session.data.readOnly }
         : null,
     [session.data, agents.data, scan.data, cwd],
   );

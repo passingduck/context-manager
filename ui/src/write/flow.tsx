@@ -506,7 +506,8 @@ export function Failure({ error }: { error: unknown }) {
   const { t, d } = useI18n();
   const project = useProject();
   if (!isApiError(error)) return <p role="alert" className="rounded border border-bad bg-bad-bg p-3 text-bad">{String(error)}</p>;
-  const why = error.kind === "readOnly" || error.kind === "invalidEdit" || error.kind === "forbidden" ? project.rule(error.why) : null;
+  const rule = error.kind === "readOnly" ? (error.why.kind === "rule" ? error.why.rule : null) : error.kind === "invalidEdit" || error.kind === "forbidden" ? error.why : null;
+  const why = rule === null ? null : project.rule(rule);
   return (
     <section role="alert" className="rounded border border-bad bg-bad-bg p-3">
       <h3 className="font-semibold text-bad">{t.write.failedTitle}</h3>

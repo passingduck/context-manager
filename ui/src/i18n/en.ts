@@ -24,7 +24,11 @@ import type { MemoryRole } from "../gen/MemoryRole";
 import type { MemoryWrite } from "../gen/MemoryWrite";
 import type { Presence } from "../gen/Presence";
 import type { Problem } from "../gen/Problem";
+import type { HookRunFailure } from "../gen/HookRunFailure";
+import type { Invalid } from "../gen/Invalid";
+import type { ReadOnlyReason } from "../gen/ReadOnlyReason";
 import type { ReadOnlyWhy } from "../gen/ReadOnlyWhy";
+import type { RefusedLocation } from "../gen/RefusedLocation";
 import type { Registration } from "../gen/Registration";
 import type { Scope } from "../gen/Scope";
 import type { Severity } from "../gen/Severity";
@@ -106,6 +110,43 @@ const warning: WarnMsgs = {
   parkedOnThisMachine: () => "The parked hook is kept in this tool's data directory on this machine only. It does not follow the project to another machine.",
   notRevertible: () => "This directory is too big to keep a copy. The OS trash holds the only copy, and Revert cannot bring it back.",
   hookKeyShared: (v) => `${v.others} other hook(s) use the same name or command, and the switch turns them on or off too.`,
+};
+
+const readOnlyWhy: Msgs<ReadOnlyWhy> = {
+  managed: () => "A managed policy owns this file.",
+  pluginCache: (v) => `The plugin ${v.plugin} owns this file.`,
+  generated: () => "The agent generates this file.",
+  agentState: () => "The agent keeps its own state in this file.",
+  synced: () => "Another tool syncs this file.",
+  notUtf8: () => "This file is not valid text.",
+};
+
+const refusedLocation: Msgs<RefusedLocation> = {
+  connectorDownloads: () => "The agent never reads files in a connector download directory.",
+  scratchpad: () => "The agent never reads files in a session scratchpad.",
+  deviceOrProcess: () => "The agent never reads device files or process files.",
+};
+
+const invalid: Msgs<Invalid> = {
+  unreadable: (v) => (v.os ? `The file cannot be read. The operating system said: ${v.os}.` : "The file cannot be read."),
+  notRegular: () => "The path is not a regular file.",
+  notText: () => "The file is not valid text.",
+  frontmatter: () => "The front matter at the top of the file does not parse.",
+  toml: () => "The TOML in the file does not parse.",
+  location: (v, d) => say(refusedLocation, v.which, d),
+  outsideRoot: () => "The file is outside the project root, so the agent does not import it.",
+};
+
+const readOnlyReason: Msgs<ReadOnlyReason> = {
+  host: () => "The host is read-only here.",
+  file: (v, d) => say(readOnlyWhy, v.why, d),
+  rule: () => "The agent keeps this target read-only.",
+};
+
+const hookRun: Msgs<HookRunFailure> = {
+  emptyInvocation: () => "The hook has no command to run.",
+  programNotFound: (v) => `The program ${v.program} was not found.`,
+  startFailed: (v) => `The program ${v.program} did not start. The operating system said: ${v.os}.`,
 };
 
 export type BundledKind = Extract<DocKind, "listing" | "skillBody" | "commandBody" | "subagentPrompt" | "reference">;
@@ -540,7 +581,7 @@ export const en = {
     excluded: (v) => `The pattern ${v.pattern} excludes this file.`,
     featureOff: (v) => `The feature ${v.name} is off.`,
     alreadyLoaded: () => "The agent already loaded this file through another path.",
-    invalid: (v) => `The file is not valid: ${v.detail}.`,
+    invalid: (v, d) => say(invalid, v.why, d),
     notRead: () => "Nothing loads this file automatically.",
   } satisfies Msgs<Skip>,
   skipShort: {
@@ -667,14 +708,7 @@ export const en = {
     readOnly: () => "The agent keeps this store read-only, so nothing can be added here.",
   } satisfies Msgs<MemoryWrite>,
   memoryRole: { index: "Index", topic: "Topic", summary: "Summary", note: "Note", generated: "Generated" } satisfies Record<MemoryRole, string>,
-  readOnlyWhy: {
-    managed: () => "A managed policy owns this file.",
-    pluginCache: (v) => `The plugin ${v.plugin} owns this file.`,
-    generated: () => "The agent generates this file.",
-    agentState: () => "The agent keeps its own state in this file.",
-    synced: () => "Another tool syncs this file.",
-    notUtf8: () => "This file is not valid text.",
-  } satisfies Msgs<ReadOnlyWhy>,
+  readOnlyWhy,
   docKind: {
     instructions: "Instructions",
     rule: "Rule",
@@ -725,9 +759,12 @@ export const en = {
     notFound: () => "The host could not find it.",
     conflict: (v, d) => `${d(v.path)} changed on disk.`,
     outsideBoundary: (v, d) => `${d(v.path)} is outside the project.`,
-    readOnly: () => "The host is read-only here.",
+    readOnly: (v, d) => say(readOnlyReason, v.why, d),
     invalidEdit: (v) => `The field ${v.field} is not valid.`,
     forbidden: () => "The host does not allow this.",
+    hookRun: (v, d) => say(hookRun, v.why, d),
+    badRequest: () => "The host could not read the request.",
+    historyCorrupt: () => "The change history is damaged.",
     io: (v) => v.detail,
     unauthorized: () => "The host rejected the access token. Open the address it printed again.",
   } satisfies Msgs<ApiError>,

@@ -8,7 +8,7 @@ import type { SearchHit } from "../gen/SearchHit";
 import type { Simulation } from "../gen/Simulation";
 import { agentOfHook, controls, history, initDisk, installControls, mockState, pendingIds, reject, waitForBump } from "./disk";
 import { apply, plan } from "./plan";
-import { agentInfos, CWD, files, HOME, snapshot, texts } from "./snapshot";
+import { agentInfos, coreRules, CWD, files, HOME, snapshot, texts } from "./snapshot";
 
 const globToRegExp = (glob: string) =>
   new RegExp(
@@ -118,7 +118,7 @@ export async function handle(request: Request): Promise<unknown> {
   start();
   switch (request.op) {
     case "session":
-      return { version: "0.1.0-mock", shell: "serve", readOnly: readOnlyHost(), launchCwd: CWD, home: HOME, os: "macos", pending: pendingIds() };
+      return { version: "0.1.0-mock", shell: "serve", readOnly: readOnlyHost(), launchCwd: CWD, home: HOME, os: "macos", pending: pendingIds(), coreRules };
     case "agents":
       return agentInfos;
     case "projects":
@@ -150,10 +150,10 @@ export async function handle(request: Request): Promise<unknown> {
       return found ? structuredClone(found) : reject({ kind: "notFound" });
     }
     case "plan":
-      if (readOnlyHost()) return reject({ kind: "readOnly", why: "host.read_only" });
+      if (readOnlyHost()) return reject({ kind: "readOnly", why: { kind: "host" } });
       return plan(request.args.edit).preview;
     case "apply":
-      if (readOnlyHost()) return reject({ kind: "readOnly", why: "host.read_only" });
+      if (readOnlyHost()) return reject({ kind: "readOnly", why: { kind: "host" } });
       return apply(request.args.edit, request.args.digest);
     case "hook_sample":
       return SAMPLES[request.args.event] ?? { hook_event_name: request.args.event };
