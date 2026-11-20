@@ -34,11 +34,9 @@ const NOT_RULES: &[&str] = &[
     "claude.json",
 ];
 
-/// Rules whose planner lives in a branch that has not merged yet. Delete an entry when its
-/// emitting code lands.
+/// Rules that no code names yet. Delete an entry when code that emits it lands.
 const NOT_USED_YET: &[&str] = &[
-    "edit.dangling_symlink",
-    // The catalog-position unit wrote this rule; no code names it yet.
+    // Explains where the catalogs sit in a request. A session block has no field for a rule.
     "claude.catalogs",
 ];
 
