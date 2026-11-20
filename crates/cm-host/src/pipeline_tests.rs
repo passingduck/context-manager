@@ -879,6 +879,71 @@ async fn without_an_os_trash_a_skill_the_history_cannot_hold_stays_on_disk() {
     assert_eq!(records[0].state, ChangeState::Aborted);
 }
 
+/// Trashes the skill `<project>/.claude/skills/<name>` on a host with no OS trash. The plan must
+/// warn `NotRevertible`, the apply must fail, and every path in `kept` must still be there.
+async fn trash_without_os_trash_keeps(fx: &Fixture, name: &str, kept: &[std::path::PathBuf]) {
+    let dir = fx.project_path(".claude/skills");
+    let entry = dir.join(&format!("{name}/SKILL.md"));
+    let host = host_with(fx, skill_agent(&entry, &dir), false, Box::new(NoTrash));
+    let edit = Edit::Trash {
+        path: entry.clone(),
+        base: Revision::of(b"skill"),
+    };
+    let preview = plan(&host, fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::NotRevertible),
+        "{name}: the plan holds the tree as complete: {:?}",
+        preview.warnings
+    );
+    let err = apply(&host, fx, &edit, &preview.digest).await.unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{name}: {err:?}");
+    for path in std::iter::once(entry.as_path().to_path_buf()).chain(kept.iter().cloned()) {
+        assert!(
+            std::fs::symlink_metadata(&path).is_ok(),
+            "{name}: {} is gone",
+            path.display()
+        );
+    }
+}
+
+/// Design section 4, step 4: a tree that holds a symlink is not captured completely. History
+/// cannot hold the link, and the files behind it are not inside the tree.
+#[tokio::test]
+async fn without_an_os_trash_a_skill_that_holds_a_symlink_stays_on_disk() {
+    let fx = Fixture::new();
+    let shared = fx.root().join("shared");
+    fx.write(&shared.join("run.sh"), "echo shared");
+    let skills = fx.project_path(".claude/skills");
+    for (name, link, target) in [
+        ("dir-link", "scripts", shared.clone()),
+        ("file-link", "run.sh", shared.join("run.sh")),
+    ] {
+        fx.write(&skills.join(&format!("{name}/SKILL.md")), "skill");
+        let link = skills.join(&format!("{name}/{link}"));
+        fx.symlink(&link, &target);
+        trash_without_os_trash_keeps(&fx, name, &[link.as_path().to_path_buf()]).await;
+        assert_eq!(read(&shared.join("run.sh")), "echo shared");
+    }
+}
+
+/// The lister has no entry for a name that is not UTF-8. The tree is then not captured
+/// completely, and stays on disk without an OS trash.
+#[tokio::test]
+async fn without_an_os_trash_a_skill_that_holds_a_name_that_is_not_utf8_stays_on_disk() {
+    use std::os::unix::ffi::OsStrExt;
+    let fx = Fixture::new();
+    let skill = fx.project_path(".claude/skills/odd");
+    fx.write(&skill.join("SKILL.md"), "skill");
+    let odd = skill
+        .as_path()
+        .join(std::ffi::OsStr::from_bytes(b"note-\xff.md"));
+    if let Err(err) = std::fs::write(&odd, "notes") {
+        eprintln!("skipped: this file system refuses a file name that is not UTF-8 ({err})");
+        return;
+    }
+    trash_without_os_trash_keeps(&fx, "odd", &[odd]).await;
+}
+
 #[tokio::test]
 async fn trashing_a_single_file_and_reverting_it() {
     let fx = Fixture::new();

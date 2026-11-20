@@ -801,7 +801,8 @@ variants! {
         NewImportToken { raw: String },
         /// A parked Claude hook exists only in this tool's data directory.
         ParkedOnThisMachine,
-        /// A directory over 16 MiB: the OS trash is the only copy.
+        /// A directory the plan could not capture completely (design section 4, step 4): the OS
+        /// trash is the only copy.
         NotRevertible,
         /// Gemini: the switch is a name or command that other hooks share, so it switches them too.
         HookKeyShared { others: u32 },

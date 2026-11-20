@@ -94,7 +94,7 @@ struct Tree {
     files: Vec<(AbsPath, Vec<u8>)>,
     hash: String,
     /// False when the walk skipped something: a level below its depth limit, entries over its
-    /// count limit, or an entry it could not read.
+    /// count limit, an entry it could not read, a symlink, or a name the lister cannot represent.
     complete: bool,
 }
 
@@ -290,17 +290,26 @@ impl<'a> Planner<'a> {
             *complete = false;
             return;
         }
-        let Ok(entries) = self.fs().list(dir) else {
+        let Ok(listing) = self.fs().listing(dir) else {
             *complete = false;
             return;
         };
-        for entry in entries.iter() {
+        // A name that is not UTF-8 has no entry, so the history holds no copy of its file.
+        if listing.not_utf8 > 0 {
+            *complete = false;
+        }
+        for entry in listing.entries.iter() {
             *seen += 1;
             if *seen > TREE_ENTRIES {
                 *complete = false;
                 return;
             }
             let path = dir.join(&entry.name);
+            // History cannot hold a link, and the files behind one are not inside the tree.
+            if self.fs().stat(&path).is_ok_and(|stat| stat.is_symlink) {
+                *complete = false;
+                continue;
+            }
             match entry.kind {
                 EntryKind::Dir => self.walk(&path, depth + 1, seen, out, complete),
                 EntryKind::File => match self.fs().read(&path) {

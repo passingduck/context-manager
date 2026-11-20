@@ -41,6 +41,15 @@ pub struct DirEntry {
     pub kind: EntryKind,
 }
 
+/// One directory as the lister read it. A name that is not UTF-8 has no entry, because
+/// [`DirEntry::name`] is a `String`. `not_utf8` counts those names, so a caller that must see
+/// every entry knows when it did not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub entries: Arc<Vec<DirEntry>>,
+    pub not_utf8: usize,
+}
+
 /// `read` refuses a larger file. A file is listed with its size and never read.
 pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 
@@ -108,7 +117,7 @@ type Cached<T> = Result<T, ProbeError>;
 #[derive(Default)]
 struct State {
     reads: HashMap<AbsPath, Cached<Arc<Vec<u8>>>>,
-    lists: HashMap<AbsPath, Cached<Arc<Vec<DirEntry>>>>,
+    lists: HashMap<AbsPath, Cached<Listing>>,
     stats: HashMap<AbsPath, Cached<Stat>>,
     real_paths: HashMap<AbsPath, Cached<AbsPath>>,
     probes: BTreeMap<AbsPath, bool>,
@@ -135,13 +144,19 @@ impl ProbeFs {
         result
     }
 
-    /// Entries sorted by name.
+    /// Entries sorted by name. A name that is not UTF-8 is left out: [`ProbeFs::listing`] counts
+    /// them.
     pub fn list(&self, path: &AbsPath) -> Cached<Arc<Vec<DirEntry>>> {
+        self.listing(path).map(|listing| listing.entries)
+    }
+
+    /// The entries of `list`, with the count of names it left out.
+    pub fn listing(&self, path: &AbsPath) -> Cached<Listing> {
         let mut state = self.state.lock().expect("probe state");
         if let Some(cached) = state.lists.get(path) {
             return cached.clone();
         }
-        let result = list_dir(path).map(Arc::new);
+        let result = list_dir(path);
         state.probes.insert(path.clone(), result.is_ok());
         state.lists.insert(path.clone(), result.clone());
         result
@@ -284,11 +299,13 @@ fn stat_path(path: &AbsPath) -> Cached<Stat> {
     })
 }
 
-fn list_dir(path: &AbsPath) -> Cached<Vec<DirEntry>> {
+fn list_dir(path: &AbsPath) -> Cached<Listing> {
     let mut entries = Vec::new();
+    let mut not_utf8 = 0;
     for entry in fs::read_dir(path.as_path())? {
         let entry = entry?;
         let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            not_utf8 += 1;
             continue;
         };
         // A symlink to a directory lists as a directory, as the agents see it.
@@ -299,7 +316,10 @@ fn list_dir(path: &AbsPath) -> Cached<Vec<DirEntry>> {
         entries.push(DirEntry { name, kind });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(entries)
+    Ok(Listing {
+        entries: Arc::new(entries),
+        not_utf8,
+    })
 }
 
 /// Hashes the length and modification time of each path, or that it is missing. The host calls
