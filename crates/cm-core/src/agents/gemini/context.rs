@@ -442,41 +442,6 @@ pub(super) fn jit_files(w: &World, dir: &AbsPath) -> Vec<(AbsPath, AbsPath)> {
         .collect()
 }
 
-/// The JIT files the scan can see: every directory the walk entered, for every workspace root.
-fn walked_jit_files(w: &World) -> (Vec<(AbsPath, AbsPath)>, bool) {
-    let os = w.cx.env.os;
-    let loaded = session_identities(w);
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut out: Vec<(AbsPath, AbsPath)> = Vec::new();
-    let mut capped = false;
-    for root in &w.roots {
-        let index = walk::walk(root, w.cx.fs);
-        capped |= index.capped;
-        for name in &w.names {
-            let (parents, base) = match name.rsplit_once('/') {
-                Some((parents, base)) => (parents.matches('/').count() + 1, base),
-                None => (0, name.as_str()),
-            };
-            for dir in index.dirs_containing(base) {
-                let mut at = dir.clone();
-                for _ in 0..parents {
-                    at = at.parent().unwrap_or_else(AbsPath::root);
-                }
-                let file = at.join(name);
-                if file != dir.join(base) {
-                    continue;
-                }
-                let key = fold(os, real(w.cx, &file).as_str());
-                if !loaded.contains(&key) && seen.insert(key) {
-                    out.push((file, at));
-                }
-            }
-        }
-    }
-    out.sort_by(|a, b| cmp_utf16(a.0.as_str(), b.0.as_str()));
-    (out, capped)
-}
-
 /// Builds every context-file load of the session and the JIT loads the walk found.
 pub(super) fn gather(b: &mut Builder) -> Gathered {
     let w = b.w;
@@ -561,7 +526,23 @@ pub(super) fn gather(b: &mut Builder) -> Gathered {
         );
         out.private.push(item);
     }
-    let (jit, capped) = walked_jit_files(w);
+    // The JIT files the scan can see: what `jit_files` finds for every directory the walk
+    // entered, for every workspace root. The scan and the simulator share that one rule.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut jit: Vec<(AbsPath, AbsPath)> = Vec::new();
+    let mut capped = false;
+    for root in &w.roots {
+        let index = walk::walk(root, w.cx.fs);
+        capped |= index.capped;
+        for dir in index.dirs() {
+            for (file, at) in jit_files(w, dir) {
+                if seen.insert(fold(w.cx.env.os, real(w.cx, &file).as_str())) {
+                    jit.push((file, at));
+                }
+            }
+        }
+    }
+    jit.sort_by(|a, b| cmp_utf16(a.0.as_str(), b.0.as_str()));
     if capped {
         b.diagnostics.push(Diagnostic {
             severity: Severity::Info,
@@ -578,18 +559,14 @@ pub(super) fn gather(b: &mut Builder) -> Gathered {
         let when = Activation::OnAccess {
             rule: AccessRule::UnderDir { dir },
         };
-        if w.trusted() {
-            let item = b.add_context_file(
-                &path,
-                scope,
-                DocKind::Instructions,
-                "gemini.context.jit",
-                when,
-            );
-            out.jit.push(item);
-        } else {
-            b.add_untrusted(&path, scope, when, "gemini.context.jit");
-        }
+        let item = b.add_context_file(
+            &path,
+            scope,
+            DocKind::Instructions,
+            "gemini.context.jit",
+            when,
+        );
+        out.jit.push(item);
     }
     out
 }

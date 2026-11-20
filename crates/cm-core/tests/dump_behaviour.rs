@@ -182,6 +182,10 @@ fn codex(t: &Tree) {
 fn gemini(t: &Tree) {
     let h = "home/.gemini";
     t.write(
+        &format!("{h}/trustedFolders.json"),
+        &json!({t.abs("project").as_str(): "TRUST_FOLDER"}).to_string(),
+    );
+    t.write(
         &format!("{h}/projects.json"),
         &json!({"projects": {t.abs("project").as_str(): "proj"}}).to_string(),
     );
@@ -369,10 +373,6 @@ fn dump_case(name: &str, build: &[fn(&Tree)], untrusted: bool) -> Value {
         t.write(
             "home/.gemini/trustedFolders.json",
             &json!({t.abs("project").as_str(): "DO_NOT_TRUST"}).to_string(),
-        );
-        t.write(
-            "home/.gemini/settings.json",
-            &json!({"security": {"folderTrust": {"enabled": true}}}).to_string(),
         );
     }
     let env = t.env();
