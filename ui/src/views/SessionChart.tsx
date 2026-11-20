@@ -74,6 +74,7 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
               {fmt.tokens(v)}
             </span>
           ))}
+          {mode === "cache" && <span className="absolute right-1 text-[10px]" style={{ top: BAR_H + LANE_H + 2 }}>{fmt.tokens(costOf(trace).max)}</span>}
         </div>
         <div
           ref={scroller}
@@ -89,8 +90,10 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
             ))}
             {cells}
           </div>
+          {mode === "cache" && <CostRow trace={trace} width={width} />}
         </div>
       </div>
+      {mode === "cache" && <p className="mt-0.5 pl-10 text-[11px] text-muted">{t.sessions.chart.costLane}</p>}
       {tip && tipStep && <Tooltip tip={tip} step={tipStep} index={tip.index} trace={trace} mode={mode} />}
     </div>
   );
@@ -140,7 +143,7 @@ const Bar = memo(function Bar({ step, index, lost, selected, mode, max, width, o
 
 function Column({ step, mode, px }: { step: Step; mode: ChartMode; px: (v: number) => number }) {
   if (mode === "cache") {
-    if (!step.usage) return <span aria-hidden data-testid="no-usage" className="mb-0 block w-full border-2 border-dashed border-fg-faint" style={{ height: 8 }} />;
+    if (!step.usage) return <span aria-hidden data-testid="no-usage" className="mb-0 block w-full border-2 border-dashed border-faint" style={{ height: 8 }} />;
     const u = step.usage;
     return (
       <span aria-hidden className="flex w-full flex-col justify-end" style={{ height: "auto" }}>
@@ -150,7 +153,7 @@ function Column({ step, mode, px }: { step: Step; mode: ChartMode; px: (v: numbe
       </span>
     );
   }
-  if (!step.sent) return <span aria-hidden data-testid="no-request" className="block w-full border-2 border-dashed border-fg-faint" style={{ height: 8 }} />;
+  if (!step.sent) return <span aria-hidden data-testid="no-request" className="block w-full border-2 border-dashed border-faint" style={{ height: 8 }} />;
   const byKind = new Map<PieceKind, number>(step.sent.byKind.map((k) => [k.kind, k.shared + k.fresh] as const));
   return (
     <span aria-hidden className="flex w-full flex-col justify-end">
@@ -235,7 +238,7 @@ export function ChartLegend({ mode }: { mode: ChartMode }) {
           <li className="flex items-center gap-1">{swatch(CACHE_FILL.write)}{c.legendWrite}</li>
           <li className="flex items-center gap-1">{swatch(CACHE_FILL.input)}{c.legendUncached}</li>
           <li className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-5 border-2 border-dashed border-fg-faint" />
+            <span aria-hidden className="inline-block h-2 w-5 border-2 border-dashed border-faint" />
             {c.legendNoUsage}
           </li>
         </>
@@ -249,7 +252,7 @@ export function ChartLegend({ mode }: { mode: ChartMode }) {
             </li>
           ))}
           <li className="flex items-center gap-1">
-            <span aria-hidden className="inline-block h-2 w-5 border-2 border-dashed border-fg-faint" />
+            <span aria-hidden className="inline-block h-2 w-5 border-2 border-dashed border-faint" />
             {c.legendNoRequest}
           </li>
         </>
@@ -263,5 +266,27 @@ export function ChartLegend({ mode }: { mode: ChartMode }) {
         {c.legendLost}
       </li>
     </ul>
+  );
+}
+
+const COST_H = 36;
+
+/** What each call paid in full, that is, everything it did not read from the cache, on a scale of its own. */
+function costOf(trace: Trace): { paid: number[]; max: number } {
+  const paid = trace.steps.map((s) => (s.usage ? s.usage.input + s.usage.cacheWrite : 0));
+  return { paid, max: Math.max(1, ...paid) };
+}
+
+function CostRow({ trace, width }: { trace: Trace; width: number }) {
+  const { paid, max } = useMemo(() => costOf(trace), [trace]);
+  const marks = new Set(trace.boundaries.map((b) => b.before));
+  return (
+    <div aria-hidden data-testid="cost-lane" className="flex items-end border-t border-line" style={{ height: COST_H + 1 }}>
+      {paid.map((v, i) => (
+        <div key={i} className="flex shrink-0 items-end" style={{ width: width + GAP, height: COST_H, marginLeft: marks.has(i) ? 4 : 0, paddingRight: GAP }}>
+          <span className="block w-full" style={{ height: v > 0 ? Math.max(1, Math.round((v / max) * COST_H)) : 0, background: CACHE_FILL.write }} />
+        </div>
+      ))}
+    </div>
   );
 }

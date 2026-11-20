@@ -98,7 +98,7 @@ function Usage({ trace, index }: { trace: Trace; index: number }) {
   const part = (v: number, fill: string) => (v > 0 ? <span className="block h-full" style={{ width: `${(v / prompt) * 100}%`, background: fill }} /> : null);
   return (
     <section data-testid="usage" aria-label={c.usage}>
-      <h3 className="text-[12px] font-semibold">{c.usage}</h3>
+      <h3 className="text-[12px] font-semibold"><Badge tone="info">{t.sessions.tagReal}</Badge> {c.usage}</h3>
       <div aria-hidden className="my-1 flex h-3 w-full overflow-hidden rounded-sm bg-sunken">
         {part(u.cacheRead, CACHE_FILL.read)}
         {part(u.cacheWrite, CACHE_FILL.write)}
@@ -169,7 +169,7 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
       <Strip pieces={pieces} sharedCount={shared} marks={sent.marks} open={open} select={select} present={present} />
       <section aria-label={t.sessions.call.piecesTitle}>
         <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <h3 className="text-[12px] font-semibold">{t.sessions.call.piecesTitle}</h3>
+          <h3 className="text-[12px] font-semibold"><Badge tone="warn">{t.sessions.tagEstimate}</Badge> {t.sessions.call.piecesTitle}</h3>
           <label className="flex items-center gap-1 text-[12px]">
             <span className="text-muted">{t.sessions.call.kindFilter}</span>
             <select data-testid="kind-filter" value={kind} onChange={(e) => setKind(e.target.value as PieceKind | "")} className="rounded border border-line bg-bg px-1 py-0.5">
@@ -213,7 +213,7 @@ function Strip({ pieces, sharedCount, marks, open, select, present }: { pieces: 
   const markSet = new Set(marks);
   return (
     <section aria-label={t.sessions.call.stripTitle} className="pt-2">
-      <h3 className="text-[12px] font-semibold">{t.sessions.call.stripTitle}</h3>
+      <h3 className="text-[12px] font-semibold"><Badge tone="warn">{t.sessions.tagEstimate}</Badge> {t.sessions.call.stripTitle}</h3>
       <p className="mb-1 text-[11px] text-muted">{t.sessions.call.stripNote(exact(total))}</p>
       <div className="overflow-x-auto pb-1">
         <div data-testid="strip" onClick={(e) => { const at = (e.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"); if (at) select(Number(at)); }} className="relative flex h-7 bg-sunken" style={{ minWidth: "100%", width: Math.max(0, pieces.length * 3) }}>
@@ -230,7 +230,7 @@ function Strip({ pieces, sharedCount, marks, open, select, present }: { pieces: 
           </li>
         ))}
         <li className="flex items-center gap-1">
-          <span aria-hidden className="inline-block h-2.5 w-4 bg-fg-faint opacity-55" style={{ backgroundImage: SHARED_HATCH }} />
+          <span aria-hidden className="inline-block h-2.5 w-4 bg-faint opacity-55" style={{ backgroundImage: SHARED_HATCH }} />
           {t.sessions.call.legendShared}
         </li>
         <li className="flex items-center gap-1">

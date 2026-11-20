@@ -763,6 +763,8 @@ export const ko: typeof en = {
     backToSession: "세션으로 돌아가기",
     subagentTitle: (label) => `하위 에이전트: ${label ?? "이름 없음"}`,
     estimatedTokens: "추정 토큰",
+    tagReal: "API 값",
+    tagEstimate: "추정값",
     duration: (s) => (s >= 3600 ? `${Math.floor(s / 3600)}시간 ${Math.floor((s % 3600) / 60)}분` : s >= 60 ? `${Math.floor(s / 60)}분 ${s % 60}초` : `${s}초`),
     stats: {
       calls: "호출 수",
@@ -780,6 +782,7 @@ export const ko: typeof en = {
       axisEstimate: "프로그램이 계산한 요청의 추정 토큰",
       estimateNote: "이 크기는 API 값이 아니라 추정값입니다.",
       legendRead: "캐시에서 읽음",
+      costLane: "캐시에서 읽지 않은 양, 쓴 양과 캐시 없이 보낸 양의 합",
       legendWrite: "캐시에 씀",
       legendUncached: "캐시 없이 보냄",
       legendNoUsage: "사용량 기록 없음",
@@ -805,6 +808,9 @@ export const ko: typeof en = {
     },
     lost: {
       badge: "캐시 손실",
+      whyChanged: "이 호출은 요청의 조각이 달라져서 캐시를 잃었습니다.",
+      whyExpired: "이 호출은 요청의 조각이 그대로인데도 캐시를 잃었습니다.",
+      whyUnknown: "이 호출은 캐시를 잃었지만 기록만으로는 원인을 가릴 수 없습니다.",
       count: (n) => `캐시 손실 ${n}회`,
       summary: (read, expected) => `이 호출은 캐시에서 ${read}토큰을 읽었습니다. 앞선 호출이 읽고 쓴 양은 ${expected}토큰입니다.`,
       changed: (shared, before) => `이 요청은 앞선 요청의 조각 ${before}개 중 ${shared}개만 같습니다.`,

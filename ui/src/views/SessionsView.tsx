@@ -134,6 +134,7 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
       <section aria-label={t.sessions.chart.label}>
         <div className="mb-1 flex items-center justify-between gap-2">
           <p className="text-[12px] font-semibold">
+            <Badge tone={route.cm === "cache" ? "info" : "warn"}>{route.cm === "cache" ? t.sessions.tagReal : t.sessions.tagEstimate}</Badge>{" "}
             {route.cm === "cache" ? t.sessions.chart.axisReal : t.sessions.chart.axisEstimate}
             {lostCount > 0 && (
               <span className="ml-2">

@@ -9,6 +9,9 @@ export function LossNote({ loss, first, testid }: { loss: CacheLoss; first?: str
   const why = loss.why;
   return (
     <ul data-testid={testid} className="space-y-0.5">
+      <li data-testid="loss-why" className="font-semibold">
+        {why.kind === "changed" ? s.whyChanged : why.kind === "expired" ? s.whyExpired : s.whyUnknown}
+      </li>
       <li>{s.summary(exact(loss.read), exact(loss.expected))}</li>
       {why.kind === "changed" && (
         <>

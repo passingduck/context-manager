@@ -794,6 +794,8 @@ export const en = {
     backToSession: "Back to the session",
     subagentTitle: (label: string | null) => `Subagent: ${label ?? "unnamed"}`,
     estimatedTokens: "estimated tokens",
+    tagReal: "API value",
+    tagEstimate: "Estimate",
     duration: (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`),
     stats: {
       calls: "Calls",
@@ -811,6 +813,7 @@ export const en = {
       axisEstimate: "Estimated tokens of the request, counted by this program",
       estimateNote: "These sizes are estimates, not numbers from the API.",
       legendRead: "Read from the cache",
+      costLane: "Not read from the cache, written plus uncached",
       legendWrite: "Written to the cache",
       legendUncached: "Sent uncached",
       legendNoUsage: "No usage recorded",
@@ -836,6 +839,9 @@ export const en = {
     },
     lost: {
       badge: "Cache lost",
+      whyChanged: "This call lost the cache because a piece of the request changed.",
+      whyExpired: "This call lost the cache although no piece of the request changed.",
+      whyUnknown: "This call lost the cache, and the record cannot say why.",
       count: (n: number) => `${n} calls lost the cache`,
       summary: (read: string, expected: string) => `This call read ${read} tokens from the cache. The call before it had read and written ${expected} tokens.`,
       changed: (shared: number, before: number) => `This request shares only ${shared} of the ${before} pieces of the previous request.`,
