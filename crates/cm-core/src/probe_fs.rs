@@ -62,6 +62,13 @@ pub const MAX_READ_BYTES: u64 = 8 * 1024 * 1024;
 /// hash; links make a repository of one file and many names read that file once per name.
 pub const MAX_SCAN_READ_BYTES: u64 = 64 * 1024 * 1024;
 
+/// [`MAX_SCAN_READ_BYTES`] as the limit a refused file names.
+pub const SCAN_READ_LIMIT: Limit = Limit {
+    kind: LimitKind::ScanReadBytes,
+    value: MAX_SCAN_READ_BYTES,
+    unit: Unit::Bytes,
+};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeErrorKind {
     Io(io::ErrorKind),
@@ -117,11 +124,7 @@ impl ProbeError {
             },
             ProbeErrorKind::DanglingLink => Skip::Missing,
             ProbeErrorKind::BudgetSpent => Skip::BudgetExhausted {
-                limit: Limit {
-                    kind: LimitKind::ScanReadBytes,
-                    value: MAX_SCAN_READ_BYTES,
-                    unit: Unit::Bytes,
-                },
+                limit: SCAN_READ_LIMIT,
             },
         }
     }

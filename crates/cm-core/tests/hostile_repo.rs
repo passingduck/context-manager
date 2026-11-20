@@ -439,8 +439,12 @@ fn ten_links_to_one_8_mib_command_stop_at_the_scan_read_budget() {
         [(&Subject::Agent, &Problem::ReadBudgetExhausted { max })],
         "one diagnostic names the scan read budget of 64 MiB"
     );
-    let refused = FileState::Unreadable {
-        error: "the scan read budget is spent".to_owned(),
+    let refused = FileState::BudgetExhausted {
+        limit: Limit {
+            kind: LimitKind::ScanReadBytes,
+            value: max,
+            unit: Unit::Bytes,
+        },
     };
     let states: Vec<bool> = names
         .iter()

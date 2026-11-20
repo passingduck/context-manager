@@ -7,7 +7,7 @@ use crate::agents::{Agent, FileClaim, ScanCx, registry};
 use crate::env::ScanEnv;
 use crate::model::*;
 pub use crate::probe_fs::MAX_READ_BYTES;
-use crate::probe_fs::{Exceeded, ProbeErrorKind, ProbeFs};
+use crate::probe_fs::{Exceeded, ProbeErrorKind, ProbeFs, SCAN_READ_LIMIT};
 use crate::{doctor, md, passes, walk};
 
 /// A snapshot plus what the host needs to answer follow-up calls about the same scan.
@@ -285,6 +285,9 @@ fn read_entry(cx: &ScanCx, path: &AbsPath, claimed: EditPolicy) -> FileEntry {
         Ok(stat) => match cx.fs.read(path) {
             Err(err) => match err.kind {
                 ProbeErrorKind::TooLarge { bytes } => FileState::TooBig { bytes },
+                ProbeErrorKind::BudgetSpent => FileState::BudgetExhausted {
+                    limit: SCAN_READ_LIMIT,
+                },
                 _ => FileState::Unreadable { error: err.detail },
             },
             Ok(bytes) => {

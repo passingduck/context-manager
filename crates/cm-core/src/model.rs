@@ -375,6 +375,8 @@ variants! {
         Unreadable { error: String },
         /// Over 8 MiB: listed, never read.
         TooBig { bytes: u64 },
+        /// The scan had spent `limit` before it reached the file, so it did not read it.
+        BudgetExhausted { limit: Limit },
     }
 
     pub enum ReadOnlyWhy {

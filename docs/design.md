@@ -92,6 +92,7 @@ pub enum FileState {
     Absent,                                    // a probed location, or the target of a broken import
     Unreadable { error: String },
     TooBig { bytes: u64 },                     // over 8 MiB: listed, never read
+    BudgetExhausted { limit: Limit },          // the scan read budget was spent before this file
 }
 pub enum EditPolicy { Editable, ReadOnly(ReadOnlyWhy) }
 pub enum ReadOnlyWhy { Managed, PluginCache { plugin: String }, Generated, AgentState, Synced, NotUtf8 }
@@ -168,7 +169,7 @@ pub enum Skip {
 }
 pub struct Limit { pub kind: LimitKind, pub value: u64, pub unit: Unit }   // Unit: Bytes | Chars | Lines | Tokens | Hops
 pub enum LimitKind { ProjectDocBudget, IndexLines, IndexBytes, OnDemandChars, MaxFileBytes,
-                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth }
+                     SummaryTokens, ListingEntryChars, ListingBudgetChars, ImportDepth, ScanReadBytes }
 
 /// What the agent sends when a session starts. Structure only. The literal text comes from the `render` operation.
 pub struct ContextBlock {
@@ -255,6 +256,8 @@ pub enum Problem {
     ParseError { format: Format, detail: String, fatal_for_agent: bool },
     FrontmatterInvalid { field: String }, LegacyLocation { why: RuleRef }, ProjectUntrusted { skipped: Vec<RuleRef> },
     GlobMatchesNothing { glob: String }, WalkCapped { entries: u32 },
+    ImportBudgetExhausted { max: u32 }, ImportBytesExhausted { max: u64 }, ScanExpansionExhausted { max: u64 },
+    ListingCapped { max: u32 }, ListingTooDeep { max: u32 }, ReadBudgetExhausted { max: u64 }, TextPartlyAnalyzed { max: u64 },
 }
 
 /// Agent knowledge that the UI explains. It lives next to the adapter, in both languages.
