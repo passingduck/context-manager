@@ -709,7 +709,7 @@ export const en = {
   format: formatName,
   severity: { error: "Errors", warning: "Warnings", info: "Notes" } satisfies Record<Severity, string>,
   severityOne: { error: "Error", warning: "Warning", info: "Note" } satisfies Record<Severity, string>,
-  changeState: { sealed: "Done", pending: "Pending", needsAttention: "Needs attention" } satisfies Record<ChangeState, string>,
+  changeState: { sealed: "Done", pending: "Pending", needsAttention: "Needs attention", aborted: "Not applied" } satisfies Record<ChangeState, string>,
   changeEdit: {
     save: "Save file",
     trash: "Move to trash",

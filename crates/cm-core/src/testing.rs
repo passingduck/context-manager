@@ -91,6 +91,8 @@ pub struct TestAgent {
     pub refuse: Option<&'static str>,
     /// `Edit::NewItem` plans a write of each of these, so a change can span several files.
     pub writes: Vec<(AbsPath, String)>,
+    /// Entry files it lists as skills, such as `skills/<name>/SKILL.md`.
+    pub skills: Vec<AbsPath>,
 }
 
 impl Agent for TestAgent {
@@ -126,6 +128,22 @@ impl Agent for TestAgent {
                 policy: EditPolicy::ReadOnly {
                     why: ReadOnlyWhy::Managed,
                 },
+            });
+        }
+        for file in &self.skills {
+            scan.view.extensions.push(Extension {
+                id: ExtId(file.to_string()),
+                ext_kind: ExtKind::Skill,
+                name: file
+                    .parent()
+                    .and_then(|dir| dir.file_name().map(str::to_owned))
+                    .unwrap_or_default(),
+                description: None,
+                file: file.clone(),
+                scope: Scope::User,
+                listing: None,
+                body: LoadId(0),
+                status: ExtStatus::Active,
             });
         }
         if let Some(place) = &self.slot {

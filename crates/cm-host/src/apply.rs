@@ -1,12 +1,12 @@
-//! The apply pipeline (design section 4, steps 1 to 5) and the file effects it shares with
-//! recovery.
+//! The apply pipeline (design section 4, steps 1 to 5) and the file effects it runs.
 //!
 //! 1. Policy: refuse when the host is read only. The host does this in one place.
 //! 2. Plan again against a fresh scan. An empty plan is `AlreadyApplied`. A digest that differs
 //!    from the one the client saw is `Stale`.
 //! 3. Journal: store the before and after bytes of each file as blobs, then write the pending
 //!    record.
-//! 4. Execute each operation in order.
+//! 4. Execute each operation in order. When one fails, undo the ones before it and abort the
+//!    record.
 //! 5. Seal: write the sealed record and remove the pending one.
 //!
 //! One process-wide mutex serializes the whole run.
@@ -20,8 +20,8 @@ use cm_core::edit::Planner;
 use cm_core::env::ScanEnv;
 use cm_core::scan::scan_with_parked;
 use cm_core::{
-    AbsPath, Action, ApiError, ApplyResult, Base, ChangeRecord, ChangeState, Edit, FileOp,
-    JournalOp, Preview, Revision, sha256_hex,
+    AbsPath, Action, ApiError, ApplyResult, Base, ChangeId, ChangeRecord, ChangeState, Edit,
+    FileOp, JournalOp, Preview, Revision, Warning, sha256_hex,
 };
 
 use crate::fsio::{
@@ -29,6 +29,7 @@ use crate::fsio::{
     write_target,
 };
 use crate::history::{History, new_change_id, now_iso};
+use crate::recovery::{OpState, classify};
 
 /// Serializes `apply` and recovery within this process.
 pub(crate) static PIPELINE: Mutex<()> = Mutex::new(());
@@ -107,7 +108,12 @@ impl Ctx {
     ) -> Result<ApplyResult, ApiError> {
         let _serialized = PIPELINE.lock().unwrap_or_else(|e| e.into_inner());
         let now = self.plan(cwd, edit)?;
-        if let Some(conflict) = now.conflicts.first() {
+        // A revert of a record that never finished restores the files at after and leaves a file
+        // at neither state as it is: the preview listed it as a conflict (design section 4).
+        let unfinished = self.unfinished_target(edit);
+        if unfinished.is_none()
+            && let Some(conflict) = now.conflicts.first()
+        {
             return Err(ApiError::Conflict {
                 path: conflict.path.clone(),
                 expected: conflict.expected.clone(),
@@ -116,6 +122,10 @@ impl Ctx {
             });
         }
         if now.change_set.ops.is_empty() {
+            // Such a revert resolves the record also when it plans to nothing.
+            if let Some(mut target) = unfinished {
+                self.history.abort(&mut target).map_err(io_detail)?;
+            }
             return Ok(ApplyResult::AlreadyApplied);
         }
         if now.digest != digest {
@@ -134,35 +144,38 @@ impl Ctx {
         let id = new_change_id();
 
         // Step 3: journal.
+        let (ops, ends) = self.journal(preview)?;
         let mut record = ChangeRecord {
             id: id.clone(),
             at: now_iso(),
             cwd: Some(cwd.clone()),
             summary: preview.change_set.summary.clone(),
-            ops: self.journal(preview)?,
+            ops,
             state: ChangeState::Pending,
         };
         checkpoint(Step::Blobs)?;
         self.history.write_pending(&record).map_err(io_detail)?;
         checkpoint(Step::Pending)?;
 
-        // Step 4: execute.
+        // Step 4: execute. A failed operation is not a crash: the run undoes what it did.
         let effects = self.effects();
+        let held = !preview.warnings.contains(&Warning::NotRevertible);
         let mut files = Vec::new();
         let mut not_trashed = Vec::new();
         for (index, op) in preview.change_set.ops.iter().enumerate() {
-            effects.run_op(&id.0, index, op, &mut files, &mut not_trashed)?;
+            if let Err(err) = effects.run_op(&id.0, index, op, held, &mut files, &mut not_trashed) {
+                let done = if index == 0 { 0 } else { ends[index - 1] };
+                self.undo(&mut record, done, ends[index]);
+                return Err(err);
+            }
             checkpoint(Step::Op(index))?;
         }
         checkpoint(Step::Executed)?;
 
-        // Step 5: seal. A revert of a record that never finished resolves it first, so that
-        // recovery does not roll it forward again over the revert.
-        if let Edit::Revert { change } = edit
-            && let Some(mut target) = self.history.record(change)
-            && target.state != ChangeState::Sealed
-        {
-            self.history.seal(&mut target).map_err(io_detail)?;
+        // Step 5: seal. A revert of a record that never finished resolves it: none of that
+        // change is on disk any more.
+        if let Some(mut target) = self.unfinished_target(edit) {
+            self.history.abort(&mut target).map_err(io_detail)?;
         }
         self.history.seal(&mut record).map_err(io_detail)?;
         checkpoint(Step::Sealed)?;
@@ -173,6 +186,60 @@ impl Ctx {
         })
     }
 
+    /// The record a revert targets, when it is still pending or needs attention.
+    fn unfinished_target(&self, edit: &Edit) -> Option<ChangeRecord> {
+        let Edit::Revert { change } = edit else {
+            return None;
+        };
+        self.history
+            .record(change)
+            .filter(|r| matches!(r.state, ChangeState::Pending | ChangeState::NeedsAttention))
+    }
+
+    /// Design section 4, "A failed apply is not a crash". The journal operations before `done`
+    /// belong to operations that completed, those up to `tried` also to the one that failed.
+    /// Each file at its after state goes back to its before blob, last first, and the record is
+    /// aborted. A completed operation's file that is at neither state was changed by someone
+    /// else, and a restore can fail: then the record needs attention.
+    fn undo(&self, record: &mut ChangeRecord, done: usize, tried: usize) {
+        let effects = self.effects();
+        let mut clean = true;
+        for (index, op) in record.ops[..tried].iter().enumerate().rev() {
+            let undone = match classify(op) {
+                OpState::AtBefore => true,
+                OpState::AtAfter => self.restore(&effects, &record.id, index, op).is_ok(),
+                // The failed operation did not write this file.
+                OpState::Other => index >= done,
+            };
+            clean &= undone;
+        }
+        let closed = clean && self.history.abort(record).is_ok();
+        if !closed {
+            record.state = ChangeState::NeedsAttention;
+            let _ = self.history.write_pending(record);
+        }
+    }
+
+    /// Puts one journaled file back to its before state.
+    fn restore(
+        &self,
+        effects: &Effects,
+        id: &ChangeId,
+        index: usize,
+        op: &JournalOp,
+    ) -> std::io::Result<()> {
+        match (&op.before, &op.after) {
+            (Some(blob), _) => {
+                let bytes = self.history.blob(blob)?;
+                effects.write(&op.path, &bytes, &format!("{}-u{index}", id.0))
+            }
+            // A file the change created.
+            (None, Some(_)) => fs::remove_file(write_target(&op.path)),
+            // A directory that went to the trash: its files come back from their own blobs.
+            (None, None) => fs::create_dir_all(op.path.as_path()),
+        }
+    }
+
     pub(crate) fn effects(&self) -> Effects<'_> {
         Effects {
             trasher: self.trasher.as_ref(),
@@ -181,10 +248,12 @@ impl Ctx {
     }
 
     /// Stores the blobs and builds the journal. A directory that goes to the trash whole has one
-    /// operation per file it holds, and a last one for the directory itself.
-    fn journal(&self, preview: &Preview) -> Result<Vec<JournalOp>, ApiError> {
+    /// operation per file it holds, and a last one for the directory itself. The second list
+    /// holds, for each file operation, the length of the journal up to and including it.
+    fn journal(&self, preview: &Preview) -> Result<(Vec<JournalOp>, Vec<usize>), ApiError> {
         let put = |text: &str| self.history.put_blob(text.as_bytes()).map_err(io_detail);
         let mut ops = Vec::new();
+        let mut ends = Vec::new();
         for op in &preview.change_set.ops {
             match &op.action {
                 Action::Write { text } => ops.push(JournalOp {
@@ -224,12 +293,13 @@ impl Ctx {
                     });
                 }
             }
+            ends.push(ops.len());
         }
-        Ok(ops)
+        Ok((ops, ends))
     }
 }
 
-/// What disk operations do, shared by the pipeline and recovery.
+/// What disk operations do, shared by the pipeline and its undo.
 pub(crate) struct Effects<'a> {
     pub trasher: &'a dyn Trasher,
     /// Files under it are the tool's own: directories 0700, files 0600.
@@ -246,11 +316,13 @@ pub(crate) fn disk_hash(path: &AbsPath) -> std::io::Result<Option<String>> {
 }
 
 impl Effects<'_> {
+    /// `held`: the history holds every file of a directory the change trashes whole.
     fn run_op(
         &self,
         id: &str,
         index: usize,
         op: &FileOp,
+        held: bool,
         files: &mut Vec<(AbsPath, Option<Revision>)>,
         not_trashed: &mut Vec<AbsPath>,
     ) -> Result<(), ApiError> {
@@ -261,13 +333,14 @@ impl Effects<'_> {
                     .map_err(io_detail)?;
                 files.push((op.path.clone(), Some(Revision::of(text.as_bytes()))));
             }
+            // The plan holds the text of a file it trashes alone.
             Action::Trash => {
                 self.expect(op)?;
-                self.trash(&op.path, not_trashed).map_err(io_detail)?;
+                self.trash(&op.path, true, not_trashed).map_err(io_detail)?;
                 files.push((op.path.clone(), None));
             }
             Action::TrashDir => {
-                self.trash(&op.path, not_trashed).map_err(io_detail)?;
+                self.trash(&op.path, held, not_trashed).map_err(io_detail)?;
                 files.push((op.path.clone(), None));
             }
         }
@@ -275,7 +348,7 @@ impl Effects<'_> {
     }
 
     /// Hashes the target again, right before the write (step 4). A mismatch means someone wrote
-    /// between the plan and now, and the record stays pending for recovery to classify.
+    /// between the plan and now, and the operation fails.
     fn expect(&self, op: &FileOp) -> Result<(), ApiError> {
         let now = disk_hash(&op.path).map_err(io_detail)?;
         let ok = match (&op.expect, &now) {
@@ -319,14 +392,21 @@ impl Effects<'_> {
     }
 
     /// Moves a file or directory to the OS trash. When the trash is not available, as on a
-    /// headless Linux host, the path is removed and listed in `not_trashed`. The history blob is
-    /// then the copy.
-    pub fn trash(&self, path: &AbsPath, not_trashed: &mut Vec<AbsPath>) -> std::io::Result<()> {
+    /// headless Linux host, a path whose content the history `held` is removed and listed in
+    /// `not_trashed`: the history blobs are the copy. Any other path stays, and the call fails.
+    pub fn trash(
+        &self,
+        path: &AbsPath,
+        held: bool,
+        not_trashed: &mut Vec<AbsPath>,
+    ) -> std::io::Result<()> {
         if fs::symlink_metadata(path.as_path()).is_err() {
             return Ok(());
         }
-        if self.trasher.trash(path.as_path()).is_ok() {
-            return Ok(());
+        match self.trasher.trash(path.as_path()) {
+            Ok(()) => return Ok(()),
+            Err(err) if !held => return Err(std::io::Error::other(err)),
+            Err(_) => {}
         }
         let result = if path.as_path().is_dir() && !path.as_path().is_symlink() {
             fs::remove_dir_all(path.as_path())

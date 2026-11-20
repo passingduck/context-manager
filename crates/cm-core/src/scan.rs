@@ -132,7 +132,7 @@ fn find_git_root(cx: &ScanCx) -> Option<AbsPath> {
     None
 }
 
-/// Builds the file table: every claimed file and every loaded file, once.
+/// Builds the file table: every claimed file, hook file and loaded file, once.
 fn intern(
     cx: &ScanCx,
     views: &[AgentView],
@@ -158,6 +158,11 @@ fn intern(
     for (view, files) in views.iter().zip(claimed) {
         for file in files {
             claim(&file.path, &view.agent, file.policy.clone());
+        }
+        // A hook file carries the policy of the extension or settings layer it belongs to, so
+        // the planner sees it as any other file.
+        for file in &view.hook_files {
+            claim(&file.file, &view.agent, file.policy.clone());
         }
         for load in &view.loads {
             claim(&load.file, &view.agent, EditPolicy::Editable);

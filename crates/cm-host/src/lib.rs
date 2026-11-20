@@ -15,6 +15,8 @@ pub use host::{Host, HostConfig, default_data_dir};
 pub use recovery::{OpState, Report, classify, inspect};
 
 #[cfg(test)]
+mod boundary_tests;
+#[cfg(test)]
 mod codex_tests;
 #[cfg(test)]
 mod pipeline_tests;

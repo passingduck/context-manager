@@ -827,7 +827,7 @@ variants! {
 }
 
 choices! {
-    pub enum ChangeState { Sealed, Pending, NeedsAttention }
+    pub enum ChangeState { Sealed, Pending, NeedsAttention, Aborted }
 }
 
 records! {
