@@ -362,7 +362,7 @@ impl<'a> Collector<'a> {
                 &item.file,
                 item.kind,
                 item.scope,
-                &item.rule.0,
+                item.rule,
                 Some(item.access),
             );
         }
@@ -378,7 +378,7 @@ impl<'a> Collector<'a> {
         });
     }
 
-    fn rule_ref(rule: &str) -> RuleRef {
+    fn rule_ref(rule: &'static str) -> RuleRef {
         RuleRef::new(rule)
     }
 
@@ -391,9 +391,11 @@ impl<'a> Collector<'a> {
         let stat = match self.cx.fs.stat(path) {
             Ok(stat) => stat,
             Err(err) if err.is_not_found() => return Verdict::Absent,
-            Err(_) => {
+            Err(err) => {
                 return Verdict::Skip(Skip::Invalid {
-                    detail: "unreadable".into(),
+                    why: Invalid::Unreadable {
+                        os: err.os_detail(),
+                    },
                 });
             }
         };
@@ -403,8 +405,8 @@ impl<'a> Collector<'a> {
             });
         }
         if self.worktree_skipped && !matches!(scope, Scope::Local) {
-            return Verdict::Skip(Skip::Invalid {
-                detail: "nested_worktree".into(),
+            return Verdict::Skip(Skip::NotRead {
+                why: RuleRef::new("claude.instructions.nested_worktree"),
             });
         }
         if self.managed_only && !matches!(scope, Scope::Managed) {
@@ -437,9 +439,9 @@ impl<'a> Collector<'a> {
                 });
             }
         }
-        if let Some(detail) = refused_location(path, real.as_ref()) {
+        if let Some(which) = refused_location(path, real.as_ref()) {
             return Verdict::Skip(Skip::Invalid {
-                detail: detail.into(),
+                why: Invalid::Location { which },
             });
         }
         if stat.len > MAX_FILE_BYTES {
@@ -454,13 +456,13 @@ impl<'a> Collector<'a> {
         let bytes = match self.cx.fs.read(path) {
             Ok(bytes) => bytes,
             Err(err) => {
-                let detail = match err.kind {
-                    ProbeErrorKind::NotRegular => "not_regular_file",
-                    _ => "unreadable",
+                let why = match err.kind {
+                    ProbeErrorKind::NotRegular => Invalid::NotRegular,
+                    _ => Invalid::Unreadable {
+                        os: err.os_detail(),
+                    },
                 };
-                return Verdict::Skip(Skip::Invalid {
-                    detail: detail.into(),
-                });
+                return Verdict::Skip(Skip::Invalid { why });
             }
         };
         let raw = String::from_utf8_lossy(&bytes);
@@ -507,16 +509,14 @@ impl<'a> Collector<'a> {
         path: &AbsPath,
         kind: DocKind,
         scope: Scope,
-        rule: &str,
+        rule: RuleRef,
         access: Option<AccessRule>,
     ) -> Option<LoadId> {
         let when = match access {
             Some(rule) => Activation::OnAccess { rule },
             None => Activation::SessionStart,
         };
-        let via = Via::Discovery {
-            rule: Self::rule_ref(rule),
-        };
+        let via = Via::Discovery { rule };
         match self.evaluate(path, &scope, true) {
             Verdict::Absent => None,
             Verdict::Skip(skip) => {
@@ -562,8 +562,8 @@ impl<'a> Collector<'a> {
         }
     }
 
-    fn add_start(&mut self, path: &AbsPath, kind: DocKind, scope: Scope, rule: &str) {
-        self.add_file(path, kind, scope, rule, None);
+    fn add_start(&mut self, path: &AbsPath, kind: DocKind, scope: Scope, rule: &'static str) {
+        self.add_file(path, kind, scope, RuleRef::new(rule), None);
     }
 
     /// Spec 1.3: a file that loads on demand is cut at the on-demand limit, in characters.
@@ -738,10 +738,10 @@ impl<'a> Collector<'a> {
                     })
                 }
                 ImportOutcome::NotText => Some(Skip::Invalid {
-                    detail: "not_text".into(),
+                    why: Invalid::NotText,
                 }),
                 ImportOutcome::Unreadable => Some(Skip::Invalid {
-                    detail: "unreadable".into(),
+                    why: Invalid::Unreadable { os: None },
                 }),
             };
             if let Some(skip) = skip {
@@ -803,7 +803,7 @@ impl<'a> Collector<'a> {
                         Activation::SessionStart,
                         LoadStatus::Skipped {
                             skip: Skip::Invalid {
-                                detail: "frontmatter".into(),
+                                why: Invalid::Frontmatter,
                             },
                         },
                         None,
@@ -868,7 +868,13 @@ impl<'a> Collector<'a> {
                             None,
                         );
                     } else {
-                        self.add_file(&file, DocKind::Rule, scope.clone(), rule, None);
+                        self.add_file(
+                            &file,
+                            DocKind::Rule,
+                            scope.clone(),
+                            RuleRef::new(rule),
+                            None,
+                        );
                     }
                 }
             }
@@ -968,7 +974,7 @@ impl<'a> Collector<'a> {
                         &path,
                         DocKind::Instructions,
                         scope.clone(),
-                        "claude.discovery.agents_md",
+                        RuleRef::new("claude.discovery.agents_md"),
                         None,
                     );
                 }
@@ -1022,11 +1028,11 @@ pub(super) fn rule_files(cx: &ScanCx, dir: &AbsPath) -> Vec<AbsPath> {
 }
 
 /// Spec 1.8: a scratchpad-shaped path, `connector-downloads`, a device or process file.
-pub(super) fn refused_location(path: &AbsPath, real: Option<&AbsPath>) -> Option<&'static str> {
+pub(super) fn refused_location(path: &AbsPath, real: Option<&AbsPath>) -> Option<RefusedLocation> {
     for candidate in std::iter::once(path).chain(real) {
         let parts: Vec<&str> = candidate.as_str().split('/').collect();
         if parts.contains(&"connector-downloads") {
-            return Some("connector_downloads");
+            return Some(RefusedLocation::ConnectorDownloads);
         }
         // `claude-<uid>/<project>/<session-id>/scratchpad/...`
         for (i, part) in parts.iter().enumerate() {
@@ -1034,13 +1040,13 @@ pub(super) fn refused_location(path: &AbsPath, real: Option<&AbsPath>) -> Option
                 .strip_prefix("claude-")
                 .is_some_and(|uid| !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit()));
             if is_root && parts.get(i + 3) == Some(&"scratchpad") {
-                return Some("scratchpad");
+                return Some(RefusedLocation::Scratchpad);
             }
         }
         if candidate.starts_with(&AbsPath::parse("/dev").expect("constant"))
             || candidate.starts_with(&AbsPath::parse("/proc").expect("constant"))
         {
-            return Some("device_or_process_file");
+            return Some(RefusedLocation::DeviceOrProcess);
         }
     }
     None
@@ -1121,7 +1127,7 @@ fn rule_text_head(cx: &ScanCx, file: &AbsPath) -> RuleHead {
 /// Steps 1 and 3 of spec 1.3: path rules of managed, user, cwd and every ancestor. They do
 /// not depend on the touched directory.
 pub(super) fn global_candidates(cx: &ScanCx, setup: &Setup, out: &mut Vec<Candidate>) {
-    let mut push_dir = |dir: AbsPath, scope: Scope, base: AbsPath, rule: &str| {
+    let mut push_dir = |dir: AbsPath, scope: Scope, base: AbsPath, rule: &'static str| {
         for file in rule_files(cx, &dir) {
             if let RuleHead::Conditional(patterns) = rule_text_head(cx, &file) {
                 out.push(Candidate {

@@ -189,7 +189,7 @@ fn project_chain(cx: &ScanCx, setup: &Setup, out: &mut Out) -> Vec<(LoadId, Stri
             (
                 LoadStatus::Skipped {
                     skip: Skip::Invalid {
-                        detail: "unreadable".to_owned(),
+                        why: Invalid::Unreadable { os: None },
                     },
                 },
                 None,

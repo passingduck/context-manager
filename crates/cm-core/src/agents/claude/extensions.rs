@@ -814,7 +814,7 @@ impl Builder<'_, '_> {
             let via = Via::Discovery { rule: rule.clone() };
             let body_text = &p.text[p.fm.body.clone()];
 
-            if let Some((why, detail)) = &p.rejected {
+            if let Some((why, _)) = &p.rejected {
                 let status = if *why == "claude.ext.rejected_too_large" {
                     LoadStatus::Skipped {
                         skip: Skip::TooLarge {
@@ -827,8 +827,8 @@ impl Builder<'_, '_> {
                     }
                 } else {
                     LoadStatus::Skipped {
-                        skip: Skip::Invalid {
-                            detail: detail.clone(),
+                        skip: Skip::NotRead {
+                            why: RuleRef::new(why),
                         },
                     }
                 };

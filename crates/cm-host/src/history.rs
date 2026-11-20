@@ -65,10 +65,20 @@ impl History {
         self.write_record(record, true)
     }
 
-    /// Writes `<id>.json`, then removes `<id>.pending.json`. A crash between the two leaves both
-    /// files, and the sealed one wins.
+    /// Closes a change whose operations are all on disk.
     pub fn seal(&self, record: &mut ChangeRecord) -> io::Result<()> {
-        record.state = ChangeState::Sealed;
+        self.close(record, ChangeState::Sealed)
+    }
+
+    /// Closes a change none of whose operations is on disk (design section 4).
+    pub fn abort(&self, record: &mut ChangeRecord) -> io::Result<()> {
+        self.close(record, ChangeState::Aborted)
+    }
+
+    /// Writes `<id>.json` in its final state, then removes `<id>.pending.json`. A crash between
+    /// the two leaves both files, and the closed one wins.
+    fn close(&self, record: &mut ChangeRecord, state: ChangeState) -> io::Result<()> {
+        record.state = state;
         self.write_record(record, false)?;
         match fs::remove_file(self.path_of(&record.id, true)) {
             Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
@@ -92,7 +102,7 @@ impl History {
     // Reading
     // -----------------------------------------------------------------------------------------
 
-    /// Every record, newest first. A sealed record hides a pending one with the same id. A file
+    /// Every record, newest first. A closed record hides a pending one with the same id. A file
     /// that does not parse is skipped.
     pub fn all(&self) -> Vec<ChangeRecord> {
         let Ok(entries) = fs::read_dir(&self.changes) else {
@@ -116,14 +126,14 @@ impl History {
             };
             by_id.push((stem, pending, record));
         }
-        let sealed: HashSet<String> = by_id
+        let closed: HashSet<String> = by_id
             .iter()
             .filter(|(_, pending, _)| !pending)
             .map(|(id, _, _)| id.clone())
             .collect();
         let mut records: Vec<ChangeRecord> = by_id
             .into_iter()
-            .filter(|(id, pending, _)| !*pending || !sealed.contains(id))
+            .filter(|(id, pending, _)| !*pending || !closed.contains(id))
             .map(|(_, _, record)| record)
             .collect();
         records.sort_by(|a, b| b.id.cmp(&a.id));
@@ -134,19 +144,19 @@ impl History {
         self.all().into_iter().find(|r| r.id == *id)
     }
 
-    /// The records still pending, oldest first.
+    /// The records not yet closed, oldest first.
     pub fn pending(&self) -> Vec<ChangeRecord> {
         let mut pending: Vec<ChangeRecord> = self
             .all()
             .into_iter()
-            .filter(|r| r.state != ChangeState::Sealed)
+            .filter(|r| matches!(r.state, ChangeState::Pending | ChangeState::NeedsAttention))
             .collect();
         pending.reverse();
         pending
     }
 
-    /// Removes `<id>.pending.json` files whose sealed twin exists.
-    pub fn drop_sealed_twins(&self) {
+    /// Removes `<id>.pending.json` files whose closed twin exists.
+    pub fn drop_closed_twins(&self) {
         let Ok(entries) = fs::read_dir(&self.changes) else {
             return;
         };
@@ -167,9 +177,7 @@ impl History {
         let bytes = self.blob(id).map_err(io_detail)?;
         String::from_utf8(bytes)
             .map(Some)
-            .map_err(|_| ApiError::Io {
-                detail: format!("blob {id} is not UTF-8"),
-            })
+            .map_err(|_| ApiError::HistoryCorrupt)
     }
 
     /// The record with the text of each file before and after. An operation with neither (a
@@ -349,7 +357,7 @@ mod tests {
         history.write_pending(&first).unwrap();
         assert_eq!(history.all().len(), 2);
         assert_eq!(history.record(&a).unwrap().state, ChangeState::Sealed);
-        history.drop_sealed_twins();
+        history.drop_closed_twins();
         assert!(
             !dir.path()
                 .join(format!("history/changes/{}.pending.json", a.0))

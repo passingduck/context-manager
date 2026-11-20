@@ -76,7 +76,9 @@ pub(super) fn add(
         return Err(invalid("store", "claude.plan.store_agent_written"));
     }
     if let MemoryWrite::ReadOnly { why } = &store.write {
-        return Err(ApiError::ReadOnly { why: why.clone() });
+        return Err(ApiError::ReadOnly {
+            why: ReadOnlyReason::Rule { rule: why.clone() },
+        });
     }
     let title = one_line(title);
     if title.is_empty() {

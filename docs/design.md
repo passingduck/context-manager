@@ -62,7 +62,7 @@ pub struct AbsPath(String);       // absolute, lexically normalized, UTF-8. Buil
 pub struct Revision(String);      // "sha256:<hex>" of the file bytes. The compare-and-swap token for writes.
 pub struct Fingerprint(String);   // hash over the stat of every path a scan probed
 pub struct AgentId(String);       // "claude" | "codex" | "gemini". Checked against the registry at parse. Nothing matches on it.
-pub struct RuleRef(String);       // "codex.agents_md.project". Resolves to a RuleSpec.
+pub struct RuleRef(String);       // "codex.agents_md.project". Resolves to a RuleSpec; `RuleRef::new` takes a `&'static str`, so no id is built at run time.
 pub struct LoadId(u32);           // index into AgentView.loads, valid within one snapshot
 pub struct HookId(String);        // hash(agent, source file, locator, digest of the stored entry)
 pub struct ExtId(String);         // hash(agent, kind, file)
@@ -163,7 +163,7 @@ pub enum Skip {
     Excluded { pattern: String },            // Claude claudeMdExcludes
     FeatureOff { name: String },
     AlreadyLoaded { first: LoadId },
-    Invalid { detail: String },
+    Invalid { why: Invalid },                // the file cannot serve; only Unreadable carries (operating-system) text
     NotRead { why: RuleRef },                // e.g. the legacy Codex prompts directory
 }
 pub struct Limit { pub kind: LimitKind, pub value: u64, pub unit: Unit }   // Unit: Bytes | Chars | Lines | Tokens | Hops
@@ -238,7 +238,7 @@ pub struct Extension {
     pub status: ExtStatus,                   // Active | Conditional { patterns } | Hidden { why } | Shadowed { by } | Rejected { why } | Disabled { by }
 }
 pub struct Slot { pub id: SlotId, pub place: Place, pub new_kind: NewItemKind, pub scope: Scope, pub rule: RuleRef }
-pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String } }
+pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String }, InSubdir { dir: AbsPath, file: String } }
 pub enum NewItemKind { Instructions, Rule, Skill, Command, Subagent, Memory }
 
 pub struct Diagnostic { pub severity: Severity, pub agent: Option<AgentId>, pub at: Subject, pub problem: Problem, pub fix: Option<Edit> }
@@ -259,6 +259,10 @@ pub enum Problem {
 
 /// Agent knowledge that the UI explains. It lives next to the adapter, in both languages.
 pub struct RuleSpec { pub id: RuleRef, pub en: String, pub ko: String, pub evidence: String }
+pub enum Invalid { Unreadable { os: Option<String> }, NotRegular, NotText, Frontmatter, Toml, Location { which: RefusedLocation }, OutsideRoot }
+pub enum RefusedLocation { ConnectorDownloads, Scratchpad, DeviceOrProcess }
+pub enum ReadOnlyReason { Host, File { why: ReadOnlyWhy }, Rule { rule: RuleRef } }
+pub enum HookRunFailure { EmptyInvocation, ProgramNotFound { program: String }, StartFailed { program: String, os: String } }
 ```
 
 Consequences of this model:
@@ -267,7 +271,7 @@ Consequences of this model:
 - **The literal context is available.** The `render` operation returns the text of each block. Tests compare it with what the real CLI prints.
 - **The path simulator reuses the rules.** `OnAccess` rules are data. `simulate` evaluates them for a target path and also probes the directories between `cwd` and the target with the same rule function the scan uses.
 - **A broken import is a row, not only a warning.** Its load has `Skip::Missing` and points at an `Absent` file.
-- **The backend sends facts.** `Skip`, `Problem`, `Warning` and `HookBlock` are typed and are translated in the frontend. Rule explanations are agent knowledge, so they ship with the adapter as `RuleSpec`s.
+- **The backend sends facts.** `Skip`, `Problem`, `Warning` and `HookBlock` are typed and are translated in the frontend. Rule explanations are agent knowledge, so they ship with the adapter as `RuleSpec`s. Reasons that belong to no agent are in `crates/cm-core/src/core_rules.toml` and travel in `Session.core_rules`. A test fails when code names a rule id that no rules file defines.
 
 ## 4. Write model
 
@@ -309,7 +313,7 @@ pub enum Warning {
     TakesEffect { agent: AgentId, when: RuleRef },   // next session, /reload-plugins, /memory reload
     NewImportToken { raw: String },  // Gemini: a new "@word" becomes an import attempt
     ParkedOnThisMachine,             // a parked Claude hook exists only in this tool's data directory
-    NotRevertible,                   // a directory over 16 MiB: the OS trash is the only copy
+    NotRevertible,                   // a directory the plan could not capture completely: the OS trash is the only copy
 }
 pub enum ApplyResult {
     Applied { change: ChangeId, files: Vec<(AbsPath, Option<Revision>)>, not_trashed: Vec<AbsPath> },
@@ -339,7 +343,7 @@ One mutex per process serializes `apply`, and a lock on a file in the data direc
 1. **Policy.** Refuse when the host runs with `--read-only`.
 2. **Plan again.** Run a fresh scan of `cwd` and plan the edit against it. If the plan is empty, return `AlreadyApplied`. If its digest differs from the one the client sent, the disk changed after the preview: return `Stale` with the new preview and write nothing.
 3. **Journal.** Store the before and after content of each file as blobs named by their hash. Then write `changes/<id>.pending.json`. Each write is a temp file, a sync and a rename.
-4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). A file that has more than one hard link is written in place instead, because a rename would leave the other names on the old content. `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
+4. **Execute** in order. `Write` hashes the target again, writes a temp file in the same directory, keeps the mode bits, syncs, and renames over the real path (a symlink's target). A file that has more than one hard link is written in place instead, because a rename would leave the other names on the old content. `Trash` moves the file to the OS trash. `TrashDir` stores every file of the directory as blobs first, up to 16 MiB. A directory the plan could not capture completely (over that limit, holding a file that is not UTF-8, a name the lister cannot represent or a symlink, or deeper or larger than the plan's walk limits) carries the `NotRevertible` warning. If the OS trash is not available, as on a headless Linux host without one, a file or directory that history holds completely is removed, the history blobs are the copy, and the result lists the path in `not_trashed`. A `NotRevertible` directory is never removed that way: the operation fails and nothing is deleted.
 5. **Seal.** Write `changes/<id>.json` and remove the pending file.
 
 | crash point | left on disk | what recovery does |
@@ -427,7 +431,7 @@ The core runs these passes after the adapters, so no adapter repeats them: file 
 
 ```rust
 api! {
-    session(())                                              -> Session;        // version, shell, read_only, launch_cwd, home, os, pending changes
+    session(())                                              -> Session;        // version, shell, read_only, launch_cwd, home, os, pending changes, core_rules
     agents(())                                               -> Vec<AgentInfo>; // id, display name, RuleSpecs, HookSchema
     projects(())                                             -> Vec<KnownProject>;   // path, exists, which agents know it
     scan(ScanReq { cwd })                                    -> Snapshot;
@@ -447,7 +451,7 @@ api! {
 
 The macro expands to `enum Request` (tagged with `op` and `args`), `trait Api` with one async method per row, `dispatch`, and a list of (name, argument type, result type).
 
-`ApiError` is `NotFound | Conflict { path, expected, found, current } | OutsideBoundary { path } | ReadOnly { why } | InvalidEdit { field, why } | Forbidden { why } | Io { detail } | Unauthorized`.
+`ApiError` is `NotFound | Conflict { path, expected, found, current } | OutsideBoundary { path } | ReadOnly { why: ReadOnlyReason } | InvalidEdit { field, why: RuleRef } | Forbidden { why: RuleRef } | HookRun { why: HookRunFailure } | BadRequest | HistoryCorrupt | Io { detail } | Unauthorized`. `Io` carries only text from the operating system. A condition the tool detects itself (a path that is not a regular file, a file over the read limit) is an `InvalidEdit` with a core rule.
 
 **TypeScript stays in step by generation.** `ts-rs` writes one file per type into `ui/src/gen/`. A test writes `ui/src/gen/api-map.ts` from the operation list. The client is `call<K extends keyof ApiMap>(op: K, args: ApiMap[K]['args']): Promise<ApiMap[K]['result']>`. The generated files are committed, and `scripts/check.sh` fails when regeneration changes them. The i18n catalogs are keyed on the generated unions, so a new `Problem` variant fails the type check until both languages render it.
 
@@ -623,10 +627,10 @@ Three candidates wrote this design independently against one grounding file: one
 - Contract unit: `ApiError::ReadOnly`, `InvalidEdit` and `Forbidden` carry `why: RuleRef` instead of prose. `ExtStatus::Shadowed { by }` holds an `ExtId`.
 - Write pipeline unit: `parked.rs` (the record type, its path rule and the scan's read) lives in `cm-core`, not `cm-host`, because the Claude planner in `cm-core` must build the record. It still writes nothing: the planner emits the record as an ordinary `Write` operation, and `apply` writes it.
 - Write pipeline unit: `HostConfig` gains `data_dir`, and `PlanCx` gains `snapshot` and `parked_dir`. Neither is in `model.rs` or the `api!` table.
-- Write pipeline unit: `Edit::Trash` on the entry file of a directory item plans `TrashDir` over the directory with `Base::Tree`. A file is such an entry only when the snapshot lists it as the entry of an extension whose slot is a directory item (`skills/<name>/SKILL.md`). Any other file goes to the trash alone, whatever slot its path matches. The client sends no tree hash; the plan computes it, so a file added to the directory between `plan` and `apply` yields `Stale`. A `Save` carries its own base, so an outside write between `plan` and `apply` yields `Conflict`, not `Stale`.
+- Write pipeline unit: `Edit::Trash` on the entry file of a `NamedDir` slot item that the agent lists as a skill, command or subagent (`skills/<name>/SKILL.md`) plans `TrashDir` over the directory with `Base::Tree`. Any other file, such as Gemini's `src/GEMINI.md`, is trashed alone. An agent's plan may write below a `NamedDir` slot only inside such a listed item or one that the same change creates. The client sends no tree hash; the plan computes it, so a file added to the directory between `plan` and `apply` yields `Stale`. A `Save` carries its own base, so an outside write between `plan` and `apply` yields `Conflict`, not `Stale`.
 - Write pipeline unit: a directory that goes to the trash is journaled as one operation per UTF-8 file plus a last operation with neither blob, which stands for the directory. A directory over 16 MiB, or holding a file that is not UTF-8, warns `NotRevertible` and journals only what it can restore as text.
-- Write pipeline unit: `Revert` accepts paths outside the snapshot (a trashed file is no longer in it). It still refuses a path the snapshot marks read only, and the guards still run. Reverting a record that never finished seals that record, so recovery does not roll it forward again.
-- Write pipeline unit: recovery marks a pending record with an edited file as `NeedsAttention` in its `.pending.json`. The files it names are in the `Report` that `recover` returns, not in `ChangeRecord`.
+- Write pipeline unit: `Revert` accepts paths outside the snapshot (a trashed file is no longer in it). It still refuses a path the snapshot marks read only, and the guards still run. A revert resolves a record that never finished by marking it `Aborted`, because none of that change is on disk once the revert completes.
+- Write pipeline unit: recovery marks a record `NeedsAttention` in its `.pending.json` and writes a record it seals or aborts as `<id>.json`. The state of each file is in the `Report` that `recover` returns, not in `ChangeRecord`. Recovery also removes the `.cm-<id>-*.tmp` files a crashed run of that record left beside its targets; they are the tool's own temp files, not agent files.
 - Gemini adapter: with folder trust on and no `trustedFolders.json` rule, `Trust.level` is `Untrusted` and `recorded_in` is `None`. The CLI asks the user and behaves as untrusted until they answer (`isTrusted ?? false`), so `Unknown` would imply the Codex behaviour of loading some project files.
 - Gemini adapter: `cm-core` gains a direct `regex` dependency, already in the lockfile through `ignore`, to test hook matchers. It tests the Rust regex syntax, so a JavaScript-only pattern with look-around is treated as valid.
 - Gemini adapter: `MOVING_VARS` gains the nine variables the Gemini rules read. The planners of the Gemini unit land with the write pipeline.
@@ -653,7 +657,13 @@ Three candidates wrote this design independently against one grounding file: one
 - Claude planners unit: `Planner::plan` offers `Edit::Trash` to the agents' `plan` before the generic plan, through `agent_plan` in `edit.rs`, so that trashing a memory topic also removes its index line. A `None` answer keeps the generic plan.
 - Claude planners unit: `AddMemory` has no field for the memory kind, so the topic file gets `metadata.type: project` and no `modified` stamp, since a plan has no clock. A title with no `[a-z0-9]` (Korean, for one) gets the file name `memory-<8 hex of its hash>`.
 - Claude planners unit: the session blocks gain `SkillCatalog` and `AgentCatalog`, both `Approximate`: no run pins their framing, only each entry and the character budget. The oracle comparison keeps to the `Exact` blocks. `MOVING_VARS` gains `SLASH_COMMAND_TOOL_CHAR_BUDGET`, which overrides the skill listing budget. Past the budget, descriptions go from the least-used skill first by `skillUsage` in `~/.claude.json`, aged from the newest use on record because a scan has no clock.
+- Write safety unit: the pipeline lock is `apply.lock` in the data directory. A read-only host's recovery classifies without it, because it writes nothing and opening the lock file would create it.
+- Write safety unit: the root in `Warning::ThroughSymlink` ("below the slot's root") is the deepest of the home directory, the project root and `cwd` that holds the path. A path below none of them is checked at its own entry only. `ProbeErrorKind` gains `DanglingLink`; `is_not_found` still holds for it, so a reader sees such a link as absent and only the planner refuses it.
+- Write safety unit: `ProbeFs`'s `Stat` gains `links`, the hard link count, so the plan warns `HardLinked` through the one reader. `apply` decides to write in place from the link count on disk at the moment of the write.
+- Write safety unit: `ProbeFs` gains `listing`, the entries of a directory with `not_utf8`, the count of names it has no entry for. `list` returns the entries alone, so the adapters read directories as before. The walk of a directory trashed whole does not follow a symlink inside it.
+- Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.
+- Typed reasons unit: `ApiError::ReadOnly` carries a `ReadOnlyReason` (host, the file's `ReadOnlyWhy`, or an agent rule) instead of a `RuleRef`. `ApiError` gains `HookRun`, `BadRequest` and `HistoryCorrupt` for sentences that Rust built before. `Skip::Invalid` carries an `Invalid` enum instead of a code string. Skips of a nested worktree, a rejected extension and a rejected Codex skill or subagent are `Skip::NotRead` with a rule. `Session` gains `core_rules`.
 - Scan budgets unit: the directory lister is `walk::list_tree` (and `walk::list_dir` for one level). Flat listings go through it as well, so every adapter listing has the entry budget of 2,000 and the depth limit of 8, and a test fails on any `.list(` call under `src/agents`. The Codex plugin content hash lists through `walk::list_tree_with` with no depth limit and its own entry limit (5,000 in a scan, 200,000 in `inspect`), because Codex hashes the whole tree and a capped tree has no hash. It still lists each real directory once.
 - Scan budgets unit: the counting bound is a bound on text analysis, `md::MAX_ANALYZED_BYTES` (1 MiB). Past it a token count is an estimate from the first MiB, and the reference pass and the missing-link check look for links only in the first MiB, because a span scan costs as much per byte as a count. One `TextPartlyAnalyzed` diagnostic per file says both, and a session block whose loads deliver more than the bound is `Approximate`. A text of at least 64 KiB is counted once per content, keyed by the hash of its first MiB.
 - Scan budgets unit: besides the 4 MiB per root file, import expansion has a budget of 8 MiB for the whole scan (`imports::MAX_SCAN_EXPANDED_BYTES`), charged in `ProbeFs` by the expander. Gemini expands every context file on its own, so a hundred directories whose GEMINI.md imports one 1 MiB file three times took 58 s and 370 MB without it. A root that the shared budget stopped carries no diagnostic of its own; the scan reports one `ScanExpansionExhausted`.

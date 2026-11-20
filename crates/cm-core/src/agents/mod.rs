@@ -149,6 +149,12 @@ pub(crate) fn rules_from(
     })
 }
 
+/// The rules that belong to no agent, from `core_rules.toml`.
+pub fn core_rules() -> &'static [RuleSpec] {
+    static CELL: OnceLock<Vec<RuleSpec>> = OnceLock::new();
+    rules_from(&CELL, include_str!("../core_rules.toml"))
+}
+
 /// Where an agent's home directory is, and the variable that moved it, if one did.
 pub(crate) struct HomeChoice {
     pub path: AbsPath,
@@ -198,7 +204,7 @@ pub(crate) fn presence(cx: &ScanCx, bin: &str, home_exists: bool) -> Presence {
     }
 }
 
-pub(crate) fn home_dir(cx: &ScanCx, role: &str, choice: &HomeChoice) -> HomeDir {
+pub(crate) fn home_dir(cx: &ScanCx, role: &'static str, choice: &HomeChoice) -> HomeDir {
     let exists = cx
         .fs
         .stat(&choice.path)
@@ -248,7 +254,7 @@ pub(crate) fn home_only_scan(
     cx: &ScanCx,
     agent: AgentId,
     bin: &str,
-    role: &str,
+    role: &'static str,
     choice: HomeChoice,
 ) -> AgentScan {
     let home = home_dir(cx, role, &choice);

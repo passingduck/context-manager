@@ -41,80 +41,112 @@ pub fn split_paths_string(raw: &str) -> Vec<String> {
 }
 
 /// Expands `{a,b}` groups, nested groups included. `None` when the result passes the budget
-/// of 1,000 patterns or 4 MiB.
+/// of 1,000 patterns or 4 MiB. The budget is checked before each pattern is built, so an
+/// expansion never holds more than two steps' worth of patterns, each within the budget.
 pub fn expand_braces(pattern: &str) -> Option<Vec<String>> {
     let mut out = vec![pattern.to_owned()];
-    loop {
-        let mut next = Vec::with_capacity(out.len());
-        let mut changed = false;
+    while out.iter().any(|item| first_group(item).is_some()) {
+        let mut next = Step::default();
         for item in &out {
-            match expand_once(item) {
-                Some(parts) => {
-                    changed = true;
-                    next.extend(parts);
+            match first_group(item) {
+                Some((open, close)) => {
+                    for mid in alternatives(item, open, close) {
+                        next.push([&item[..open], mid, &item[close + 1..]])?;
+                    }
                 }
-                None => next.push(item.clone()),
+                None => next.push([item, "", ""])?,
             }
         }
-        if !changed {
-            return Some(out);
-        }
-        let bytes: usize = next.iter().map(String::len).sum();
-        if next.len() > BRACE_PATTERN_BUDGET || bytes > BRACE_BYTE_BUDGET {
+        out = next.patterns;
+    }
+    Some(out)
+}
+
+/// The patterns of one expansion step.
+#[derive(Default)]
+struct Step {
+    patterns: Vec<String>,
+    bytes: usize,
+}
+
+impl Step {
+    /// Adds the pattern `parts` joined, or `None` when it would pass the budget.
+    fn push(&mut self, parts: [&str; 3]) -> Option<()> {
+        let len: usize = parts.iter().map(|p| p.len()).sum();
+        if self.patterns.len() == BRACE_PATTERN_BUDGET || self.bytes + len > BRACE_BYTE_BUDGET {
             return None;
         }
-        out = next;
+        self.bytes += len;
+        self.patterns.push(parts.concat());
+        Some(())
     }
 }
 
-/// Expands the first top-level group of `s` that has a comma, or returns `None`.
-fn expand_once(s: &str) -> Option<Vec<String>> {
-    let chars: Vec<char> = s.chars().collect();
+/// The byte offsets of the braces of the first top-level group of `s` that has a comma at its
+/// own level, or `None`. Every byte it looks for is ASCII, so each offset is a char boundary.
+fn first_group(s: &str) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
     let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\\' {
+    while i < b.len() {
+        if b[i] == b'\\' {
             i += 2;
             continue;
         }
-        if chars[i] == '{' {
-            let mut depth = 0;
-            let mut commas = Vec::new();
+        if b[i] == b'{' {
+            let mut depth = 0usize;
+            let mut comma = false;
             let mut j = i;
-            while j < chars.len() {
-                match chars[j] {
-                    '\\' => j += 1,
-                    '{' => depth += 1,
-                    '}' => {
+            while j < b.len() {
+                match b[j] {
+                    b'\\' => j += 1,
+                    b'{' => depth += 1,
+                    b'}' => {
                         depth -= 1;
                         if depth == 0 {
                             break;
                         }
                     }
-                    ',' if depth == 1 => commas.push(j),
+                    b',' if depth == 1 => comma = true,
                     _ => {}
                 }
                 j += 1;
             }
-            if j < chars.len() && !commas.is_empty() {
-                let head: String = chars[..i].iter().collect();
-                let tail: String = chars[j + 1..].iter().collect();
-                let mut bounds = vec![i];
-                bounds.extend(commas);
-                bounds.push(j);
-                return Some(
-                    bounds
-                        .windows(2)
-                        .map(|w| {
-                            let mid: String = chars[w[0] + 1..w[1]].iter().collect();
-                            format!("{head}{mid}{tail}")
-                        })
-                        .collect(),
-                );
+            if j < b.len() && comma {
+                return Some((i, j));
             }
         }
         i += 1;
     }
     None
+}
+
+/// The alternatives of the group whose braces are at `open` and `close`, one at a time.
+fn alternatives(s: &str, open: usize, close: usize) -> impl Iterator<Item = &str> {
+    let b = s.as_bytes();
+    let (mut start, mut j, mut depth) = (open + 1, open + 1, 0usize);
+    let mut done = false;
+    std::iter::from_fn(move || {
+        if done {
+            return None;
+        }
+        while j < close {
+            match b[j] {
+                b'\\' => j += 1,
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                b',' if depth == 0 => {
+                    let part = &s[start..j];
+                    j += 1;
+                    start = j;
+                    return Some(part);
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        done = true;
+        Some(&s[start..close])
+    })
 }
 
 enum Rule {

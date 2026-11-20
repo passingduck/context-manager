@@ -2,7 +2,7 @@
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use cm_core::AbsPath;
@@ -55,6 +55,21 @@ pub fn atomic_write(target: &Path, tmp: &Path, bytes: &[u8], mode: u32) -> io::R
     Ok(())
 }
 
+/// Whether `path` is a file with more than one hard link. A rename over it would give this name
+/// a new inode and leave the other names on the old content.
+pub fn has_other_names(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.nlink() > 1)
+}
+
+/// Writes `bytes` over the content of `target` and syncs it. The inode stays, so every hard link
+/// to it reads the new content. Unlike [`atomic_write`], a crash can leave the file half written;
+/// the history holds its before content.
+pub fn write_in_place(target: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut file = OpenOptions::new().write(true).truncate(true).open(target)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 /// Writes a file of the data directory: temp file, sync, rename, mode 0600.
 pub fn write_data_file(target: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = target.parent() {
@@ -68,15 +83,14 @@ pub fn write_data_file(target: &Path, bytes: &[u8]) -> io::Result<()> {
     atomic_write(target, &tmp, bytes, DATA_FILE_MODE)
 }
 
-/// Where a write to `path` lands: the target of a symlink, else `path` itself. A dangling link
-/// resolves one level, so the write creates its target.
+/// Where a write to `path` lands: the target of a symlink, else `path` itself. A symlink to
+/// nothing resolves to itself: the tool does not create a file through a link (design section 4).
 pub fn write_target(path: &AbsPath) -> PathBuf {
     let plain = path.as_path();
     match fs::symlink_metadata(plain) {
-        Ok(meta) if meta.is_symlink() => fs::canonicalize(plain).unwrap_or_else(|_| {
-            let link = fs::read_link(plain).unwrap_or_default();
-            plain.parent().map_or(link.clone(), |dir| dir.join(&link))
-        }),
+        Ok(meta) if meta.is_symlink() => {
+            fs::canonicalize(plain).unwrap_or_else(|_| plain.to_path_buf())
+        }
         _ => plain.to_path_buf(),
     }
 }

@@ -24,7 +24,11 @@ import type { MemoryRole } from "../gen/MemoryRole";
 import type { MemoryWrite } from "../gen/MemoryWrite";
 import type { Presence } from "../gen/Presence";
 import type { Problem } from "../gen/Problem";
+import type { HookRunFailure } from "../gen/HookRunFailure";
+import type { Invalid } from "../gen/Invalid";
+import type { ReadOnlyReason } from "../gen/ReadOnlyReason";
 import type { ReadOnlyWhy } from "../gen/ReadOnlyWhy";
+import type { RefusedLocation } from "../gen/RefusedLocation";
 import type { Registration } from "../gen/Registration";
 import type { Scope } from "../gen/Scope";
 import type { Severity } from "../gen/Severity";
@@ -48,6 +52,7 @@ const limitKind: Record<LimitKind, string> = {
   listingEntryChars: "catalog entry length limit",
   listingBudgetChars: "catalog budget",
   importDepth: "import depth limit",
+  scanReadBytes: "scan read budget",
 };
 const unit: Record<Unit, string> = { bytes: "bytes", chars: "characters", lines: "lines", tokens: "tokens", hops: "levels" };
 const limit = (l: Limit) => `${limitKind[l.kind]} of ${l.value.toLocaleString("en-US")} ${unit[l.unit]}`;
@@ -101,11 +106,49 @@ const warning: WarnMsgs = {
   sessionMayOverwrite: (v, c) => `A running ${c.name(v.agent)} session may write this file again from the copy it read at startup and undo this change. Restart the session after you save.`,
   sharedFile: (v, c) => `More than one agent reads this file: ${v.agents.map(c.name).join(", ")}. The change reaches all of them.`,
   throughSymlink: (v, c) => `This path is a symbolic link. The write goes to ${c.d(v.target)}.`,
+  hardLinked: (v) => `This file has ${v.links} names through hard links. The write changes the file in place, so every name gets the new text.`,
   takesEffect: (v, c) => `${c.name(v.agent)}: ${c.rule(v.when)}`,
   newImportToken: (v) => `The text ${v.raw} becomes an import attempt. The agent will try to load a file with that name.`,
   parkedOnThisMachine: () => "The parked hook is kept in this tool's data directory on this machine only. It does not follow the project to another machine.",
   notRevertible: () => "This directory is too big to keep a copy. The OS trash holds the only copy, and Revert cannot bring it back.",
   hookKeyShared: (v) => `${v.others} other hook(s) use the same name or command, and the switch turns them on or off too.`,
+};
+
+const readOnlyWhy: Msgs<ReadOnlyWhy> = {
+  managed: () => "A managed policy owns this file.",
+  pluginCache: (v) => `The plugin ${v.plugin} owns this file.`,
+  generated: () => "The agent generates this file.",
+  agentState: () => "The agent keeps its own state in this file.",
+  synced: () => "Another tool syncs this file.",
+  notUtf8: () => "This file is not valid text.",
+};
+
+const refusedLocation: Msgs<RefusedLocation> = {
+  connectorDownloads: () => "The agent never reads files in a connector download directory.",
+  scratchpad: () => "The agent never reads files in a session scratchpad.",
+  deviceOrProcess: () => "The agent never reads device files or process files.",
+};
+
+const invalid: Msgs<Invalid> = {
+  unreadable: (v) => (v.os ? `The file cannot be read. The operating system said: ${v.os}.` : "The file cannot be read."),
+  notRegular: () => "The path is not a regular file.",
+  notText: () => "The file is not valid text.",
+  frontmatter: () => "The front matter at the top of the file does not parse.",
+  toml: () => "The TOML in the file does not parse.",
+  location: (v, d) => say(refusedLocation, v.which, d),
+  outsideRoot: () => "The file is outside the project root, so the agent does not import it.",
+};
+
+const readOnlyReason: Msgs<ReadOnlyReason> = {
+  host: () => "The host is read-only here.",
+  file: (v, d) => say(readOnlyWhy, v.why, d),
+  rule: () => "The agent keeps this target read-only.",
+};
+
+const hookRun: Msgs<HookRunFailure> = {
+  emptyInvocation: () => "The hook has no command to run.",
+  programNotFound: (v) => `The program ${v.program} was not found.`,
+  startFailed: (v) => `The program ${v.program} did not start. The operating system said: ${v.os}.`,
 };
 
 export type BundledKind = Extract<DocKind, "listing" | "skillBody" | "commandBody" | "subagentPrompt" | "reference">;
@@ -137,6 +180,12 @@ export const en = {
     alreadyApplied: "Nothing was written. The disk already has this state.",
     notTrashedTitle: "These files did not go to the OS trash",
     notTrashedBody: "The OS trash was not available on this host, so the files were removed without it. The History keeps a copy, and Revert brings them back.",
+    unfinishedTitle: "What this revert does with each file",
+    unfinishedBody: "This change did not finish. The revert restores the files the change wrote and leaves every other file as it is.",
+    unfinishedRestore: "The revert writes back the text from before the change.",
+    unfinishedRemove: "The revert removes this file, which the change created.",
+    unfinishedKeepBefore: "The revert leaves it as it is. It already has the state before the change.",
+    unfinishedKeepOther: "The revert leaves it as it is. It matches neither state, and someone else may have edited it.",
     staleTitle: "The files changed while you were reviewing.",
     staleBody: "The change below is the new plan. Nothing was written. Read it again before you confirm.",
     overwriteTitle: "This replaces the newer text on disk with yours.",
@@ -465,11 +514,16 @@ export const en = {
     created: "created",
     deleted: "deleted",
     at: "Time",
-    attentionTitle: "Files were edited after this change",
-    attentionBody: "Someone edited at least one of its files after the change, so a plain revert could throw that edit away.",
+    attentionTitle: "This change did not finish",
+    attentionBody: "The program stopped before it finished this change. The list shows the state of each file. Reverting restores the files that the change wrote and leaves any other file as it is.",
+    abortedTitle: "This change was not applied",
+    abortedBody: "The change failed and the program undid what it had written. Nothing of it is on disk.",
+    fileState: {
+      atBefore: "Still as it was before the change",
+      atAfter: "Written by the change",
+      neither: "Changed by something else, so a revert leaves it alone",
+    },
     pendingBody: "This change started but did not finish. Some of its files may be written and others not.",
-    editedBetween: "These files match neither the state before nor after the change:",
-    noneEdited: "No file was edited since. Every file is still in the state the change left it.",
   },
   search: {
     title: "Search results",
@@ -540,7 +594,7 @@ export const en = {
     excluded: (v) => `The pattern ${v.pattern} excludes this file.`,
     featureOff: (v) => `The feature ${v.name} is off.`,
     alreadyLoaded: () => "The agent already loaded this file through another path.",
-    invalid: (v) => `The file is not valid: ${v.detail}.`,
+    invalid: (v, d) => say(invalid, v.why, d),
     notRead: () => "Nothing loads this file automatically.",
   } satisfies Msgs<Skip>,
   skipShort: {
@@ -673,14 +727,7 @@ export const en = {
     readOnly: () => "The agent keeps this store read-only, so nothing can be added here.",
   } satisfies Msgs<MemoryWrite>,
   memoryRole: { index: "Index", topic: "Topic", summary: "Summary", note: "Note", generated: "Generated" } satisfies Record<MemoryRole, string>,
-  readOnlyWhy: {
-    managed: () => "A managed policy owns this file.",
-    pluginCache: (v) => `The plugin ${v.plugin} owns this file.`,
-    generated: () => "The agent generates this file.",
-    agentState: () => "The agent keeps its own state in this file.",
-    synced: () => "Another tool syncs this file.",
-    notUtf8: () => "This file is not valid text.",
-  } satisfies Msgs<ReadOnlyWhy>,
+  readOnlyWhy,
   docKind: {
     instructions: "Instructions",
     rule: "Rule",
@@ -715,7 +762,7 @@ export const en = {
   format: formatName,
   severity: { error: "Errors", warning: "Warnings", info: "Notes" } satisfies Record<Severity, string>,
   severityOne: { error: "Error", warning: "Warning", info: "Note" } satisfies Record<Severity, string>,
-  changeState: { sealed: "Done", pending: "Pending", needsAttention: "Needs attention" } satisfies Record<ChangeState, string>,
+  changeState: { sealed: "Done", pending: "Pending", needsAttention: "Needs attention", aborted: "Not applied" } satisfies Record<ChangeState, string>,
   changeEdit: {
     save: "Save file",
     trash: "Move to trash",
@@ -731,9 +778,12 @@ export const en = {
     notFound: () => "The host could not find it.",
     conflict: (v, d) => `${d(v.path)} changed on disk.`,
     outsideBoundary: (v, d) => `${d(v.path)} is outside the project.`,
-    readOnly: () => "The host is read-only here.",
+    readOnly: (v, d) => say(readOnlyReason, v.why, d),
     invalidEdit: (v) => `The field ${v.field} is not valid.`,
     forbidden: () => "The host does not allow this.",
+    hookRun: (v, d) => say(hookRun, v.why, d),
+    badRequest: () => "The host could not read the request.",
+    historyCorrupt: () => "The change history is damaged.",
     io: (v) => v.detail,
     unauthorized: () => "The host rejected the access token. Open the address it printed again.",
   } satisfies Msgs<ApiError>,

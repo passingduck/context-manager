@@ -38,7 +38,7 @@ pub(super) fn slots(w: &World) -> Vec<Slot> {
         ),
         slot(
             "instructions:subdir",
-            Place::NamedDir {
+            Place::InSubdir {
                 dir: w.cwd.clone(),
                 file: "GEMINI.md".to_owned(),
             },

@@ -42,6 +42,11 @@ export function createSandbox() {
   writeFileSync(join(home, ".claude", "settings.json"), json({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo claude-pre" }] }] } }));
   writeFileSync(join(home, ".codex", "hooks.json"), json({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo codex-stop" }] }] } }));
   writeFileSync(join(home, ".gemini", "settings.json"), json({ hooks: { AfterAgent: [{ hooks: [{ type: "command", command: "echo gemini-after" }] }] } }));
+  // Gemini reads a project's context files and trusts its hooks only for a trusted folder (docs/agents/gemini-cli.md).
+  // The environment below points the host at the second file, and the first is where Gemini keeps it by default.
+  const trust = json({ [proj]: "TRUST_FOLDER" });
+  writeFileSync(join(home, ".gemini", "trustedFolders.json"), trust);
+  writeFileSync(join(root, "managed", "gemini-trusted.json"), trust);
   return { root, home, proj, data, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -70,7 +75,7 @@ export async function startHost(bin, box, { readOnly = false } = {}) {
     CONTEXT_MANAGER_DATA_DIR: box.data,
     CONTEXT_MANAGER_TOKEN: TOKEN,
     CONTEXT_MANAGER_MANAGED_DIR: join(box.root, "managed"),
-    CONTEXT_MANAGER_TRASH_REMOVES: "1",
+    CONTEXT_MANAGER_NO_OS_TRASH: "1",
     GEMINI_CLI_SYSTEM_SETTINGS_PATH: join(box.root, "managed", "gemini-system.json"),
     GEMINI_CLI_SYSTEM_DEFAULTS_PATH: join(box.root, "managed", "gemini-defaults.json"),
     GEMINI_CLI_TRUSTED_FOLDERS_PATH: join(box.root, "managed", "gemini-trusted.json"),
@@ -97,7 +102,7 @@ export async function startHost(bin, box, { readOnly = false } = {}) {
   return {
     url,
     /** The address a page opens: English, with the token and an optional route in the fragment. */
-    page: (route = "") => `${url}?lang=en#token=${TOKEN}${route ? `&${route}` : ""}`,
+    page: (route = "", lang = "en") => `${url}?lang=${lang}#token=${TOKEN}${route ? `&${route}` : ""}`,
     /** One RPC the way the page sends it. Returns the status and the parsed body. */
     async rpc(op, args) {
       const response = await fetch(`${url}api/rpc`, {

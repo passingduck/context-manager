@@ -210,7 +210,7 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
                 },
                 None,
             )
-        } else if let Some(detail) = &role.reject {
+        } else if role.reject.is_some() {
             out.diagnose(
                 Severity::Warning,
                 Subject::Extension { ext: id.clone() },
@@ -223,8 +223,8 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
                     why: RuleRef::new(RULE_REJECTED),
                 },
                 LoadStatus::Skipped {
-                    skip: Skip::Invalid {
-                        detail: detail.clone(),
+                    skip: Skip::NotRead {
+                        why: RuleRef::new(RULE_REJECTED),
                     },
                 },
                 None,

@@ -185,8 +185,8 @@ struct Parsed {
 }
 
 enum Reject {
-    Frontmatter(String),
-    Field(&'static str, String),
+    Frontmatter,
+    Field(&'static str),
 }
 
 fn sanitize(raw: &str) -> String {
@@ -289,15 +289,12 @@ fn repair(frontmatter: &str) -> Option<String> {
 }
 
 fn parse_skill(contents: &str) -> Result<Parsed, Reject> {
-    let block = extract_frontmatter(contents).ok_or_else(|| {
-        Reject::Frontmatter("missing YAML frontmatter delimited by ---".to_owned())
-    })?;
+    let block = extract_frontmatter(contents).ok_or(Reject::Frontmatter)?;
     let value: serde_json::Value = match serde_yaml_ng::from_str(&block) {
         Ok(v) => v,
-        Err(original) => match repair(&block) {
-            Some(fixed) => serde_yaml_ng::from_str(&fixed)
-                .map_err(|_| Reject::Frontmatter(original.to_string()))?,
-            None => return Err(Reject::Frontmatter(original.to_string())),
+        Err(_) => match repair(&block) {
+            Some(fixed) => serde_yaml_ng::from_str(&fixed).map_err(|_| Reject::Frontmatter)?,
+            None => return Err(Reject::Frontmatter),
         },
     };
     let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(sanitize);
@@ -306,13 +303,10 @@ fn parse_skill(contents: &str) -> Result<Parsed, Reject> {
     if let Some(name) = &name
         && name.chars().count() > MAX_NAME_CHARS
     {
-        return Err(Reject::Field(
-            "name",
-            format!("exceeds maximum length of {MAX_NAME_CHARS} characters"),
-        ));
+        return Err(Reject::Field("name"));
     }
     if description.is_empty() {
-        return Err(Reject::Field("description", "missing field".to_owned()));
+        return Err(Reject::Field("description"));
     }
     Ok(Parsed { name, description })
 }
@@ -755,8 +749,8 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             .and_then(|d| d.file_name().map(str::to_owned))
             .unwrap_or_else(|| "skill".to_owned());
         let (field, why) = match &rej.reject {
-            Reject::Frontmatter(_) => ("frontmatter".to_owned(), RuleRef::new(RULE_REJECTED)),
-            Reject::Field(f, _) => ((*f).to_owned(), RuleRef::new(RULE_REJECTED)),
+            Reject::Frontmatter => ("frontmatter".to_owned(), RuleRef::new(RULE_REJECTED)),
+            Reject::Field(f) => ((*f).to_owned(), RuleRef::new(RULE_REJECTED)),
         };
         out.diagnose(
             Severity::Warning,
@@ -778,10 +772,8 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             via: discovery(rej.rule),
             when: Activation::OnInvoke,
             status: LoadStatus::Skipped {
-                skip: Skip::Invalid {
-                    detail: match &rej.reject {
-                        Reject::Frontmatter(d) | Reject::Field(_, d) => d.clone(),
-                    },
+                skip: Skip::NotRead {
+                    why: RuleRef::new(RULE_REJECTED),
                 },
             },
             delivered: None,

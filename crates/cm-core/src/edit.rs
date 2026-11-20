@@ -19,13 +19,15 @@ use sha2::{Digest, Sha256};
 use crate::agents::{Agent, PlanCx};
 use crate::env::ScanEnv;
 use crate::model::*;
-use crate::probe_fs::{EntryKind, ProbeFs};
+use crate::probe_fs::{EntryKind, ProbeErrorKind, ProbeFs};
 use crate::scan::{MAX_READ_BYTES, Scanned};
 
 /// A directory trashed whole keeps its files as history blobs up to this many bytes. Over it,
 /// the OS trash is the only copy and the plan warns [`Warning::NotRevertible`].
 pub const MAX_TREE_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
 
+/// The walk of a directory trashed whole stops at these limits. A tree it could not read to the
+/// end is not revertible (design section 4, step 4).
 const TREE_DEPTH: usize = 16;
 const TREE_ENTRIES: usize = 10_000;
 
@@ -49,7 +51,7 @@ pub struct Planner<'a> {
 enum Mode {
     /// An editor save or a trash from the client: snapshot files and slots only.
     Client,
-    /// An agent's planner: also the parked-hook directory and directories of a slot.
+    /// An agent's planner: also the parked-hook directory and the items of a directory slot.
     Agent,
     /// A revert restores paths a recorded change touched. They were checked when recorded, and a
     /// trashed file is no longer in the snapshot. A read-only claim still refuses.
@@ -60,7 +62,7 @@ enum Disk {
     Absent,
     Text { text: String, rev: Revision },
     NotUtf8,
-    Unreadable(String),
+    Unreadable(ApiError),
 }
 
 impl Disk {
@@ -91,6 +93,35 @@ struct Draft {
 struct Tree {
     files: Vec<(AbsPath, Vec<u8>)>,
     hash: String,
+    /// False when the walk skipped something: a level below its depth limit, entries over its
+    /// count limit, an entry it could not read, a symlink, or a name the lister cannot represent.
+    complete: bool,
+}
+
+/// `<dir>/<name>` when `path` lies below it, deeper than `<dir>/<name>` itself.
+fn item_dir(dir: &AbsPath, path: &AbsPath) -> Option<AbsPath> {
+    let rest = path.as_str().strip_prefix(dir.as_str())?;
+    let rest = if dir.as_str() == "/" {
+        rest
+    } else {
+        rest.strip_prefix('/')?
+    };
+    let (name, below) = rest.split_once('/')?;
+    (!name.is_empty() && !below.is_empty()).then(|| dir.join(name))
+}
+
+/// Whether the agent lists `entry` as an item of the kind `slot` creates. Only skills, commands
+/// and subagents are items; a directory of instructions is not.
+fn is_listed_item(view: &AgentView, slot: &Slot, entry: &AbsPath) -> bool {
+    let kind = match slot.new_kind {
+        NewItemKind::Skill => ExtKind::Skill,
+        NewItemKind::Command => ExtKind::Command,
+        NewItemKind::Subagent => ExtKind::Subagent,
+        NewItemKind::Instructions | NewItemKind::Rule | NewItemKind::Memory => return false,
+    };
+    view.extensions
+        .iter()
+        .any(|ext| ext.ext_kind == kind && ext.file == *entry)
 }
 
 pub fn digest_of(change_set: &ChangeSet) -> String {
@@ -112,7 +143,7 @@ pub fn change_edit_of(edit: &Edit) -> ChangeEdit {
     }
 }
 
-fn invalid(field: &str, why: &str) -> ApiError {
+fn invalid(field: &str, why: &'static str) -> ApiError {
     ApiError::InvalidEdit {
         field: field.to_owned(),
         why: RuleRef::new(why),
@@ -120,16 +151,8 @@ fn invalid(field: &str, why: &str) -> ApiError {
 }
 
 fn read_only(why: &ReadOnlyWhy) -> ApiError {
-    let name = match why {
-        ReadOnlyWhy::Managed => "managed",
-        ReadOnlyWhy::PluginCache { .. } => "plugin_cache",
-        ReadOnlyWhy::Generated => "generated",
-        ReadOnlyWhy::AgentState => "agent_state",
-        ReadOnlyWhy::Synced => "synced",
-        ReadOnlyWhy::NotUtf8 => "not_utf8",
-    };
     ApiError::ReadOnly {
-        why: RuleRef::new(&format!("edit.read_only.{name}")),
+        why: ReadOnlyReason::File { why: why.clone() },
     }
 }
 
@@ -146,9 +169,41 @@ impl<'a> Planner<'a> {
             Edit::NewItem { agent, .. }
             | Edit::AddMemory { agent, .. }
             | Edit::AddHook { agent, .. } => self.by_agent(Some(agent), edit),
-            Edit::UpdateHook { .. } | Edit::RemoveHook { .. } | Edit::SetHookEnabled { .. } => {
+            Edit::UpdateHook { hook, .. } | Edit::RemoveHook { hook } => {
+                self.check_hook_file(hook)?;
                 self.by_agent(None, edit)
             }
+            // A switch may write elsewhere, such as Gemini's `hooksConfig.disabled`. A switch
+            // that rewrites a read-only hook file fails the boundary in `finish`.
+            Edit::SetHookEnabled { .. } => self.by_agent(None, edit),
+        }
+    }
+
+    /// Updating or removing a hook rewrites the file that defines it, so that file must be an
+    /// editable file of the snapshot. A hook that no agent lists is left to the planners, which
+    /// answer `NotFound`.
+    fn check_hook_file(&self, id: &HookId) -> Result<(), ApiError> {
+        let Some(hook) = self
+            .scanned
+            .snapshot
+            .agents
+            .iter()
+            .flat_map(|view| &view.hooks)
+            .find(|hook| hook.id == *id)
+        else {
+            return Ok(());
+        };
+        let file = &hook.source.file;
+        match self
+            .scanned
+            .snapshot
+            .files
+            .get(file)
+            .map(|entry| &entry.policy)
+        {
+            Some(EditPolicy::Editable) => Ok(()),
+            Some(EditPolicy::ReadOnly { why }) => Err(read_only(why)),
+            None => Err(ApiError::OutsideBoundary { path: file.clone() }),
         }
     }
 
@@ -163,18 +218,18 @@ impl<'a> Planner<'a> {
     fn disk(&self, path: &AbsPath) -> Disk {
         match self.fs().stat(path) {
             Err(err) if err.is_not_found() => return Disk::Absent,
-            Err(err) => return Disk::Unreadable(err.detail),
+            Err(err) => return Disk::Unreadable(err.into()),
             Ok(stat) if stat.kind != EntryKind::File => {
-                return Disk::Unreadable("not a regular file".to_owned());
+                return Disk::Unreadable(invalid("path", "edit.not_regular_file"));
             }
             Ok(stat) if stat.len > MAX_READ_BYTES => {
-                return Disk::Unreadable("file is too big".to_owned());
+                return Disk::Unreadable(invalid("path", "edit.file_too_large"));
             }
             Ok(_) => {}
         }
         match self.fs().read(path) {
             Err(err) if err.is_not_found() => Disk::Absent,
-            Err(err) => Disk::Unreadable(err.detail),
+            Err(err) => Disk::Unreadable(err.into()),
             Ok(bytes) => match String::from_utf8(bytes.as_ref().clone()) {
                 Ok(text) => Disk::Text {
                     rev: Revision::of(text.as_bytes()),
@@ -189,7 +244,7 @@ impl<'a> Planner<'a> {
     fn editable_disk(&self, path: &AbsPath) -> Result<Disk, ApiError> {
         match self.disk(path) {
             Disk::NotUtf8 => Err(read_only(&ReadOnlyWhy::NotUtf8)),
-            Disk::Unreadable(detail) => Err(ApiError::Io { detail }),
+            Disk::Unreadable(err) => Err(err),
             ok => Ok(ok),
         }
     }
@@ -197,7 +252,8 @@ impl<'a> Planner<'a> {
     fn tree(&self, dir: &AbsPath) -> Tree {
         let mut files = Vec::new();
         let mut seen = 0usize;
-        self.walk(dir, 0, &mut seen, &mut files);
+        let mut complete = true;
+        self.walk(dir, 0, &mut seen, &mut files, &mut complete);
         files.sort_by(|a, b| a.0.cmp(&b.0));
         let mut hasher = Sha256::new();
         for (path, bytes) in &files {
@@ -210,6 +266,7 @@ impl<'a> Planner<'a> {
         Tree {
             files,
             hash: format!("tree:{}", crate::model::hex(&hasher.finalize())),
+            complete,
         }
     }
 
@@ -219,27 +276,40 @@ impl<'a> Planner<'a> {
         depth: usize,
         seen: &mut usize,
         out: &mut Vec<(AbsPath, Vec<u8>)>,
+        complete: &mut bool,
     ) {
         if depth > TREE_DEPTH {
+            *complete = false;
             return;
         }
-        let Ok(entries) = self.fs().list(dir) else {
+        let Ok(listing) = self.fs().listing(dir) else {
+            *complete = false;
             return;
         };
-        for entry in entries.iter() {
+        // A name that is not UTF-8 has no entry, so the history holds no copy of its file.
+        if listing.not_utf8 > 0 {
+            *complete = false;
+        }
+        for entry in listing.entries.iter() {
             *seen += 1;
             if *seen > TREE_ENTRIES {
+                *complete = false;
                 return;
             }
             let path = dir.join(&entry.name);
+            // History cannot hold a link, and the files behind one are not inside the tree.
+            if self.fs().stat(&path).is_ok_and(|stat| stat.is_symlink) {
+                *complete = false;
+                continue;
+            }
             match entry.kind {
-                EntryKind::Dir => self.walk(&path, depth + 1, seen, out),
-                EntryKind::File => {
-                    if let Ok(bytes) = self.fs().read(&path) {
-                        out.push((path, bytes.as_ref().clone()));
-                    }
-                }
-                EntryKind::Other => {}
+                EntryKind::Dir => self.walk(&path, depth + 1, seen, out, complete),
+                EntryKind::File => match self.fs().read(&path) {
+                    Ok(bytes) => out.push((path, bytes.as_ref().clone())),
+                    Err(_) => *complete = false,
+                },
+                // A broken symlink, a socket or a pipe: history cannot hold it.
+                EntryKind::Other => *complete = false,
             }
         }
     }
@@ -259,7 +329,7 @@ impl<'a> Planner<'a> {
                             name.ends_with(&format!(".{}", ext.trim_start_matches('.')))
                         })
                 }
-                Place::NamedDir { dir, file } => {
+                Place::NamedDir { dir, file } | Place::InSubdir { dir, file } => {
                     path.file_name() == Some(file.as_str())
                         && path.parent().and_then(|d| d.parent()).as_ref() == Some(dir)
                 }
@@ -271,13 +341,29 @@ impl<'a> Planner<'a> {
         owners
     }
 
-    /// The agents whose slot directory contains `path` at any depth.
-    fn slot_dir_owners(&self, path: &AbsPath) -> Vec<AgentId> {
+    /// The agents with a directory slot that holds `path` inside one of its items: `path` is
+    /// below `<dir>/<name>/`, and `<dir>/<name>/<entry file>` is an item of the slot's kind that
+    /// the snapshot lists, or a file that `ops` creates. Any other path below the slot's
+    /// directory belongs to no item.
+    fn slot_dir_owners(&self, path: &AbsPath, ops: &[FileOp]) -> Vec<AgentId> {
+        let created = |entry: &AbsPath| {
+            ops.iter().any(|op| {
+                op.path == *entry
+                    && op.expect == Base::Absent
+                    && matches!(op.action, Action::Write { .. })
+            })
+        };
         let mut owners = Vec::new();
         for view in &self.scanned.snapshot.agents {
-            let hit = view.slots.iter().any(|slot| match &slot.place {
-                Place::NamedDir { dir, .. } => path != dir && path.starts_with(dir),
-                _ => false,
+            let hit = view.slots.iter().any(|slot| {
+                let Place::NamedDir { dir, file } = &slot.place else {
+                    return false;
+                };
+                let Some(item) = item_dir(dir, path) else {
+                    return false;
+                };
+                let entry = item.join(file);
+                is_listed_item(view, slot, &entry) || created(&entry)
             });
             if hit {
                 owners.push(view.agent.clone());
@@ -286,7 +372,9 @@ impl<'a> Planner<'a> {
         owners
     }
 
-    fn check_path(&self, path: &AbsPath, mode: Mode) -> Result<(), ApiError> {
+    /// `ops` is the change the path belongs to: an agent's plan may write inside a directory
+    /// item that the same change creates.
+    fn check_path(&self, path: &AbsPath, mode: Mode, ops: &[FileOp]) -> Result<(), ApiError> {
         if let Some(entry) = self.scanned.snapshot.files.get(path) {
             return match &entry.policy {
                 EditPolicy::Editable => Ok(()),
@@ -297,7 +385,7 @@ impl<'a> Planner<'a> {
             Mode::Revert => true,
             Mode::Agent => {
                 !self.slot_owners(path).is_empty()
-                    || !self.slot_dir_owners(path).is_empty()
+                    || !self.slot_dir_owners(path, ops).is_empty()
                     || path.starts_with(self.parked_dir)
             }
             Mode::Client => !self.slot_owners(path).is_empty(),
@@ -321,7 +409,7 @@ impl<'a> Planner<'a> {
         for id in self
             .slot_owners(path)
             .into_iter()
-            .chain(self.slot_dir_owners(path))
+            .chain(self.slot_dir_owners(path, &[]))
         {
             if !owners.contains(&id) {
                 owners.push(id);
@@ -418,16 +506,22 @@ impl<'a> Planner<'a> {
         for op in &ops {
             match op.action {
                 Action::TrashDir => self.check_dir(&op.path, mode)?,
-                _ => self.check_path(&op.path, mode)?,
+                _ => self.check_path(&op.path, mode, &ops)?,
             }
+            let landing = self.landing(&op.path)?;
             self.verify(op, &mut before)?;
             self.guard_op(op, &before)?;
             self.add_write_warnings(op, &before, &mut warnings);
-            let through = self.fs().stat(&op.path).ok().filter(|s| s.is_symlink);
-            if through.is_some()
-                && let Ok(target) = self.fs().real_path(&op.path)
-            {
+            if let Some(target) = landing {
                 warnings.push(Warning::ThroughSymlink { target });
+            }
+            // Design section 4, step 4: a file with other names is written in place.
+            if let Action::Write { .. } = op.action
+                && let Ok(stat) = self.fs().stat(&op.path)
+                && stat.links > 1
+            {
+                let links = u32::try_from(stat.links).unwrap_or(u32::MAX);
+                warnings.push(Warning::HardLinked { links });
             }
             let users = self.users(&op.path);
             if users.len() > 1 {
@@ -435,6 +529,57 @@ impl<'a> Planner<'a> {
             }
         }
         Ok(self.preview(summary, ops, before, warnings, conflicts))
+    }
+
+    /// The root a path lies below: the deepest of the home directory, the project root and `cwd`
+    /// that holds it. A symlink at or above a root, such as macOS `/tmp` or a home directory that
+    /// is a link, is where the user keeps the tree, not a link a write goes through.
+    fn root_of(&self, path: &AbsPath) -> Option<AbsPath> {
+        [
+            Some(&self.env.home),
+            self.scanned.snapshot.git_root.as_ref(),
+            Some(&self.env.cwd),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|root| path.starts_with(root) && path != *root)
+        .max_by_key(|root| root.as_str().len())
+        .cloned()
+    }
+
+    /// Where an operation on `path` lands when the path's own entry, or a directory above it
+    /// below its root, is a symlink (design section 4, `Warning::ThroughSymlink`). `None` when no
+    /// link is on the way. A symlink to nothing on the way is an `InvalidEdit`: the tool does not
+    /// create a file through a link. A path below no root is checked at its own entry only.
+    fn landing(&self, path: &AbsPath) -> Result<Option<AbsPath>, ApiError> {
+        let mut on_the_way = vec![path.clone()];
+        if let Some(root) = self.root_of(path) {
+            while let Some(dir) = on_the_way
+                .last()
+                .and_then(AbsPath::parent)
+                .filter(|dir| *dir != root)
+            {
+                on_the_way.push(dir);
+            }
+        }
+        let mut linked = false;
+        for entry in &on_the_way {
+            match self.fs().stat(entry) {
+                Ok(stat) => linked |= stat.is_symlink,
+                Err(err) if err.kind == ProbeErrorKind::DanglingLink => {
+                    return Err(invalid("path", "edit.dangling_symlink"));
+                }
+                Err(_) => {}
+            }
+        }
+        if !linked {
+            return Ok(None);
+        }
+        // The deepest entry that exists, resolved, with the rest of the path below it.
+        Ok(on_the_way.iter().find_map(|entry| {
+            let real = self.fs().real_path(entry).ok()?;
+            Some(real.join(path.as_str()[entry.as_str().len()..].trim_start_matches('/')))
+        }))
     }
 
     /// Each owner of the file adds its warnings for the write, once.
@@ -470,18 +615,23 @@ impl<'a> Planner<'a> {
         }
     }
 
+    /// The entry file of `dir` when `dir` is one item of a directory slot, such as
+    /// `skills/<name>`, that the snapshot lists as an item of the slot's kind.
+    fn item_entry(&self, dir: &AbsPath) -> Option<AbsPath> {
+        self.scanned.snapshot.agents.iter().find_map(|view| {
+            view.slots.iter().find_map(|slot| match &slot.place {
+                Place::NamedDir { dir: parent, file } if dir.parent().as_ref() == Some(parent) => {
+                    let entry = dir.join(file);
+                    is_listed_item(view, slot, &entry).then_some(entry)
+                }
+                _ => None,
+            })
+        })
+    }
+
+    /// Only a listed item of a directory slot goes to the trash whole.
     fn check_dir(&self, dir: &AbsPath, mode: Mode) -> Result<(), ApiError> {
-        let in_slot = self
-            .scanned
-            .snapshot
-            .agents
-            .iter()
-            .flat_map(|view| &view.slots)
-            .any(|slot| match &slot.place {
-                Place::NamedDir { dir: parent, .. } => dir.parent().as_ref() == Some(parent),
-                _ => false,
-            });
-        if in_slot || mode == Mode::Revert {
+        if self.item_entry(dir).is_some() || mode == Mode::Revert {
             Ok(())
         } else {
             Err(ApiError::OutsideBoundary { path: dir.clone() })
@@ -558,7 +708,7 @@ impl<'a> Planner<'a> {
     // -----------------------------------------------------------------------------------------
 
     fn save(&self, path: &AbsPath, base: &Base, text: &str) -> Result<Preview, ApiError> {
-        self.check_path(path, Mode::Client)?;
+        self.check_path(path, Mode::Client, &[])?;
         let summary = self.summary(ChangeEdit::Save, vec![path.clone()]);
         let disk = self.editable_disk(path)?;
         if disk.text() == Some(text) {
@@ -595,10 +745,11 @@ impl<'a> Planner<'a> {
         )
     }
 
-    /// A file that is the entry file of a directory slot (`skills/<name>/SKILL.md`) trashes the
-    /// whole directory, with the hash of its tree as the base of the operation.
+    /// The entry file of a listed item of a directory slot (`skills/<name>/SKILL.md`) trashes the
+    /// whole directory, with the hash of its tree as the base of the operation. Any other file,
+    /// such as a `GEMINI.md` in a subdirectory, is trashed alone.
     fn trash(&self, path: &AbsPath, base: &Revision) -> Result<Preview, ApiError> {
-        self.check_path(path, Mode::Client)?;
+        self.check_path(path, Mode::Client, &[])?;
         let summary = self.summary(ChangeEdit::Trash, vec![path.clone()]);
         let disk = self.editable_disk(path)?;
         let text = match &disk {
@@ -613,20 +764,10 @@ impl<'a> Planner<'a> {
                 });
             }
         };
-        let is_dir_entry = self
-            .scanned
-            .snapshot
-            .agents
-            .iter()
-            .flat_map(|view| &view.slots)
-            .any(|slot| match &slot.place {
-                Place::NamedDir { dir, file } => {
-                    path.file_name() == Some(file.as_str())
-                        && path.parent().and_then(|d| d.parent()).as_ref() == Some(dir)
-                }
-                _ => false,
-            });
-        if !is_dir_entry {
+        let item = path
+            .parent()
+            .filter(|dir| self.item_entry(dir).as_ref() == Some(path));
+        let Some(dir) = item else {
             return self.finish(
                 Mode::Client,
                 Draft {
@@ -641,8 +782,7 @@ impl<'a> Planner<'a> {
                     conflicts: Vec::new(),
                 },
             );
-        }
-        let dir = path.parent().expect("an entry file has a directory");
+        };
         let tree = self.tree(&dir);
         let total: u64 = tree.files.iter().map(|(_, bytes)| bytes.len() as u64).sum();
         let all_text = tree
@@ -651,7 +791,7 @@ impl<'a> Planner<'a> {
             .all(|(_, bytes)| std::str::from_utf8(bytes).is_ok());
         let mut warnings = Vec::new();
         let mut before = BTreeMap::new();
-        if total > MAX_TREE_JOURNAL_BYTES || !all_text {
+        if total > MAX_TREE_JOURNAL_BYTES || !all_text || !tree.complete {
             warnings.push(Warning::NotRevertible);
         }
         if total <= MAX_TREE_JOURNAL_BYTES {
@@ -688,7 +828,7 @@ impl<'a> Planner<'a> {
         let mut before = BTreeMap::new();
         let mut conflicts = Vec::new();
         for file in &detail.files {
-            self.check_path(&file.path, Mode::Revert)?;
+            self.check_path(&file.path, Mode::Revert, &[])?;
             let disk = self.editable_disk(&file.path)?;
             if disk.text() == file.before.as_deref() {
                 continue;
@@ -966,6 +1106,150 @@ mod tests {
         assert!(matches!(err, ApiError::InvalidEdit { .. }));
     }
 
+    /// An agent whose `NewItem` plan writes `writes`, with a skill slot over `skills/`.
+    fn writer(fx: &Fixture, writes: &[&str], skills: &[&str]) -> TestAgent {
+        let dir = fx.project_path(".claude/skills");
+        TestAgent {
+            slot: Some(Place::NamedDir {
+                dir: dir.clone(),
+                file: "SKILL.md".into(),
+            }),
+            writes: writes
+                .iter()
+                .map(|rel| (dir.join(rel), "x".to_owned()))
+                .collect(),
+            skills: skills.iter().map(|rel| dir.join(rel)).collect(),
+            ..TestAgent::default()
+        }
+    }
+
+    fn new_item() -> Edit {
+        Edit::NewItem {
+            agent: AgentId::parse("claude").unwrap(),
+            slot: SlotId("s".into()),
+            name: None,
+        }
+    }
+
+    #[test]
+    fn an_agent_plan_may_not_write_below_a_directory_slot_outside_its_items() {
+        let fx = Fixture::new();
+        fx.write(
+            &fx.project_path(".claude/skills/foo/hooks/hooks.json"),
+            "{}",
+        );
+        for rel in ["foo/hooks/hooks.json", "loose.md", "foo/SKILL.md/x"] {
+            let path = fx.project_path(".claude/skills").join(rel);
+            assert_eq!(
+                plan_with(&writer(&fx, &[rel], &[]), &fx, &new_item()).unwrap_err(),
+                ApiError::OutsideBoundary { path },
+                "{rel}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_agent_plan_may_write_inside_a_listed_skill_or_one_the_change_creates() {
+        let fx = Fixture::new();
+        fx.write(&fx.project_path(".claude/skills/known/SKILL.md"), "skill");
+        let listed = writer(&fx, &["known/refs/a.md"], &["known/SKILL.md"]);
+        assert!(plan_with(&listed, &fx, &new_item()).is_ok());
+        let created = writer(&fx, &["new/SKILL.md", "new/refs/a.md"], &[]);
+        assert_eq!(
+            plan_with(&created, &fx, &new_item())
+                .unwrap()
+                .change_set
+                .ops
+                .len(),
+            2
+        );
+    }
+
+    /// A file in a subdirectory is no item: a change that creates `src/GEMINI.md` may write that
+    /// file and nothing else in `src/`.
+    #[test]
+    fn an_agent_plan_that_creates_a_subdirectory_file_may_not_write_beside_it() {
+        let fx = Fixture::new();
+        let src = fx.project_path("src");
+        let agent = TestAgent {
+            slot: Some(Place::InSubdir {
+                dir: fx.project(),
+                file: "GEMINI.md".into(),
+            }),
+            writes: vec![
+                (src.join("GEMINI.md"), "context".to_owned()),
+                (src.join("main.rs"), "fn main() {}".to_owned()),
+            ],
+            ..TestAgent::default()
+        };
+        assert_eq!(
+            plan_with(&agent, &fx, &new_item()).unwrap_err(),
+            ApiError::OutsideBoundary {
+                path: src.join("main.rs")
+            }
+        );
+    }
+
+    /// Design section 4, step 4: a tree the plan could not capture completely is not revertible.
+    #[test]
+    fn a_skill_with_a_file_deeper_than_the_walk_is_not_revertible() {
+        let fx = Fixture::new();
+        let entry = fx.project_path(".claude/skills/deep/SKILL.md");
+        fx.write(&entry, "skill");
+        let trash = Edit::Trash {
+            path: entry.clone(),
+            base: Revision::of(b"skill"),
+        };
+        let a = writer(&fx, &[], &["deep/SKILL.md"]);
+        let levels = |n: usize| (1..=n).map(|i| format!("d{i}/")).collect::<String>();
+
+        fx.write(
+            &fx.project_path(&format!(".claude/skills/deep/{}f.txt", levels(16))),
+            "16",
+        );
+        let preview = plan_with(&a, &fx, &trash).unwrap();
+        assert_eq!(preview.change_set.ops[0].action, Action::TrashDir);
+        assert!(!preview.warnings.contains(&Warning::NotRevertible));
+        assert_eq!(preview.before.len(), 2);
+
+        let deep = fx.project_path(&format!(".claude/skills/deep/{}f.txt", levels(17)));
+        fx.write(&deep, "17");
+        let preview = plan_with(&a, &fx, &trash).unwrap();
+        assert_eq!(preview.change_set.ops[0].action, Action::TrashDir);
+        assert!(preview.warnings.contains(&Warning::NotRevertible));
+        assert!(!preview.before.contains_key(&deep));
+    }
+
+    #[test]
+    fn an_entry_file_name_outside_a_listed_item_trashes_only_that_file() {
+        let fx = Fixture::new();
+        let entry = fx.project_path(".claude/skills/src/SKILL.md");
+        fx.write(&entry, "not a skill the agent lists");
+        fx.write(
+            &fx.project_path(".claude/skills/src/main.rs"),
+            "fn main() {}",
+        );
+        let a = writer(&fx, &[], &[]);
+        let preview = plan_with(
+            &a,
+            &fx,
+            &Edit::Trash {
+                path: entry.clone(),
+                base: Revision::of(b"not a skill the agent lists"),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            preview
+                .change_set
+                .ops
+                .iter()
+                .map(|op| (op.path.clone(), op.action.clone()))
+                .collect::<Vec<_>>(),
+            vec![(entry, Action::Trash)]
+        );
+    }
+
     #[test]
     fn trashing_an_entry_file_trashes_its_directory_and_its_tree_hash_moves_with_the_siblings() {
         let fx = Fixture::new();
@@ -973,11 +1257,7 @@ mod tests {
         let entry = dir.join("deploy/SKILL.md");
         fx.write(&entry, "skill");
         fx.write(&dir.join("deploy/notes.md"), "n");
-        let mut a = agent(&[&entry]);
-        a.slot = Some(Place::NamedDir {
-            dir: dir.clone(),
-            file: "SKILL.md".into(),
-        });
+        let a = writer(&fx, &[], &["deploy/SKILL.md"]);
         let edit = Edit::Trash {
             path: entry.clone(),
             base: Revision::of(b"skill"),

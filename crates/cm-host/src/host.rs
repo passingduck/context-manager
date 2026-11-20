@@ -63,16 +63,23 @@ impl HostConfig {
     }
 }
 
-struct RemovingTrash;
+/// The host with `CONTEXT_MANAGER_NO_OS_TRASH` set: the OS trash is not available. `apply` then
+/// takes the path of design section 4, step 4: a path the history holds completely is removed
+/// and reported as not trashed, any other path stays and the operation fails.
+struct NoOsTrash;
 
-impl Trasher for RemovingTrash {
-    fn trash(&self, path: &std::path::Path) -> Result<(), String> {
-        let removed = if path.is_dir() {
-            std::fs::remove_dir_all(path)
-        } else {
-            std::fs::remove_file(path)
-        };
-        removed.map_err(|e| e.to_string())
+impl Trasher for NoOsTrash {
+    fn trash(&self, _: &std::path::Path) -> Result<(), String> {
+        Err("the OS trash is switched off".into())
+    }
+}
+
+/// `no_os_trash` is `CONTEXT_MANAGER_NO_OS_TRASH`, read once by [`Host::new`].
+pub(crate) fn trasher(no_os_trash: bool) -> Box<dyn Trasher> {
+    if no_os_trash {
+        Box::new(NoOsTrash)
+    } else {
+        Box::new(OsTrash)
     }
 }
 
@@ -100,12 +107,8 @@ const MAX_HISTORY_LIMIT: usize = 500;
 impl Host {
     pub fn new(config: HostConfig) -> Host {
         // `tools/e2e` sets this so that its throwaway run never reaches the OS trash.
-        let trasher: Box<dyn Trasher> =
-            if std::env::var_os("CONTEXT_MANAGER_TRASH_REMOVES").is_some() {
-                Box::new(RemovingTrash)
-            } else {
-                Box::new(OsTrash)
-            };
+        let no_os_trash = std::env::var_os("CONTEXT_MANAGER_NO_OS_TRASH").is_some();
+        let trasher = trasher(no_os_trash);
         Host::with_parts(config, registry(), trasher)
     }
 
@@ -135,8 +138,8 @@ impl Host {
         host
     }
 
-    /// Finishes or flags the changes a crash left pending (design section 4). A read-only host
-    /// only classifies them. Errors are not fatal: the next history read tries again.
+    /// Classifies the changes a crash left pending (design section 4). A read-only host leaves
+    /// their records as they are. Errors are not fatal: the next history read tries again.
     fn recover_now(&self) {
         if self.ctx.data_dir.as_path().exists() {
             recovery::recover(&self.ctx, !self.config.read_only);
@@ -192,6 +195,7 @@ impl Api for Host {
                 .into_iter()
                 .map(|record| record.id)
                 .collect(),
+            core_rules: cm_core::agents::core_rules().to_vec(),
         })
     }
 
@@ -247,7 +251,7 @@ impl Api for Host {
     async fn apply(&self, req: ApplyReq) -> Result<ApplyResult, ApiError> {
         if self.config.read_only {
             return Err(ApiError::ReadOnly {
-                why: RuleRef::new("host.read_only"),
+                why: ReadOnlyReason::Host,
             });
         }
         let ctx = self.ctx.clone();
@@ -269,14 +273,14 @@ impl Api for Host {
         .map_err(join_error)?
     }
 
-    /// Newest first. Recovery runs first, so a record a crash left behind is finished or flagged
-    /// before the list is read.
+    /// Newest first. Recovery runs first, so a record a crash left behind is classified before
+    /// the list is read.
     async fn history(&self, req: HistoryReq) -> Result<Vec<ChangeRecord>, ApiError> {
         let ctx = self.ctx.clone();
-        let roll_forward = !self.config.read_only;
+        let write = !self.config.read_only;
         tokio::task::spawn_blocking(move || {
             if ctx.data_dir.as_path().exists() {
-                recovery::recover(&ctx, roll_forward);
+                recovery::recover(&ctx, write);
             }
             let limit = match req.limit as usize {
                 0 => DEFAULT_HISTORY_LIMIT,
@@ -296,10 +300,10 @@ impl Api for Host {
 
     async fn change(&self, req: ChangeReq) -> Result<ChangeDetail, ApiError> {
         let ctx = self.ctx.clone();
-        let roll_forward = !self.config.read_only;
+        let write = !self.config.read_only;
         tokio::task::spawn_blocking(move || {
             if ctx.data_dir.as_path().exists() {
-                recovery::recover(&ctx, roll_forward);
+                recovery::recover(&ctx, write);
             }
             let record = ctx.history.record(&req.id).ok_or(ApiError::NotFound)?;
             ctx.history.detail_of(record)
@@ -408,7 +412,7 @@ impl Api for Host {
     async fn run_hook(&self, req: RunReq) -> Result<HookRun, ApiError> {
         if self.config.read_only {
             return Err(ApiError::ReadOnly {
-                why: RuleRef::new("host.read_only"),
+                why: ReadOnlyReason::Host,
             });
         }
         let scanned = self.scanned(req.cwd.clone()).await?;

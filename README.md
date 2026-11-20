@@ -66,7 +66,7 @@ You can add, edit and delete any file the agents read, except files the agents o
 
 1. **Preview.** Every edit is planned first. You see the exact diff and every warning before anything is written. The write applies only if the plan is still the one you previewed.
 2. **Conflict.** If the file changed on disk after you opened it, the save becomes a conflict that shows the current text. It never overwrites.
-3. **Trash.** A deleted file goes to the operating system trash. Where no trash exists, such as a Linux server without a desktop, the file is removed and the history keeps its content.
+3. **Trash.** A deleted file goes to the operating system trash. Where no trash exists, such as a Linux server without a desktop, a file or directory whose content the history holds completely is removed and the result lists it as not trashed. A directory the history cannot hold completely, such as one with a binary file, is not removed, and the operation fails. Set `CONTEXT_MANAGER_NO_OS_TRASH` before the program starts to make it treat the OS trash as not available. This switch never deletes anything that a revert cannot bring back.
 4. **History.** Before a change applies, the tool stores the old content. A change that was interrupted is finished or reported when the tool starts.
 5. **Revert.** A history entry reverts as a new change with its own preview. A deleted file comes back from the history copy, so emptying the trash does not break it.
 
@@ -94,3 +94,7 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 - **The write flows.** Driven through the real UI in headless Chrome on a throwaway home directory, never on a real agent home.
 - **Token counts.** Estimates made with the o200k tokenizer. Claude and Gemini use other tokenizers, so their real counts differ.
 - **Linux.** The headless build is only compile-checked with `scripts/check-linux.sh`. It was never run on Linux, and the trash behavior on a headless Linux host is untested.
+
+## License
+
+MIT. The full text is in [`LICENSE`](LICENSE).

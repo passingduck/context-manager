@@ -376,7 +376,7 @@ fn an_import_outside_the_allowed_root_is_refused_without_git_and_allowed_with_gi
     assert_eq!(
         *skip(load),
         Skip::Invalid {
-            detail: "outside-root".to_owned()
+            why: Invalid::OutsideRoot
         }
     );
     assert!(

@@ -2,8 +2,12 @@ import type { AccessRule } from "../gen/AccessRule";
 import type { DisabledBy } from "../gen/DisabledBy";
 import type { Format } from "../gen/Format";
 import type { HookBlock } from "../gen/HookBlock";
+import type { HookRunFailure } from "../gen/HookRunFailure";
+import type { Invalid } from "../gen/Invalid";
 import type { Limit } from "../gen/Limit";
 import type { LimitKind } from "../gen/LimitKind";
+import type { ReadOnlyReason } from "../gen/ReadOnlyReason";
+import type { RefusedLocation } from "../gen/RefusedLocation";
 import type { Unit } from "../gen/Unit";
 import type { en } from "./en";
 import { say, type Msgs } from "./types";
@@ -18,6 +22,7 @@ const limitKind: Record<LimitKind, string> = {
   listingEntryChars: "목록 항목 길이 한도",
   listingBudgetChars: "목록 예산",
   importDepth: "가져오기 깊이 한도",
+  scanReadBytes: "스캔 읽기 예산",
 };
 const unit: Record<Unit, string> = { bytes: "바이트", chars: "글자", lines: "줄", tokens: "토큰", hops: "단계" };
 /** Appends the object particle that fits the last syllable of a Korean word. */
@@ -76,11 +81,49 @@ const warning: typeof en.warning = {
   sessionMayOverwrite: (v, c) => `실행 중인 ${c.name(v.agent)} 세션이 시작할 때 읽은 사본으로 이 파일을 다시 써서 이 변경을 되돌릴 수 있습니다. 저장한 뒤 세션을 다시 시작하세요.`,
   sharedFile: (v, c) => `이 파일은 에이전트 여러 개가 읽습니다(${v.agents.map(c.name).join(", ")}). 변경은 모두에게 적용됩니다.`,
   throughSymlink: (v, c) => `이 경로는 심볼릭 링크입니다. 쓰기는 ${c.d(v.target)}에 적용됩니다.`,
+  hardLinked: (v) => `이 파일은 하드 링크로 이름이 ${v.links}개 있습니다. 쓰기는 파일을 그 자리에서 바꾸므로 모든 이름이 새 내용을 갖게 됩니다.`,
   takesEffect: (v, c) => `${c.name(v.agent)}: ${c.rule(v.when)}`,
   newImportToken: (v) => `${v.raw} 텍스트가 가져오기 시도로 바뀝니다. 에이전트가 그 이름의 파일을 불러오려고 합니다.`,
   parkedOnThisMachine: () => "보관한 훅은 이 컴퓨터의 이 도구 데이터 디렉터리에만 있습니다. 프로젝트를 다른 컴퓨터로 옮겨도 따라가지 않습니다.",
   notRevertible: () => "이 디렉터리는 너무 커서 사본을 보관하지 않습니다. OS 휴지통에 있는 것이 유일한 사본이며 되돌리기로는 복구할 수 없습니다.",
   hookKeyShared: (v) => `이름이나 명령이 같은 다른 훅이 ${v.others}개 있으며, 이 전환은 그 훅도 함께 켜거나 끕니다.`,
+};
+
+const readOnlyWhy: typeof en.readOnlyWhy = {
+  managed: () => "관리 정책이 이 파일을 소유합니다.",
+  pluginCache: (v) => `이 파일은 플러그인 ${v.plugin}의 소유입니다.`,
+  generated: () => "에이전트가 이 파일을 자동으로 만듭니다.",
+  agentState: () => "에이전트가 자기 상태를 이 파일에 저장합니다.",
+  synced: () => "다른 도구가 이 파일을 동기화합니다.",
+  notUtf8: () => "이 파일은 올바른 텍스트가 아닙니다.",
+};
+
+const refusedLocation: Msgs<RefusedLocation> = {
+  connectorDownloads: () => "에이전트는 커넥터 다운로드 디렉터리의 파일을 읽지 않습니다.",
+  scratchpad: () => "에이전트는 세션 스크래치패드의 파일을 읽지 않습니다.",
+  deviceOrProcess: () => "에이전트는 장치 파일과 프로세스 파일을 읽지 않습니다.",
+};
+
+const invalid: Msgs<Invalid> = {
+  unreadable: (v) => (v.os ? `파일을 읽을 수 없습니다. 운영체제는 "${v.os}"라고 답했습니다.` : "파일을 읽을 수 없습니다."),
+  notRegular: () => "이 경로는 일반 파일이 아닙니다.",
+  notText: () => "파일이 올바른 텍스트가 아닙니다.",
+  frontmatter: () => "파일 맨 위의 프런트매터를 해석할 수 없습니다.",
+  toml: () => "파일의 TOML을 해석할 수 없습니다.",
+  location: (v, d) => say(refusedLocation, v.which, d),
+  outsideRoot: () => "파일이 프로젝트 루트 밖에 있어서 에이전트가 가져오지 않습니다.",
+};
+
+const readOnlyReason: Msgs<ReadOnlyReason> = {
+  host: () => "호스트가 읽기 전용입니다.",
+  file: (v, d) => say(readOnlyWhy, v.why, d),
+  rule: () => "에이전트가 이 대상을 읽기 전용으로 둡니다.",
+};
+
+const hookRun: Msgs<HookRunFailure> = {
+  emptyInvocation: () => "훅에 실행할 명령이 없습니다.",
+  programNotFound: (v) => `프로그램 ${eul(v.program)} 찾지 못했습니다.`,
+  startFailed: (v) => `프로그램 ${eul(v.program)} 시작하지 못했습니다. 운영체제는 "${v.os}"라고 답했습니다.`,
 };
 
 export const ko: typeof en = {
@@ -110,6 +153,12 @@ export const ko: typeof en = {
     alreadyApplied: "아무것도 쓰지 않았습니다. 디스크가 이미 이 상태입니다.",
     notTrashedTitle: "다음 파일은 OS 휴지통으로 가지 않았습니다",
     notTrashedBody: "이 호스트에서는 OS 휴지통을 쓸 수 없어서 휴지통 없이 파일을 지웠습니다. 변경 이력에 사본이 있고 되돌리기로 복구할 수 있습니다.",
+    unfinishedTitle: "되돌리면 각 파일에 일어나는 일",
+    unfinishedBody: "이 변경은 끝나지 않았습니다. 되돌리면 프로그램은 이 변경이 쓴 파일을 복원하고, 다른 파일은 그대로 둡니다.",
+    unfinishedRestore: "되돌리면 프로그램이 변경 전의 내용을 다시 씁니다.",
+    unfinishedRemove: "되돌리면 프로그램이 이 변경이 만든 이 파일을 지웁니다.",
+    unfinishedKeepBefore: "되돌려도 이 파일은 그대로입니다. 이미 변경 전 상태입니다.",
+    unfinishedKeepOther: "되돌려도 이 파일은 그대로입니다. 변경 전 상태도 변경 후 상태도 아니며, 다른 사람이 고쳤을 수 있습니다.",
     staleTitle: "검토하는 사이에 파일이 바뀌었습니다.",
     staleBody: "아래 내용이 새 계획입니다. 아무것도 쓰지 않았습니다. 확인하기 전에 다시 읽어 보세요.",
     overwriteTitle: "디스크에 있는 더 새로운 내용을 내 텍스트로 바꿉니다.",
@@ -438,11 +487,16 @@ export const ko: typeof en = {
     created: "새로 만듦",
     deleted: "삭제함",
     at: "시각",
-    attentionTitle: "이 변경 뒤에 파일이 수정되었습니다",
-    attentionBody: "이 변경이 만든 파일 가운데 하나 이상을 누군가 그 뒤에 고쳤습니다. 그냥 되돌리면 그 수정이 사라질 수 있습니다.",
+    attentionTitle: "이 변경은 끝나지 않았습니다",
+    attentionBody: "프로그램이 이 변경을 끝내기 전에 멈췄습니다. 목록은 각 파일의 상태를 보여 줍니다. 되돌리면 프로그램은 이 변경이 쓴 파일을 원래대로 복원하고, 다른 상태의 파일은 그대로 둡니다.",
+    abortedTitle: "이 변경은 적용되지 않았습니다",
+    abortedBody: "변경이 실패해서 프로그램이 이미 쓴 내용을 되돌렸습니다. 이 변경의 내용은 디스크에 남아 있지 않습니다.",
+    fileState: {
+      atBefore: "변경 전 상태 그대로입니다",
+      atAfter: "이 변경이 쓴 상태입니다",
+      neither: "다른 작업이 바꾼 파일이어서 되돌려도 건드리지 않습니다",
+    },
     pendingBody: "이 변경은 시작되었지만 끝나지 않았습니다. 일부 파일만 쓰였을 수 있습니다.",
-    editedBetween: "다음 파일은 변경 전 상태와도 변경 후 상태와도 다릅니다.",
-    noneEdited: "그 뒤에 수정된 파일은 없습니다. 모든 파일이 변경이 남긴 상태 그대로입니다.",
   },
   search: {
     title: "검색 결과",
@@ -513,7 +567,7 @@ export const ko: typeof en = {
     excluded: (v) => `이 파일은 제외 패턴 ${v.pattern}에 걸립니다.`,
     featureOff: (v) => `${v.name} 기능이 꺼져 있습니다.`,
     alreadyLoaded: () => "에이전트가 다른 경로로 이 파일을 이미 불러왔습니다.",
-    invalid: (v) => `파일이 올바르지 않습니다(${v.detail}).`,
+    invalid: (v, d) => say(invalid, v.why, d),
     notRead: () => "이 파일을 자동으로 불러오는 것은 없습니다.",
   },
   skipShort: {
@@ -646,14 +700,7 @@ export const ko: typeof en = {
     readOnly: () => "에이전트가 이 저장소를 읽기 전용으로 두므로 여기에는 추가할 수 없습니다.",
   },
   memoryRole: { index: "색인", topic: "주제", summary: "요약", note: "노트", generated: "자동 생성" },
-  readOnlyWhy: {
-    managed: () => "관리 정책이 이 파일을 소유합니다.",
-    pluginCache: (v) => `이 파일은 플러그인 ${v.plugin}의 소유입니다.`,
-    generated: () => "에이전트가 이 파일을 자동으로 만듭니다.",
-    agentState: () => "에이전트가 자기 상태를 이 파일에 저장합니다.",
-    synced: () => "다른 도구가 이 파일을 동기화합니다.",
-    notUtf8: () => "이 파일은 올바른 텍스트가 아닙니다.",
-  },
+  readOnlyWhy,
   docKind: {
     instructions: "지침",
     rule: "규칙",
@@ -688,7 +735,7 @@ export const ko: typeof en = {
   format: formatName,
   severity: { error: "오류", warning: "경고", info: "참고" },
   severityOne: { error: "오류", warning: "경고", info: "참고" },
-  changeState: { sealed: "완료", pending: "대기", needsAttention: "확인 필요" },
+  changeState: { sealed: "완료", pending: "대기", needsAttention: "확인 필요", aborted: "적용되지 않음" },
   changeEdit: {
     save: "파일 저장",
     trash: "휴지통으로 이동",
@@ -704,9 +751,12 @@ export const ko: typeof en = {
     notFound: () => "호스트가 찾지 못했습니다.",
     conflict: (v, d) => `디스크에서 ${d(v.path)} 파일이 바뀌었습니다.`,
     outsideBoundary: (v, d) => `${d(v.path)} 파일은 프로젝트 밖에 있습니다.`,
-    readOnly: () => "호스트가 읽기 전용입니다.",
+    readOnly: (v, d) => say(readOnlyReason, v.why, d),
     invalidEdit: (v) => `${v.field} 항목이 올바르지 않습니다.`,
     forbidden: () => "호스트가 이 작업을 허용하지 않습니다.",
+    hookRun: (v, d) => say(hookRun, v.why, d),
+    badRequest: () => "호스트가 요청을 읽지 못했습니다.",
+    historyCorrupt: () => "변경 기록이 손상되었습니다.",
     io: (v) => v.detail,
     unauthorized: () => "호스트가 접근 토큰을 거부했습니다. 호스트가 출력한 주소를 다시 여세요.",
   },

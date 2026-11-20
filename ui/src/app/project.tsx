@@ -4,6 +4,7 @@ import type { AgentId } from "../gen/AgentId";
 import type { AgentInfo } from "../gen/AgentInfo";
 import type { AgentView } from "../gen/AgentView";
 import type { Load } from "../gen/Load";
+import type { RuleSpec } from "../gen/RuleSpec";
 import type { Snapshot } from "../gen/Snapshot";
 import { useI18n } from "../i18n";
 
@@ -13,6 +14,8 @@ export interface Project {
   home: AbsPath;
   snapshot: Snapshot;
   infos: AgentInfo[];
+  /** Rules that belong to no agent. */
+  coreRules: RuleSpec[];
   readOnly: boolean;
   name: (agent: AgentId) => string;
   /** CSS variable for the agent's accent, by registry position. */
@@ -31,7 +34,7 @@ export function ProjectProvider({ value, children }: { value: Omit<Project, "nam
   const { lang, d, setRoots } = useI18n();
   useEffect(() => setRoots(value.cwd, value.home), [setRoots, value.cwd, value.home]);
   const project = useMemo<Project>(() => {
-    const rules = new Map(value.infos.flatMap((info) => info.rules.map((r) => [r.id, r] as const)));
+    const rules = new Map([...value.coreRules, ...value.infos.flatMap((info) => info.rules)].map((r) => [r.id, r] as const));
     const order = value.snapshot.agents.map((view) => view.agent);
     return {
       ...value,
