@@ -59,7 +59,7 @@ From the repository root:
 formal/write-pipeline/run.sh
 ```
 
-It takes about four minutes and uses about 230 MB of disk in a temp directory, which it removes when it exits. The first run downloads a pinned Java runtime and TLC into `.cache/formal`, which git ignores, and checks their SHA-256. It installs nothing elsewhere. A run is killed when it passes 400 MB or 300 seconds; set `LIMIT_MB` or `LIMIT_S` to change that.
+A run in which everything passes takes two to four minutes and uses about 230 MB of disk in a temp directory, which it removes when it exits. A configuration stops at its first failure, so a broken model usually shows within a minute. The first run downloads a pinned Java runtime and TLC into `.cache/formal`, which git ignores, and checks their SHA-256. It installs nothing elsewhere. A run is killed when it passes 400 MB or 300 seconds; set `LIMIT_MB` or `LIMIT_S` to change that.
 
 Each line is one configuration:
 
@@ -100,6 +100,8 @@ Never weaken an invariant or a bound to make the model pass.
 3. A new way the code could break gets a constant in the spec and a `variants/<name>.cfg` that must fail on the invariant it threatens. A new rule gets an invariant with its sentence and its harm, and a variant that breaks it.
 4. Run the check. If an action never fires, the model cannot reach it; fix the model or the bounds. Add an action that only a variant can take to `variant_only` in `run.sh`. An action that one model leaves to another goes on its `\* not exercised:` line.
 5. Update the table above and the sync record below.
+
+**When your intended change breaks a rule.** If a `model` line fails after you mirrored the change, the change is unsafe as it is designed. Do not commit it. Report the trace, in the code's words, to whoever asked for the change. A rule changes only when the owner decides that the pipeline's promise changes. Then change the invariant, its sentence and its harm in this file, add a variant that breaks the new rule, and say so in the commit.
 
 ## The sync record
 
