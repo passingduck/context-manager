@@ -3,6 +3,7 @@ import { useChange, useFile, useRevertCheck } from "../api/queries";
 import { useProject } from "../app/project";
 import { CodeEditor, DiffView, EditableEditor } from "../components/CodeEditor";
 import { Badge, Button, Chip, ErrorNote, Loading, Mono, PrimaryButton } from "../components/ui";
+import type { ChangeRecord } from "../gen/ChangeRecord";
 import type { FileEntry } from "../gen/FileEntry";
 import type { Hook } from "../gen/Hook";
 import type { Load } from "../gen/Load";
@@ -13,7 +14,8 @@ import { exact, positionOf } from "../lib/prefix";
 import { activationTone, statusTone, truncationLine } from "../lib/loads";
 import type { Route } from "../lib/route";
 import { isDirty, setBuffer, useBuffer } from "../write/buffers";
-import { useWrite } from "../write/flow";
+import { useWrite, type Proposal } from "../write/flow";
+import { fileStates } from "../write/unfinished";
 import { useTrash } from "../write/trash";
 import { HookActions, HookTest } from "../write/hooks";
 
@@ -355,13 +357,14 @@ function ChangeDetailView({ id }: { id: string }) {
             disabled={write.blocked !== null}
             title={write.blocked ?? undefined}
             className="ml-auto"
-            onClick={() => write.propose({ edit: { kind: "revert", change: id }, title: t.write.revertTitle(t.changeEdit[record.summary.edit.kind]) })}
+            onClick={() => write.propose(revertProposal(record, t.write.revertTitle(t.changeEdit[record.summary.edit.kind])))}
           >
             {t.detail.revert}
           </Button>
         </div>
       </header>
-      {(record.state === "pending" || record.state === "needsAttention") && <Attention id={id} state={record.state} />}
+      {(record.state === "pending" || record.state === "needsAttention") && <Attention record={record} />}
+      {record.state === "aborted" && <Aborted />}
       <div className="space-y-4 p-4">
         {files.map((file) => (
           <section key={file.path}>
@@ -379,27 +382,49 @@ function ChangeDetailView({ id }: { id: string }) {
   );
 }
 
-/** A change that did not finish, or whose files were edited afterwards, and which files those are. */
-export function Attention({ id, state }: { id: string; state: "pending" | "needsAttention" }) {
+/** A change that did not finish, with each of its files and the state it is in. */
+export function Attention({ record }: { record: ChangeRecord }) {
   const { t } = useI18n();
   const project = useProject();
-  const check = useRevertCheck(project.cwd, id, project.snapshot.fingerprint);
-  const edited = check.data?.conflicts ?? [];
+  const check = useRevertCheck(project.cwd, record.id, project.snapshot.fingerprint);
+  const paths = record.ops.map((op) => op.path);
+  const pending = record.state === "pending";
   return (
-    <section role="alert" className="border-b border-warn bg-warn-bg px-4 py-3">
-      <h3 className="font-semibold text-warn">{state === "pending" ? t.history.pendingTitle : t.history.attentionTitle}</h3>
-      <p className="mt-0.5">{state === "pending" ? t.history.pendingBody : t.history.attentionBody}</p>
+    <section role="alert" data-testid="attention" className="border-b border-warn bg-warn-bg px-4 py-3">
+      <h3 className="font-semibold text-warn">{pending ? t.history.pendingTitle : t.history.attentionTitle}</h3>
+      <p className="mt-0.5">{pending ? t.history.pendingBody : t.history.attentionBody}</p>
       {check.isPending && <p className="mt-1 text-muted">{t.loading}</p>}
       {check.isSuccess && (
-        <div className="mt-1.5">
-          <p className="font-semibold">{edited.length > 0 ? t.history.editedBetween : t.history.noneEdited}</p>
-          <ul>
-            {edited.map((conflict) => (
-              <li key={conflict.path}><Mono className="break-all">{project.display(conflict.path)}</Mono></li>
-            ))}
-          </ul>
-        </div>
+        <ul className="mt-1.5 space-y-0.5">
+          {fileStates(paths, check.data).map(({ path, state }) => (
+            <li key={path} data-testid="attention-file" data-file-state={state} className="flex flex-wrap items-baseline gap-2">
+              <Mono className="break-all">{project.display(path)}</Mono>
+              <span className="text-muted">{t.history.fileState[state]}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
+}
+
+/** A change that failed and was undone: none of it is on disk. */
+export function Aborted() {
+  const { t } = useI18n();
+  return (
+    <section data-testid="aborted" className="border-b border-line bg-subtle px-4 py-3">
+      <h3 className="font-semibold">{t.history.abortedTitle}</h3>
+      <p className="mt-0.5">{t.history.abortedBody}</p>
+    </section>
+  );
+}
+
+/** A revert proposal for a record, marked unfinished when the record did not finish. */
+export function revertProposal(record: ChangeRecord, title: string): Proposal {
+  const unfinished = record.state === "pending" || record.state === "needsAttention";
+  return {
+    edit: { kind: "revert", change: record.id },
+    title,
+    ...(unfinished ? { unfinished: { files: record.ops.map((op) => op.path) } } : {}),
+  };
 }

@@ -16,6 +16,7 @@ import { useI18n } from "../i18n";
 import { say, sayWarning } from "../i18n/types";
 import { useRoute } from "../lib/route";
 import { guessFormat } from "./format";
+import { fileStates } from "./unfinished";
 
 type Conflicted = Extract<ApiError, { kind: "conflict" }>;
 export type Applied = Extract<ApplyResult, { kind: "applied" }>;
@@ -25,6 +26,8 @@ export interface Proposal {
   title: string;
   /** The text of an editor, for the conflict view to set beside the disk text. */
   mine?: string;
+  /** Set for a revert of a change that did not finish: its files, so the dialog can name each one. */
+  unfinished?: { files: AbsPath[] };
   /** Explained once, before the first plan, and not again. */
   firstUse?: { key: string; title: string; body: string };
   onApplied?: (result: Applied) => void;
@@ -204,10 +207,11 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
       const warnings = preview.warnings.map((warning, index) => ({ warning, key: `w${index}`, tick: NEEDS_TICK.includes(warning.kind) }));
       const ticks = warnings.filter((w) => w.tick).map((w) => w.key);
       const ready = ticks.every((key) => acks.has(key));
-      const empty = preview.changeSet.ops.length === 0;
-      const refused = preview.conflicts.length > 0;
+      const unfinished = proposal.unfinished !== undefined;
+      const empty = preview.changeSet.ops.length === 0 && !unfinished;
+      const refused = preview.conflicts.length > 0 && !unfinished;
       body = (
-        <ReviewBody preview={preview} stale={phase.stale} overwrite={overwrite} acks={acks} setAcks={setAcks} warnings={warnings} onOpenFile={(path) => { onClose(); go({ sel: `file:${path}`, ag: "", ln: 0 }); }} />
+        <ReviewBody unfinished={proposal.unfinished?.files ?? null} preview={preview} stale={phase.stale} overwrite={overwrite} acks={acks} setAcks={setAcks} warnings={warnings} onOpenFile={(path) => { onClose(); go({ sel: `file:${path}`, ag: "", ln: 0 }); }} />
       );
       footer = (
         <>
@@ -265,7 +269,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
           <div className="space-y-2">
             <p className="rounded border border-ok bg-ok-bg p-3 text-ok">{t.write.applied(phase.result.files.length)}</p>
             {phase.result.notTrashed.length > 0 && (
-              <section className="rounded border border-warn bg-warn-bg p-3">
+              <section data-testid="not-trashed" className="rounded border border-warn bg-warn-bg p-3">
                 <h3 className="font-semibold text-warn">{t.write.notTrashedTitle}</h3>
                 <p className="mt-1">{t.write.notTrashedBody}</p>
                 <ul className="mt-1">
@@ -277,7 +281,7 @@ function ApplyDialog({ proposal, onClose, notify }: { proposal: Proposal; onClos
             )}
           </div>
         );
-      footer = <PrimaryButton onClick={onClose}>{t.write.close}</PrimaryButton>;
+      footer = <PrimaryButton data-testid="apply-close" onClick={onClose}>{t.write.close}</PrimaryButton>;
       break;
     }
   }
@@ -297,9 +301,11 @@ interface ReviewProps {
   setAcks: (next: ReadonlySet<string>) => void;
   warnings: { warning: Warning; key: string; tick: boolean }[];
   onOpenFile: (path: AbsPath) => void;
+  /** The files of the unfinished change this review reverts, or null. */
+  unfinished: AbsPath[] | null;
 }
 
-function ReviewBody({ preview, stale, overwrite, acks, setAcks, warnings, onOpenFile }: ReviewProps) {
+function ReviewBody({ unfinished, preview, stale, overwrite, acks, setAcks, warnings, onOpenFile }: ReviewProps) {
   const { t, d } = useI18n();
   const project = useProject();
   const toggle = (key: string) => {
@@ -310,7 +316,7 @@ function ReviewBody({ preview, stale, overwrite, acks, setAcks, warnings, onOpen
   };
   const ctx = { name: project.name, rule: project.rule, d };
   const empty = preview.changeSet.ops.length === 0;
-  const refused = preview.conflicts.length > 0;
+  const refused = preview.conflicts.length > 0 && unfinished === null;
   return (
     <div className="space-y-3">
       {stale && (
@@ -326,9 +332,10 @@ function ReviewBody({ preview, stale, overwrite, acks, setAcks, warnings, onOpen
       {preview.changeSet.ops.flatMap((op) =>
         op.action.kind === "trashDir" ? [<p key={op.path} data-testid="dir-notice" className="rounded border border-warn bg-warn-bg p-2.5 text-warn">{t.write.dirGoes(d(op.path))}</p>] : [],
       )}
-      {empty && preview.conflicts.length === 0 && <p className="rounded border border-info bg-info-bg p-2.5 text-info">{t.write.nothingChanges}</p>}
+      {unfinished !== null && <UnfinishedPlan files={unfinished} preview={preview} />}
+      {empty && unfinished === null && preview.conflicts.length === 0 && <p className="rounded border border-info bg-info-bg p-2.5 text-info">{t.write.nothingChanges}</p>}
 
-      {preview.conflicts.length > 0 && (
+      {refused && (
         <section aria-label={t.write.conflictsTitle} className="rounded border border-bad bg-bad-bg p-2.5">
           <h3 className="font-semibold text-bad">{t.write.conflictsTitle}</h3>
           <p className="mt-0.5">{t.write.conflictsBody}</p>
@@ -378,6 +385,27 @@ function ReviewBody({ preview, stale, overwrite, acks, setAcks, warnings, onOpen
         </section>
       )}
     </div>
+  );
+}
+
+/** The dialog of a revert of an unfinished change: what happens to each file. */
+function UnfinishedPlan({ files, preview }: { files: AbsPath[]; preview: Preview }) {
+  const { t } = useI18n();
+  const project = useProject();
+  const trashed = new Set(preview.changeSet.ops.filter((op) => op.action.kind === "trash").map((op) => op.path));
+  return (
+    <section data-testid="unfinished-plan" aria-label={t.write.unfinishedTitle} className="rounded border border-warn bg-warn-bg p-2.5">
+      <h3 className="font-semibold text-warn">{t.write.unfinishedTitle}</h3>
+      <p className="mt-0.5">{t.write.unfinishedBody}</p>
+      <ul className="mt-1.5 space-y-1">
+        {fileStates(files, preview).map(({ path, state }) => (
+          <li key={path} data-testid="unfinished-file" data-file-state={state}>
+            <Mono className="break-all font-semibold">{project.display(path)}</Mono>
+            <span className="block text-muted">{state === "atAfter" ? (trashed.has(path) ? t.write.unfinishedRemove : t.write.unfinishedRestore) : state === "atBefore" ? t.write.unfinishedKeepBefore : t.write.unfinishedKeepOther}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

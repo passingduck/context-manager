@@ -13,9 +13,9 @@ use crate::apply::Trasher;
 use crate::host::{Host, HostConfig};
 
 /// Removes the path, so the test sends nothing to the real OS trash.
-struct RemovingTrash;
+struct FileRemover;
 
-impl Trasher for RemovingTrash {
+impl Trasher for FileRemover {
     fn trash(&self, path: &Path) -> Result<(), String> {
         std::fs::remove_file(path).map_err(|e| e.to_string())
     }
@@ -34,7 +34,7 @@ fn host(fx: &Fixture) -> Host {
             data_dir: fx.root().join("data"),
         },
         agents,
-        Box::new(RemovingTrash),
+        Box::new(FileRemover),
     )
 }
 

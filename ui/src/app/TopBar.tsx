@@ -40,7 +40,7 @@ export function TopBar({ cwd, home, route, go, theme, toggleTheme }: { cwd: AbsP
       <div className="ml-auto flex shrink-0 items-center gap-2">
         <div role="group" aria-label={t.language} className="flex overflow-hidden rounded border border-line text-[12px]">
           {(["ko", "en"] as const satisfies readonly Lang[]).map((code) => (
-            <button key={code} type="button" aria-pressed={lang === code} onClick={() => setLang(code)} className="px-2 py-1 hover:bg-sunken aria-pressed:bg-accent aria-pressed:font-semibold aria-pressed:text-bg">
+            <button key={code} type="button" data-testid={`lang-${code}`} aria-pressed={lang === code} onClick={() => setLang(code)} className="px-2 py-1 hover:bg-sunken aria-pressed:bg-accent aria-pressed:font-semibold aria-pressed:text-bg">
               {code === "ko" ? "한국어" : "EN"}
             </button>
           ))}

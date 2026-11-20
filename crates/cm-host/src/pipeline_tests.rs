@@ -755,6 +755,50 @@ async fn without_an_os_trash_a_skill_the_history_cannot_hold_stays_on_disk() {
     assert_eq!(records[0].state, ChangeState::Aborted);
 }
 
+/// The trasher `CONTEXT_MANAGER_NO_OS_TRASH` selects: a text file goes and a revert brings it
+/// back, a directory with a binary file stays.
+#[tokio::test]
+async fn the_no_os_trash_switch_removes_only_what_revert_restores() {
+    let fx = Fixture::new();
+    let file = fx.project_path("CLAUDE.md");
+    fx.write(&file, "keep me");
+    let host = host_with(&fx, claims(&[&file]), false, crate::host::trasher(true));
+    let edit = Edit::Trash {
+        path: file.clone(),
+        base: Revision::of(b"keep me"),
+    };
+    let (change, _, not_trashed) = applied(run(&host, &fx, &edit).await.unwrap());
+    assert_eq!(not_trashed, vec![file.clone()]);
+    assert!(!file.as_path().exists());
+    applied(run(&host, &fx, &Edit::Revert { change }).await.unwrap());
+    assert_eq!(read(&file), "keep me");
+
+    let dir = fx.project_path(".claude/skills");
+    let entry = dir.join("bin/SKILL.md");
+    let blob = dir.join("bin/data.bin");
+    fx.write(&entry, "skill");
+    std::fs::write(blob.as_path(), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let host = host_with(
+        &fx,
+        skill_agent(&entry, &dir),
+        false,
+        crate::host::trasher(true),
+    );
+    let edit = Edit::Trash {
+        path: entry.clone(),
+        base: Revision::of(b"skill"),
+    };
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(preview.warnings.contains(&Warning::NotRevertible));
+    let err = apply(&host, &fx, &edit, &preview.digest).await.unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!(read(&entry), "skill");
+    assert_eq!(
+        std::fs::read(blob.as_path()).unwrap(),
+        [0xff, 0xfe, 0x00, 0x80]
+    );
+}
+
 #[tokio::test]
 async fn trashing_a_single_file_and_reverting_it() {
     let fx = Fixture::new();
