@@ -58,7 +58,9 @@ pub(super) fn plan(
         (Place::NamedFile { dir, ext }, Some(name)) => {
             dir.join(&format!("{name}.{}", ext.trim_start_matches('.')))
         }
-        (Place::NamedDir { dir, file }, Some(name)) => dir.join(name).join(file),
+        (Place::NamedDir { dir, file } | Place::InSubdir { dir, file }, Some(name)) => {
+            dir.join(name).join(file)
+        }
         _ => return Err(invalid("name", "claude.plan.name_required")),
     };
     // A skill folder that already exists collides even when its entry file is missing.

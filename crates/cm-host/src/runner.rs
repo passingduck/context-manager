@@ -24,13 +24,17 @@ pub const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 pub fn run(spec: ExecSpec, env: &ScanEnv, timeout: Option<Duration>) -> Result<HookRun, ApiError> {
-    let io = |detail: String| ApiError::Io { detail };
+    let hook_run = |why| ApiError::HookRun { why };
     let Some(first) = spec.argv.first() else {
-        return Err(io("the invocation is empty".to_owned()));
+        return Err(hook_run(HookRunFailure::EmptyInvocation));
     };
     let program = match program::resolve(env, &ProbeFs::new(), &spec.cwd, first) {
         Program::Found { path, .. } => path,
-        Program::NotFound => return Err(io(format!("cannot find the program {first}"))),
+        Program::NotFound => {
+            return Err(hook_run(HookRunFailure::ProgramNotFound {
+                program: first.clone(),
+            }));
+        }
     };
     let timeout = timeout.unwrap_or(DEFAULT_TIMEOUT).min(MAX_TIMEOUT);
 
@@ -44,9 +48,12 @@ pub fn run(spec: ExecSpec, env: &ScanEnv, timeout: Option<Duration>) -> Result<H
         .stderr(Stdio::piped())
         .process_group(0);
     let started = Instant::now();
-    let mut child = command
-        .spawn()
-        .map_err(|e| io(format!("cannot start {first}: {e}")))?;
+    let mut child = command.spawn().map_err(|e| {
+        hook_run(HookRunFailure::StartFailed {
+            program: first.clone(),
+            os: e.to_string(),
+        })
+    })?;
     let group = child.id() as libc::pid_t;
 
     let stdin = child.stdin.take();
@@ -62,12 +69,16 @@ pub fn run(spec: ExecSpec, env: &ScanEnv, timeout: Option<Duration>) -> Result<H
 
     let mut timed_out = false;
     let status = loop {
-        match child.try_wait().map_err(|e| io(e.to_string()))? {
+        match child.try_wait().map_err(|e| ApiError::Io {
+            detail: e.to_string(),
+        })? {
             Some(status) => break status,
             None if started.elapsed() >= timeout => {
                 timed_out = true;
                 kill_group(group);
-                break child.wait().map_err(|e| io(e.to_string()))?;
+                break child.wait().map_err(|e| ApiError::Io {
+                    detail: e.to_string(),
+                })?;
             }
             None => thread::sleep(Duration::from_millis(10)),
         }

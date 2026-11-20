@@ -488,6 +488,130 @@ async fn a_read_only_host_classifies_a_pending_record_and_writes_nothing() {
     assert_eq!(ro.session(()).await.unwrap().pending.len(), 1);
 }
 
+/// The name and bytes of every file in `dir`, sorted.
+fn files_in(dir: &AbsPath) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+    let mut files: Vec<_> = std::fs::read_dir(dir.as_path())
+        .unwrap()
+        .map(|e| {
+            let path = e.unwrap().path();
+            (path.clone(), std::fs::read(path).unwrap())
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Design section 4, "The apply pipeline": a lock on a file in the data directory serializes
+/// `apply` across processes. Another process holding it is applying a change, so recovery leaves
+/// the pending record and its temp files alone, and an apply here waits.
+#[tokio::test]
+async fn while_another_process_holds_the_lock_recovery_leaves_its_change_alone_and_apply_waits() {
+    let two = Two::new();
+    two.crash_after(Step::Op(0)).await;
+    let data = two.fx.root().join("data");
+    let changes = data.join("history/changes");
+    let id = crate::History::open(data.as_path()).pending().remove(0).id;
+    let tmp = two.fx.project_path(&format!(".cm-{}-1.tmp", id.0));
+    two.fx.write(&tmp, "half written");
+    let records_before = files_in(&changes);
+
+    let other = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(data.join(crate::apply::LOCK_FILE).as_path())
+        .unwrap();
+    other.lock().unwrap();
+
+    let host = two.restart();
+    let records = history(&host).await;
+    assert_eq!(
+        records[0].state,
+        ChangeState::Pending,
+        "recovery classified a change another process is applying"
+    );
+    assert_eq!(
+        files_in(&changes),
+        records_before,
+        "recovery wrote a record while another process held the lock"
+    );
+    assert!(
+        tmp.as_path().exists(),
+        "recovery removed a temp file of a change in progress"
+    );
+
+    let edit = save(&two.b, "b0", "b2");
+    let preview = plan(&host, &two.fx, &edit).await.unwrap();
+    let digest = preview.digest.clone();
+    let host = Arc::new(host);
+    let waiting = {
+        let (host, fx_project, edit) = (host.clone(), two.fx.project(), edit.clone());
+        tokio::spawn(async move {
+            host.apply(ApplyReq {
+                cwd: fx_project,
+                edit,
+                digest,
+            })
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiting.is_finished() && read(&two.b) == "b0",
+        "an apply ran while another process held the lock"
+    );
+
+    drop(other);
+    applied(waiting.await.unwrap().unwrap());
+    assert_eq!(read(&two.b), "b2");
+}
+
+/// Two hosts over one data directory, as two windows of the tool. A history read on the second
+/// while the first is between two operations of a change returns, and leaves that change alone.
+#[tokio::test]
+async fn a_history_read_on_a_second_host_during_an_apply_leaves_the_change_alone() {
+    let two = Two::new();
+    let first = host(&two.fx, two.agent());
+    let second = host(&two.fx, two.agent());
+    let preview = plan(&first, &two.fx, &two.edit()).await.unwrap();
+    let (paused_tx, paused) = std::sync::mpsc::channel();
+    let (resume, resume_rx) = std::sync::mpsc::channel::<()>();
+    let applying = {
+        let (ctx, cwd, edit, digest) = (
+            first.ctx.clone(),
+            two.fx.project(),
+            two.edit(),
+            preview.digest.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            ctx.apply(&cwd, &edit, &digest, &|step| {
+                if step == Step::Op(0) {
+                    paused_tx.send(()).unwrap();
+                    resume_rx.recv().unwrap();
+                }
+                Ok(())
+            })
+        })
+    };
+    paused.recv_timeout(Duration::from_secs(10)).unwrap();
+    let changes = two.fx.root().join("data/history/changes");
+    let records_before = files_in(&changes);
+
+    let read_during = tokio::time::timeout(Duration::from_secs(5), history(&second)).await;
+    let records_during = files_in(&changes);
+    resume.send(()).unwrap();
+    let records = read_during.expect("a history read waited for an apply on another host");
+    assert_eq!(records[0].state, ChangeState::Pending);
+    assert_eq!(
+        records_during, records_before,
+        "a history read changed the record of a change in progress"
+    );
+
+    applied(applying.await.unwrap().unwrap());
+    assert_eq!((read(&two.a).as_str(), read(&two.b).as_str()), ("a1", "b1"));
+    assert_eq!(history(&second).await[0].state, ChangeState::Sealed);
+}
+
 #[tokio::test]
 async fn a_revert_of_a_record_that_needs_attention_restores_its_files_and_resolves_it() {
     let two = Two::new();
@@ -755,6 +879,115 @@ async fn without_an_os_trash_a_skill_the_history_cannot_hold_stays_on_disk() {
     assert_eq!(records[0].state, ChangeState::Aborted);
 }
 
+/// The trasher `CONTEXT_MANAGER_NO_OS_TRASH` selects: a text file goes and a revert brings it
+/// back, a directory with a binary file stays.
+#[tokio::test]
+async fn the_no_os_trash_switch_removes_only_what_revert_restores() {
+    let fx = Fixture::new();
+    let file = fx.project_path("CLAUDE.md");
+    fx.write(&file, "keep me");
+    let host = host_with(&fx, claims(&[&file]), false, crate::host::trasher(true));
+    let edit = Edit::Trash {
+        path: file.clone(),
+        base: Revision::of(b"keep me"),
+    };
+    let (change, _, not_trashed) = applied(run(&host, &fx, &edit).await.unwrap());
+    assert_eq!(not_trashed, vec![file.clone()]);
+    assert!(!file.as_path().exists());
+    applied(run(&host, &fx, &Edit::Revert { change }).await.unwrap());
+    assert_eq!(read(&file), "keep me");
+
+    let dir = fx.project_path(".claude/skills");
+    let entry = dir.join("bin/SKILL.md");
+    let blob = dir.join("bin/data.bin");
+    fx.write(&entry, "skill");
+    std::fs::write(blob.as_path(), [0xff, 0xfe, 0x00, 0x80]).unwrap();
+    let host = host_with(
+        &fx,
+        skill_agent(&entry, &dir),
+        false,
+        crate::host::trasher(true),
+    );
+    let edit = Edit::Trash {
+        path: entry.clone(),
+        base: Revision::of(b"skill"),
+    };
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(preview.warnings.contains(&Warning::NotRevertible));
+    let err = apply(&host, &fx, &edit, &preview.digest).await.unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!(read(&entry), "skill");
+    assert_eq!(
+        std::fs::read(blob.as_path()).unwrap(),
+        [0xff, 0xfe, 0x00, 0x80]
+    );
+}
+
+/// Trashes the skill `<project>/.claude/skills/<name>` on a host with no OS trash. The plan must
+/// warn `NotRevertible`, the apply must fail, and every path in `kept` must still be there.
+async fn trash_without_os_trash_keeps(fx: &Fixture, name: &str, kept: &[std::path::PathBuf]) {
+    let dir = fx.project_path(".claude/skills");
+    let entry = dir.join(&format!("{name}/SKILL.md"));
+    let host = host_with(fx, skill_agent(&entry, &dir), false, Box::new(NoTrash));
+    let edit = Edit::Trash {
+        path: entry.clone(),
+        base: Revision::of(b"skill"),
+    };
+    let preview = plan(&host, fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::NotRevertible),
+        "{name}: the plan holds the tree as complete: {:?}",
+        preview.warnings
+    );
+    let err = apply(&host, fx, &edit, &preview.digest).await.unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{name}: {err:?}");
+    for path in std::iter::once(entry.as_path().to_path_buf()).chain(kept.iter().cloned()) {
+        assert!(
+            std::fs::symlink_metadata(&path).is_ok(),
+            "{name}: {} is gone",
+            path.display()
+        );
+    }
+}
+
+/// Design section 4, step 4: a tree that holds a symlink is not captured completely. History
+/// cannot hold the link, and the files behind it are not inside the tree.
+#[tokio::test]
+async fn without_an_os_trash_a_skill_that_holds_a_symlink_stays_on_disk() {
+    let fx = Fixture::new();
+    let shared = fx.root().join("shared");
+    fx.write(&shared.join("run.sh"), "echo shared");
+    let skills = fx.project_path(".claude/skills");
+    for (name, link, target) in [
+        ("dir-link", "scripts", shared.clone()),
+        ("file-link", "run.sh", shared.join("run.sh")),
+    ] {
+        fx.write(&skills.join(&format!("{name}/SKILL.md")), "skill");
+        let link = skills.join(&format!("{name}/{link}"));
+        fx.symlink(&link, &target);
+        trash_without_os_trash_keeps(&fx, name, &[link.as_path().to_path_buf()]).await;
+        assert_eq!(read(&shared.join("run.sh")), "echo shared");
+    }
+}
+
+/// The lister has no entry for a name that is not UTF-8. The tree is then not captured
+/// completely, and stays on disk without an OS trash.
+#[tokio::test]
+async fn without_an_os_trash_a_skill_that_holds_a_name_that_is_not_utf8_stays_on_disk() {
+    use std::os::unix::ffi::OsStrExt;
+    let fx = Fixture::new();
+    let skill = fx.project_path(".claude/skills/odd");
+    fx.write(&skill.join("SKILL.md"), "skill");
+    let odd = skill
+        .as_path()
+        .join(std::ffi::OsStr::from_bytes(b"note-\xff.md"));
+    if let Err(err) = std::fs::write(&odd, "notes") {
+        eprintln!("skipped: this file system refuses a file name that is not UTF-8 ({err})");
+        return;
+    }
+    trash_without_os_trash_keeps(&fx, "odd", &[odd]).await;
+}
+
 #[tokio::test]
 async fn trashing_a_single_file_and_reverting_it() {
     let fx = Fixture::new();
@@ -850,6 +1083,194 @@ async fn a_symlinked_file_is_written_through_and_the_link_survives() {
         target.as_path()
     );
     assert_eq!(read(&link), "new");
+}
+
+/// Design section 4: a path that is a symlink to nothing is an `InvalidEdit`. The tool does not
+/// create a file through a link, so nothing appears outside the project.
+#[tokio::test]
+async fn a_save_through_a_symlink_to_nothing_is_refused_and_creates_nothing() {
+    let fx = Fixture::new();
+    let link = fx.project_path("CLAUDE.md");
+    let outside = fx.root().join("outside");
+    fx.mkdir(&outside);
+    std::os::unix::fs::symlink("../outside/newdir/planted.md", link.as_path()).unwrap();
+    let host = host(&fx, claims(&[&link]));
+    let edit = Edit::Save {
+        path: link.clone(),
+        base: Base::Absent,
+        text: "operator text\n".into(),
+    };
+
+    let err = plan(&host, &fx, &edit).await.unwrap_err();
+    assert_eq!(
+        err,
+        ApiError::InvalidEdit {
+            field: "path".into(),
+            why: RuleRef::new("edit.dangling_symlink"),
+        }
+    );
+    assert_eq!(
+        apply(&host, &fx, &edit, "any digest").await.unwrap_err(),
+        err
+    );
+    assert!(
+        !outside.join("newdir").as_path().exists(),
+        "a save created a directory outside the project"
+    );
+    assert!(
+        std::fs::symlink_metadata(link.as_path())
+            .unwrap()
+            .is_symlink()
+    );
+    assert!(history(&host).await.is_empty());
+}
+
+/// The link to nothing appears after the plan. The write refuses it as well, and the change is
+/// undone.
+#[tokio::test]
+async fn a_symlink_to_nothing_that_appears_during_an_apply_creates_nothing() {
+    let fx = Fixture::new();
+    let link = fx.project_path("CLAUDE.md");
+    let outside = fx.root().join("outside");
+    fx.mkdir(&outside);
+    let host = host(&fx, claims(&[&link]));
+    let edit = Edit::Save {
+        path: link.clone(),
+        base: Base::Absent,
+        text: "operator text\n".into(),
+    };
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+
+    let result = host
+        .ctx
+        .apply(&fx.project(), &edit, &preview.digest, &|step| {
+            if step == Step::Pending {
+                std::os::unix::fs::symlink("../outside/newdir/planted.md", link.as_path()).unwrap();
+            }
+            Ok(())
+        });
+    assert!(matches!(result, Err(ApiError::Io { .. })), "{result:?}");
+    assert!(
+        !outside.join("newdir").as_path().exists(),
+        "an apply created a directory outside the project"
+    );
+    assert_eq!(history(&host).await[0].state, ChangeState::Aborted);
+}
+
+/// Design section 4, `Warning::ThroughSymlink`: a directory above the path, below the project
+/// root, is a link. The preview names the place the write lands.
+#[tokio::test]
+async fn a_save_under_a_symlinked_directory_names_the_place_it_lands() {
+    let fx = Fixture::new();
+    let elsewhere = fx.root().join("elsewhere/commands");
+    fx.mkdir(&elsewhere);
+    let dir = fx.project_path(".claude/commands");
+    fx.symlink(&dir, &elsewhere);
+    let path = dir.join("deploy.md");
+    let host = host(
+        &fx,
+        TestAgent {
+            slot: Some(Place::NamedFile {
+                dir,
+                ext: "md".into(),
+            }),
+            ..TestAgent::default()
+        },
+    );
+    let edit = Edit::Save {
+        path: path.clone(),
+        base: Base::Absent,
+        text: "go".into(),
+    };
+
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::ThroughSymlink {
+            target: elsewhere.join("deploy.md")
+        }),
+        "the preview does not say where the write lands: {:?}",
+        preview.warnings
+    );
+    applied(apply(&host, &fx, &edit, &preview.digest).await.unwrap());
+    assert_eq!(read(&elsewhere.join("deploy.md")), "go");
+}
+
+/// A link at or above the project root is where the user keeps the project, as macOS `/tmp` is.
+/// A write below it does not go through a link, and the preview does not warn.
+#[tokio::test]
+async fn a_project_below_a_symlinked_directory_gets_no_symlink_warning() {
+    let fx = Fixture::new();
+    let linked = fx.root().join("linked");
+    fx.mkdir(&fx.root().join("real/project"));
+    fx.symlink(&linked, &fx.root().join("real"));
+    let project = linked.join("project");
+    let file = project.join("CLAUDE.md");
+    fx.write(&file, "old");
+    let host = Host::with_parts(
+        HostConfig {
+            shell: Shell::Serve,
+            read_only: false,
+            env: cm_core::env::ScanEnv::for_fixture(fx.home(), project.clone()),
+            watch_timeout: Duration::from_secs(1),
+            data_dir: fx.root().join("data"),
+        },
+        agents(claims(&[&file])),
+        Box::new(FakeTrash::default()),
+    );
+
+    let preview = host
+        .plan(PlanReq {
+            cwd: project,
+            edit: save(&file, "old", "new"),
+        })
+        .await
+        .unwrap();
+    assert!(
+        !preview
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Warning::ThroughSymlink { .. })),
+        "{:?}",
+        preview.warnings
+    );
+}
+
+/// Design section 4, step 4: a file with more than one hard link is written in place, because a
+/// rename would leave the other names on the old content. A revert restores every name.
+#[tokio::test]
+async fn a_save_of_a_hard_linked_file_changes_every_name_and_a_revert_restores_them() {
+    use std::os::unix::fs::MetadataExt;
+    let fx = Fixture::new();
+    let agents_md = fx.project_path("AGENTS.md");
+    let claude_md = fx.project_path("CLAUDE.md");
+    fx.write(&agents_md, "shared v1\n");
+    std::fs::hard_link(agents_md.as_path(), claude_md.as_path()).unwrap();
+    let host = host(&fx, claims(&[&agents_md, &claude_md]));
+    let names = || {
+        let links = std::fs::metadata(agents_md.as_path()).unwrap().nlink();
+        (read(&claude_md), read(&agents_md), links)
+    };
+
+    let edit = save(&claude_md, "shared v1\n", "shared v2\n");
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(
+        preview.warnings.contains(&Warning::HardLinked { links: 2 }),
+        "the preview does not say the file has other names: {:?}",
+        preview.warnings
+    );
+    let (change, ..) = applied(apply(&host, &fx, &edit, &preview.digest).await.unwrap());
+    assert_eq!(
+        names(),
+        ("shared v2\n".into(), "shared v2\n".into(), 2),
+        "a save split the hard link"
+    );
+
+    applied(run(&host, &fx, &Edit::Revert { change }).await.unwrap());
+    assert_eq!(
+        names(),
+        ("shared v1\n".into(), "shared v1\n".into(), 2),
+        "a revert split the hard link"
+    );
 }
 
 #[tokio::test]

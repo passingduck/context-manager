@@ -8,7 +8,7 @@ use crate::agents::claude::extensions::plugins;
 use crate::agents::claude::setup::Setup;
 use crate::model::*;
 
-fn err(id: &str) -> RuleRef {
+fn err(id: &'static str) -> RuleRef {
     RuleRef::new(id)
 }
 

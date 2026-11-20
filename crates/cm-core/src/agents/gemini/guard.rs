@@ -2,7 +2,7 @@
 
 use super::settings::parse_settings_text;
 use super::util::rule;
-use crate::model::{AbsPath, ApiError};
+use crate::model::{AbsPath, ApiError, ReadOnlyReason};
 
 /// A path the CLI owns: approving through it would bypass a security prompt, or the CLI would
 /// overwrite the edit (spec 8).
@@ -39,7 +39,9 @@ pub(super) fn guard(
 ) -> Result<(), ApiError> {
     if is_cli_state(path) {
         return Err(ApiError::ReadOnly {
-            why: rule("gemini.state_file"),
+            why: ReadOnlyReason::Rule {
+                rule: rule("gemini.state_file"),
+            },
         });
     }
     // A settings file that does not parse makes the next launch fatal (spec 2, "Comments").

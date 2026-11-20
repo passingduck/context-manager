@@ -17,6 +17,7 @@ function target(slot: Slot, name: string): string {
     case "namedFile":
       return `${slot.place.dir}/${name || "<name>"}.${slot.place.ext}`;
     case "namedDir":
+    case "inSubdir":
       return `${slot.place.dir}/${name || "<name>"}/${slot.place.file}`;
   }
 }

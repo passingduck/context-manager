@@ -53,7 +53,7 @@ pub(super) fn view<'a>(cx: &'a PlanCx) -> Result<&'a AgentView, ApiError> {
         .ok_or_else(|| invalid("agent", "edit.unknown_agent"))
 }
 
-pub(super) fn invalid(field: &str, why: &str) -> ApiError {
+pub(super) fn invalid(field: &str, why: &'static str) -> ApiError {
     ApiError::InvalidEdit {
         field: field.to_owned(),
         why: RuleRef::new(why),
@@ -64,11 +64,13 @@ pub(super) fn invalid(field: &str, why: &str) -> ApiError {
 pub(super) fn read(cx: &PlanCx, path: &AbsPath) -> Result<Option<String>, ApiError> {
     match cx.fs.read(path) {
         Err(err) if err.is_not_found() => Ok(None),
-        Err(err) => Err(ApiError::Io { detail: err.detail }),
+        Err(err) => Err(err.into()),
         Ok(bytes) => String::from_utf8(bytes.as_ref().clone())
             .map(Some)
             .map_err(|_| ApiError::ReadOnly {
-                why: RuleRef::new("edit.read_only.not_utf8"),
+                why: ReadOnlyReason::File {
+                    why: ReadOnlyWhy::NotUtf8,
+                },
             }),
     }
 }
@@ -77,7 +79,7 @@ pub(super) fn exists(cx: &PlanCx, path: &AbsPath) -> Result<bool, ApiError> {
     match cx.fs.stat(path) {
         Ok(_) => Ok(true),
         Err(err) if err.is_not_found() => Ok(false),
-        Err(err) => Err(ApiError::Io { detail: err.detail }),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -177,7 +179,7 @@ fn new_item(cx: &PlanCx, slot: &SlotId, name: Option<&str>) -> Result<Preview, A
                 name.to_owned(),
             )
         }
-        Place::NamedDir { dir, file } => {
+        Place::NamedDir { dir, file } | Place::InSubdir { dir, file } => {
             let name = named()?;
             (dir.join(name).join(file), name.to_owned())
         }

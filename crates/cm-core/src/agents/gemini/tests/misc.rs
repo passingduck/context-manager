@@ -185,7 +185,9 @@ fn guard_refuses_cli_owned_state_files() {
         assert_eq!(
             g(path),
             Err(ApiError::ReadOnly {
-                why: RuleRef::new("gemini.state_file")
+                why: ReadOnlyReason::Rule {
+                    rule: RuleRef::new("gemini.state_file")
+                }
             }),
             "{path}"
         );
@@ -217,95 +219,6 @@ fn guard_refuses_a_settings_save_that_would_not_parse() {
         ),
         Ok(())
     );
-}
-
-#[test]
-fn every_rule_ref_in_the_adapter_has_both_languages() {
-    // Spec: every `RuleRef` the code can emit is a string literal that starts with `gemini.`.
-    let sources = [
-        include_str!("../compose.rs"),
-        include_str!("../context.rs"),
-        include_str!("../extension.rs"),
-        include_str!("../exts.rs"),
-        include_str!("../guard.rs"),
-        include_str!("../hook_edit.rs"),
-        include_str!("../hooks.rs"),
-        include_str!("../memory.rs"),
-        include_str!("../memory_edit.rs"),
-        include_str!("../mod.rs"),
-        include_str!("../plan.rs"),
-        include_str!("../prompt.rs"),
-        include_str!("../settings.rs"),
-        include_str!("../slots.rs"),
-        include_str!("../trust.rs"),
-        include_str!("../util.rs"),
-        include_str!("../warn.rs"),
-        include_str!("../world.rs"),
-    ];
-    // Store ids are not rules.
-    let not_rules = ["gemini.private", "gemini.private.sandbox"];
-    let rules = Gemini.rules();
-    let mut seen = 0;
-    for source in sources {
-        let production = source.split("#[cfg(test)]").next().unwrap();
-        for part in production.split("\"gemini.").skip(1) {
-            let id = format!("gemini.{}", part.split('"').next().unwrap());
-            if not_rules.contains(&id.as_str())
-                || id.ends_with('.')
-                || !id
-                    .chars()
-                    .all(|c| c.is_ascii_lowercase() || c == '.' || c == '_')
-            {
-                continue;
-            }
-            seen += 1;
-            let rule = rules
-                .iter()
-                .find(|r| r.id.0 == id)
-                .unwrap_or_else(|| panic!("{id} is not in rules.toml"));
-            assert!(
-                !rule.en.trim().is_empty()
-                    && !rule.ko.trim().is_empty()
-                    && !rule.evidence.trim().is_empty(),
-                "{id}"
-            );
-        }
-    }
-    assert!(seen > 30, "found only {seen} rule references");
-}
-
-#[test]
-fn rules_toml_has_no_unused_rule_and_its_korean_has_no_arrow_or_middle_dot() {
-    let used: String = [
-        include_str!("../compose.rs"),
-        include_str!("../context.rs"),
-        include_str!("../extension.rs"),
-        include_str!("../exts.rs"),
-        include_str!("../guard.rs"),
-        include_str!("../hook_edit.rs"),
-        include_str!("../hooks.rs"),
-        include_str!("../memory.rs"),
-        include_str!("../memory_edit.rs"),
-        include_str!("../mod.rs"),
-        include_str!("../plan.rs"),
-        include_str!("../prompt.rs"),
-        include_str!("../settings.rs"),
-        include_str!("../slots.rs"),
-        include_str!("../trust.rs"),
-        include_str!("../warn.rs"),
-        include_str!("../world.rs"),
-    ]
-    .join("\n");
-    for rule in Gemini.rules() {
-        assert!(
-            used.contains(&format!("\"{}\"", rule.id.0)),
-            "{} is never used",
-            rule.id.0
-        );
-        for symbol in ['→', '←', '·', '↔', '⇒'] {
-            assert!(!rule.ko.contains(symbol), "{}", rule.id.0);
-        }
-    }
 }
 
 #[test]

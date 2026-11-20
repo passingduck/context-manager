@@ -103,7 +103,7 @@ impl Out {
     }
 }
 
-pub(super) fn discovery(rule: &str) -> Via {
+pub(super) fn discovery(rule: &'static str) -> Via {
     Via::Discovery {
         rule: RuleRef::new(rule),
     }

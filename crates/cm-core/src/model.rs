@@ -242,7 +242,8 @@ impl Revision {
 }
 
 impl RuleRef {
-    pub fn new(id: &str) -> RuleRef {
+    /// The id is a literal, so a test can find every rule the code names.
+    pub fn new(id: &'static str) -> RuleRef {
         RuleRef(id.to_owned())
     }
 }
@@ -445,6 +446,24 @@ variants! {
         Skipped { skip: Skip },
     }
 
+    /// Why a file is not usable. Only `Unreadable` carries text, and that text is the operating
+    /// system's.
+    pub enum Invalid {
+        Unreadable { os: Option<String> },
+        /// A directory, a device, a named pipe or a socket.
+        NotRegular,
+        NotText,
+        /// The front matter does not parse.
+        Frontmatter,
+        Toml,
+        /// A path the agent never reads, by where it is.
+        Location { which: RefusedLocation },
+        /// A Gemini import that leaves the project root.
+        OutsideRoot,
+    }
+
+    pub enum RefusedLocation { ConnectorDownloads, Scratchpad, DeviceOrProcess }
+
     pub enum Skip {
         Shadowed { by: AbsPath, how: Shadow },
         BudgetExhausted { limit: Limit },
@@ -458,7 +477,8 @@ variants! {
         Excluded { pattern: String },
         FeatureOff { name: String },
         AlreadyLoaded { first: LoadId },
-        Invalid { detail: String },
+        /// The file cannot serve as instructions or as an extension.
+        Invalid { why: Invalid },
         /// For example the legacy Codex prompts directory.
         NotRead { why: RuleRef },
     }
@@ -678,7 +698,12 @@ variants! {
     pub enum Place {
         File { path: AbsPath },
         NamedFile { dir: AbsPath, ext: String },
+        /// An item that is a directory: `<dir>/<name>/` with its entry file, such as
+        /// `skills/<name>/SKILL.md`.
         NamedDir { dir: AbsPath, file: String },
+        /// A file with a fixed name in a subdirectory of `dir` that the user names, such as
+        /// Gemini's `src/GEMINI.md`. The subdirectory belongs to the project and is no item.
+        InSubdir { dir: AbsPath, file: String },
     }
 }
 
@@ -793,13 +818,16 @@ variants! {
         /// The file is read by more than one agent.
         SharedFile { agents: Vec<AgentId> },
         ThroughSymlink { target: AbsPath },
+        /// The file has other names: the write goes in place and changes all of them.
+        HardLinked { links: u32 },
         /// Next session, `/reload-plugins`, `/memory reload`.
         TakesEffect { agent: AgentId, when: RuleRef },
         /// Gemini: a new `@word` becomes an import attempt.
         NewImportToken { raw: String },
         /// A parked Claude hook exists only in this tool's data directory.
         ParkedOnThisMachine,
-        /// A directory over 16 MiB: the OS trash is the only copy.
+        /// A directory the plan could not capture completely (design section 4, step 4): the OS
+        /// trash is the only copy.
         NotRevertible,
         /// Gemini: the switch is a name or command that other hooks share, so it switches them too.
         HookKeyShared { others: u32 },
@@ -989,6 +1017,8 @@ records! {
         pub home: AbsPath,
         pub os: Os,
         pub pending: Vec<ChangeId>,
+        /// The rules that belong to no agent.
+        pub core_rules: Vec<RuleSpec>,
     }
 
     pub struct AgentInfo {
@@ -1038,14 +1068,37 @@ records! {
 }
 
 variants! {
+    /// Why a write is refused as read-only.
+    pub enum ReadOnlyReason {
+        /// The host runs with `--read-only`.
+        Host,
+        /// The file's own policy.
+        File { why: ReadOnlyWhy },
+        /// An agent rule says the target is read-only, such as a Gemini state file.
+        Rule { rule: RuleRef },
+    }
+
+    pub enum HookRunFailure {
+        EmptyInvocation,
+        ProgramNotFound { program: String },
+        StartFailed { program: String, os: String },
+    }
+
     pub enum ApiError {
         NotFound,
         /// An edit whose base no longer matches the disk.
         Conflict { path: AbsPath, expected: Base, found: Base, current: Option<String> },
         OutsideBoundary { path: AbsPath },
-        ReadOnly { why: RuleRef },
+        ReadOnly { why: ReadOnlyReason },
         InvalidEdit { field: String, why: RuleRef },
         Forbidden { why: RuleRef },
+        /// A hook that was allowed to run could not be started.
+        HookRun { why: HookRunFailure },
+        /// The request is not one the API defines.
+        BadRequest,
+        /// A record in the history store is damaged.
+        HistoryCorrupt,
+        /// Text from the operating system, and nothing else.
         Io { detail: String },
         Unauthorized,
     }
@@ -1057,7 +1110,10 @@ impl fmt::Display for ApiError {
             ApiError::NotFound => write!(f, "not found"),
             ApiError::Conflict { path, .. } => write!(f, "conflict on {path}"),
             ApiError::OutsideBoundary { path } => write!(f, "outside the boundary: {path}"),
-            ApiError::ReadOnly { why } => write!(f, "read only: {}", why.0),
+            ApiError::ReadOnly { why } => write!(f, "read only: {why:?}"),
+            ApiError::HookRun { why } => write!(f, "hook run: {why:?}"),
+            ApiError::BadRequest => write!(f, "bad request"),
+            ApiError::HistoryCorrupt => write!(f, "history is corrupt"),
             ApiError::InvalidEdit { field, why } => write!(f, "invalid edit, {field}: {}", why.0),
             ApiError::Forbidden { why } => write!(f, "forbidden: {}", why.0),
             ApiError::Io { detail } => write!(f, "io: {detail}"),

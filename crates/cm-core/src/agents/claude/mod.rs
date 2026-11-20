@@ -294,9 +294,11 @@ fn settings_claims(setup: &Setup) -> Vec<FileClaim> {
 fn guard(path: &AbsPath, before: Option<&str>, after: Option<&str>) -> Result<(), ApiError> {
     let p = path.as_str();
     let name = path.file_name().unwrap_or("");
-    let refuse = |why: &str| {
+    let refuse = |why: &'static str| {
         Err(ApiError::ReadOnly {
-            why: RuleRef::new(why),
+            why: ReadOnlyReason::Rule {
+                rule: RuleRef::new(why),
+            },
         })
     };
     if [

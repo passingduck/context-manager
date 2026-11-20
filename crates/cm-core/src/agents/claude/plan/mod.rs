@@ -46,19 +46,21 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
 pub(super) fn read_text(cx: &PlanCx, path: &AbsPath) -> Result<Option<(String, Base)>, ApiError> {
     match cx.fs.stat(path) {
         Err(err) if err.is_not_found() => return Ok(None),
-        Err(err) => return Err(ApiError::Io { detail: err.detail }),
+        Err(err) => return Err(err.into()),
         Ok(_) => {}
     }
     match cx.fs.read(path) {
         Err(err) if err.is_not_found() => Ok(None),
-        Err(err) => Err(ApiError::Io { detail: err.detail }),
+        Err(err) => Err(err.into()),
         Ok(bytes) => match String::from_utf8(bytes.as_ref().clone()) {
             Ok(text) => {
                 let rev = Revision::of(text.as_bytes());
                 Ok(Some((text, Base::Rev { rev })))
             }
             Err(_) => Err(ApiError::ReadOnly {
-                why: RuleRef::new("edit.read_only.not_utf8"),
+                why: ReadOnlyReason::File {
+                    why: ReadOnlyWhy::NotUtf8,
+                },
             }),
         },
     }
@@ -91,7 +93,7 @@ pub(super) fn preview(edit: &Edit, ops: Vec<FileOp>, warnings: Vec<Warning>) -> 
     }
 }
 
-pub(super) fn takes_effect(rule: &str) -> Warning {
+pub(super) fn takes_effect(rule: &'static str) -> Warning {
     Warning::TakesEffect {
         agent: claude(),
         when: RuleRef::new(rule),

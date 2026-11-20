@@ -138,12 +138,7 @@ fn extra_load(cx: &ScanCx, id: LoadId, candidate: crate::agents::Candidate) -> L
             },
             None,
         ),
-        Err(err) => (
-            LoadStatus::Skipped {
-                skip: Skip::Invalid { detail: err.detail },
-            },
-            None,
-        ),
+        Err(err) => (LoadStatus::Skipped { skip: err.skip() }, None),
     };
     Load {
         id,

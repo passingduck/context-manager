@@ -180,7 +180,9 @@ fn status_of(error: &ApiError) -> StatusCode {
         | ApiError::ReadOnly { .. }
         | ApiError::Forbidden { .. } => StatusCode::FORBIDDEN,
         ApiError::InvalidEdit { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-        ApiError::Io { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        ApiError::Io { .. } | ApiError::HistoryCorrupt => StatusCode::INTERNAL_SERVER_ERROR,
+        ApiError::HookRun { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+        ApiError::BadRequest => StatusCode::BAD_REQUEST,
         ApiError::Unauthorized => StatusCode::UNAUTHORIZED,
     }
 }
@@ -188,11 +190,8 @@ fn status_of(error: &ApiError) -> StatusCode {
 async fn rpc(State(state): State<AppState>, body: Bytes) -> Response {
     let request: Request = match serde_json::from_slice(&body) {
         Ok(request) => request,
-        Err(e) => {
-            let error = ApiError::Io {
-                detail: format!("bad request: {e}"),
-            };
-            return (StatusCode::BAD_REQUEST, Json(error)).into_response();
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(ApiError::BadRequest)).into_response();
         }
     };
     match dispatch(state.host.as_ref(), request).await {
@@ -393,7 +392,7 @@ mod tests {
         assert_eq!(reply.status, 403, "{}", reply.body);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&reply.body).unwrap(),
-            serde_json::json!({"kind": "readOnly", "why": "host.read_only"})
+            serde_json::json!({"kind": "readOnly", "why": {"kind": "host"}})
         );
         assert_eq!(std::fs::read_to_string(file.as_path()).unwrap(), "before");
     }

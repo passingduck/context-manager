@@ -61,7 +61,7 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
 // Helpers
 // ---------------------------------------------------------------------------------------------
 
-fn invalid(field: &str, why: &str) -> ApiError {
+fn invalid(field: &str, why: &'static str) -> ApiError {
     ApiError::InvalidEdit {
         field: field.to_owned(),
         why: RuleRef::new(why),
@@ -80,7 +80,7 @@ fn scan_cx<'a>(cx: &'a PlanCx) -> ScanCx<'a> {
     }
 }
 
-fn warning_effect(rule: &str) -> Warning {
+fn warning_effect(rule: &'static str) -> Warning {
     Warning::TakesEffect {
         agent: me(),
         when: RuleRef::new(rule),
@@ -97,10 +97,12 @@ fn read(cx: &PlanCx, path: &AbsPath) -> Result<Option<String>, ApiError> {
         Ok(bytes) => String::from_utf8(bytes.as_ref().clone())
             .map(Some)
             .map_err(|_| ApiError::ReadOnly {
-                why: RuleRef::new("edit.read_only.not_utf8"),
+                why: ReadOnlyReason::File {
+                    why: ReadOnlyWhy::NotUtf8,
+                },
             }),
         Err(err) if err.is_not_found() => Ok(None),
-        Err(err) => Err(ApiError::Io { detail: err.detail }),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -415,10 +417,7 @@ fn add_hook(cx: &PlanCx, file: &AbsPath, draft: &HookDraft) -> Result<Preview, A
         .ok_or_else(|| invalid("file", RULE_FILE))?;
     if let EditPolicy::ReadOnly { why } = &hook_file.policy {
         return Err(ApiError::ReadOnly {
-            why: RuleRef::new(match why {
-                ReadOnlyWhy::Managed => "edit.read_only.managed",
-                _ => "edit.read_only.agent_state",
-            }),
+            why: ReadOnlyReason::File { why: why.clone() },
         });
     }
     check_draft(draft)?;

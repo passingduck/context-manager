@@ -118,7 +118,9 @@ pub(super) fn set_enabled(cx: &PlanCx, id: &HookId, enabled: bool) -> Planned {
             }
             if !editable {
                 return Err(ApiError::ReadOnly {
-                    why: RuleRef::new("gemini.hook.disabled_by_policy"),
+                    why: ReadOnlyReason::Rule {
+                        rule: RuleRef::new("gemini.hook.disabled_by_policy"),
+                    },
                 });
             }
             let disk = read(cx, &layer.path)?;

@@ -1,6 +1,6 @@
 // A small Chrome DevTools Protocol driver. Node 24 supplies `WebSocket` and `fetch`, so it needs no package.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -161,6 +161,14 @@ export async function launch(chromePath) {
       await sleep(100);
       await send("Input.insertText", { text });
       await sleep(250);
+    },
+    /** Saves a PNG to `$CM_E2E_SHOTS/<name>.png` when that variable names a directory. Does nothing otherwise. */
+    async screenshot(name) {
+      const dir = process.env.CM_E2E_SHOTS;
+      if (!dir) return;
+      const { data } = await send("Page.captureScreenshot", { format: "png" });
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${name}.png`), Buffer.from(data, "base64"));
     },
     async close() {
       try {
