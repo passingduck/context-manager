@@ -75,14 +75,60 @@ fn in_a_trusted_folder_the_scan_lists_the_conditional_loads_the_simulator_adds()
 }
 
 #[test]
-fn in_an_untrusted_folder_neither_lists_a_conditional_load() {
+fn in_an_untrusted_folder_both_list_the_conditional_loads_as_skipped() {
     let fx = Fixture::new();
     tree(&fx);
     fx.write(
         &fx.home_path(".gemini/trustedFolders.json"),
         &serde_json::json!({fx.project().as_str(): "DO_NOT_TRUST"}).to_string(),
     );
-    assert!(assert_scan_and_simulator_agree(&fx.env()).is_empty());
+    let found = assert_scan_and_simulator_agree(&fx.env());
+    assert_eq!(
+        found.len(),
+        2,
+        "the nested files stay in the snapshot: {found:?}"
+    );
+    // Each is in the scan as a skipped load, for the folder's trust.
+    let scanned = scan_full(&fx.env());
+    for file in [
+        fx.project_path("sub/GEMINI.md"),
+        fx.project_path("sub/deep/GEMINI.md"),
+    ] {
+        let load = gemini_view(&scanned.snapshot)
+            .loads
+            .iter()
+            .find(|l| l.file == file)
+            .expect("the file is listed");
+        assert_eq!(
+            load.status,
+            LoadStatus::Skipped {
+                skip: Skip::Untrusted
+            }
+        );
+        assert!(scanned.snapshot.files.contains_key(&file));
+    }
+    // The simulator says the same for a directory the walk did not enter.
+    fx.write(&fx.project_path(".gitignore"), "ignored/\n");
+    fx.write(&fx.project_path("ignored/x/GEMINI.md"), "# ignored dir\n");
+    let env = fx.env();
+    let scanned = scan_full(&env);
+    let cx = ScanCx::new(&env, scanned.fs());
+    let target = fx.project_path("ignored/x/probe.rs");
+    let sim = simulate(cm_core::agents::registry(), &cx, &scanned.snapshot, &target)
+        .into_iter()
+        .find(|s| s.agent == Gemini.id())
+        .unwrap();
+    assert!(
+        sim.extra
+            .iter()
+            .any(|l| l.file == fx.project_path("ignored/x/GEMINI.md")
+                && l.status
+                    == LoadStatus::Skipped {
+                        skip: Skip::Untrusted
+                    }),
+        "{:?}",
+        sim.extra
+    );
 }
 
 #[test]

@@ -1102,6 +1102,7 @@ pub(super) fn own_candidates(cx: &ScanCx, dir: &AbsPath, out: &mut Vec<Candidate
                 scope,
                 rule: RuleRef::new(rule),
                 access: under(),
+                skip: None,
             });
         }
     }
@@ -1126,6 +1127,7 @@ pub(super) fn own_candidates(cx: &ScanCx, dir: &AbsPath, out: &mut Vec<Candidate
             scope: scope.clone(),
             rule: RuleRef::new(rule),
             access,
+            skip: None,
         });
     }
 }
@@ -1152,6 +1154,7 @@ pub(super) fn global_candidates(cx: &ScanCx, setup: &Setup, out: &mut Vec<Candid
                         base: base.clone(),
                         patterns,
                     },
+                    skip: None,
                 });
             }
         }

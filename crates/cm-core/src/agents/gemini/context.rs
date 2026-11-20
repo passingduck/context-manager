@@ -438,11 +438,14 @@ fn session_identities(w: &World) -> HashSet<String> {
         .collect()
 }
 
+/// Why the CLI finds these files and does not load them: the folder is untrusted. The one answer
+/// for the scan and the simulator.
+pub(super) fn jit_skip(w: &World) -> Option<Skip> {
+    (!w.trusted()).then_some(Skip::Untrusted)
+}
+
 /// Spec 1, subdirectory row: what the CLI adds when a tool touches a path in `dir`.
 pub(super) fn jit_files(w: &World, dir: &AbsPath) -> Vec<(AbsPath, AbsPath)> {
-    if !w.trusted() {
-        return Vec::new();
-    }
     let Some(root) = w.root_of(dir) else {
         return Vec::new();
     };
@@ -571,14 +574,18 @@ pub(super) fn gather(b: &mut Builder) -> Gathered {
         let when = Activation::OnAccess {
             rule: AccessRule::UnderDir { dir },
         };
-        let item = b.add_context_file(
-            &path,
-            scope,
-            DocKind::Instructions,
-            "gemini.context.jit",
-            when,
-        );
-        out.jit.push(item);
+        if jit_skip(w).is_some() {
+            b.add_untrusted(&path, scope, when, "gemini.context.jit");
+        } else {
+            let item = b.add_context_file(
+                &path,
+                scope,
+                DocKind::Instructions,
+                "gemini.context.jit",
+                when,
+            );
+            out.jit.push(item);
+        }
     }
     out
 }

@@ -81,6 +81,8 @@ pub struct Candidate {
     pub scope: Scope,
     pub rule: RuleRef,
     pub access: AccessRule,
+    /// Set when the agent finds the file and does not load it, such as in an untrusted folder.
+    pub skip: Option<Skip>,
 }
 
 pub trait Agent: Sync {

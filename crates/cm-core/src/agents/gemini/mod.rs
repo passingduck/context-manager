@@ -121,6 +121,7 @@ impl Agent for Gemini {
                 scope: Scope::Project { dir: at.clone() },
                 rule: rule("gemini.context.jit"),
                 access: AccessRule::UnderDir { dir: at },
+                skip: context::jit_skip(&w),
             })
             .collect()
     }
