@@ -3,10 +3,10 @@
 use std::collections::HashSet;
 
 use super::catalog::{self, Budget, Entry, Placed, PromptScope};
-use super::out::{Block, BlockPart, NewLoad, Out, delivered, discovery};
+use super::out::{Block, NewLoad, Out, delivered, discovery};
 use super::plugins::Plugin;
 use super::setup::{Layer, LayerKind, Setup, get_bool, get_u64, read_lossy};
-use crate::agents::ScanCx;
+use crate::agents::{Pieces, ScanCx};
 use crate::limits::cut_bytes_lossy;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
@@ -723,6 +723,7 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, plugins: &[Plugin], out: &mut Out)
             status: body_status,
             delivered: Some(body_delivered),
         });
+        out.texts.insert(body.clone(), cut.text);
         out.claim(&skill.file, skill_policy(skill.scope, &skill.shown));
         let policy_file = skill.file.parent().map(|d| d.join("agents/openai.yaml"));
         if let Some(p) = policy_file {
@@ -833,19 +834,22 @@ fn budget_unit(budget: Budget) -> Unit {
     }
 }
 
-/// The developer message of spec 5.1. The skill lines are loads, the rest is glue.
+/// The developer message of spec 5.1. The skill lines are loads. The rest, the line breaks
+/// included, is frame.
 fn catalog_block(rendered: &catalog::Rendered, lines: &[(usize, LoadId, String)]) -> Block {
     let full = catalog::message(rendered);
     let marker = "### Available skills\n";
     let head_end = full.find(marker).map(|i| i + marker.len()).unwrap_or(0);
-    let mut parts = vec![BlockPart::Text(full[..head_end].to_owned())];
+    let mut pieces = Pieces::default();
+    pieces.frame(&full[..head_end]);
     for (_, id, line) in lines {
-        parts.push(BlockPart::Load(id.clone(), format!("{line}\n")));
+        pieces.load(id.clone(), line.clone());
+        pieces.frame("\n");
     }
-    parts.push(BlockPart::Text("</skills_instructions>".to_owned()));
+    pieces.frame("</skills_instructions>");
     Block {
         delivery: Delivery::DeveloperMessage,
         label: BlockLabel::SkillCatalog,
-        parts,
+        pieces,
     }
 }

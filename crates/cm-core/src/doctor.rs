@@ -29,6 +29,7 @@ pub fn check(input: &Input) -> Vec<Diagnostic> {
     missing_links(input, &mut out);
     hook_programs(input, &mut out);
     parse_errors(input, &mut out);
+    imported_bodies(input, &mut out);
     if input.walk_capped
         && !input.existing.iter().any(|d| {
             matches!(&d.problem, Problem::WalkCapped { entries } if *entries as usize == walk::MAX_ENTRIES)
@@ -197,6 +198,72 @@ fn hook_programs(input: &Input, out: &mut Vec<Diagnostic>) {
             });
         }
     }
+}
+
+/// A skill, command or subagent that a catalog lists and whose body loads on invoke, while an
+/// import also loads its file at session start. The body then reaches the model in every
+/// session and again on invoke.
+fn imported_bodies(input: &Input, out: &mut Vec<Diagnostic>) {
+    let delivered = |load: &Load| {
+        matches!(
+            load.status,
+            LoadStatus::Loaded | LoadStatus::Truncated { .. }
+        )
+    };
+    for view in input.views {
+        let load = |id: &LoadId| view.loads.get(id.0 as usize);
+        for ext in &view.extensions {
+            let listed = ext.listing.as_ref().and_then(load).is_some_and(delivered);
+            let on_invoke = load(&ext.body)
+                .is_some_and(|body| body.when == Activation::OnInvoke && delivered(body));
+            if !listed || !on_invoke {
+                continue;
+            }
+            for import in view
+                .loads
+                .iter()
+                .filter(|l| l.file == ext.file && delivered(l))
+            {
+                let Via::Import { host, line, .. } = &import.via else {
+                    continue;
+                };
+                let (Some(host_load), true) = (load(host), at_start(&view.loads, import)) else {
+                    continue;
+                };
+                out.push(Diagnostic {
+                    severity: Severity::Warning,
+                    agent: Some(view.agent.clone()),
+                    at: Subject::File {
+                        path: ext.file.clone(),
+                        line: None,
+                    },
+                    problem: Problem::BodyAlsoImported {
+                        import: import.id.clone(),
+                        host: host_load.file.clone(),
+                        line: *line,
+                    },
+                    fix: None,
+                });
+            }
+        }
+    }
+}
+
+/// Whether a load reaches the model when the session starts: its own activation, or that of the
+/// host it is imported with.
+fn at_start(loads: &[Load], load: &Load) -> bool {
+    let mut at = load;
+    for _ in 0..=loads.len() {
+        match (&at.when, &at.via) {
+            (Activation::SessionStart, _) => return true,
+            (Activation::WithHost, Via::Import { host, .. }) => match loads.get(host.0 as usize) {
+                Some(host) => at = host,
+                None => return false,
+            },
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// A JSON, JSONC or TOML file an agent uses that does not parse. The adapters report the files

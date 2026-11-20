@@ -158,9 +158,9 @@ fn skill_precedence_later_roots_win_a_name_clash() {
         .iter()
         .find(|b| b.label == BlockLabel::SkillCatalog)
         .unwrap();
-    assert!(catalog.text.contains("from project agents"));
-    assert!(!catalog.text.contains("from user agents"));
-    assert!(catalog.text.contains("only one"));
+    assert!(catalog.text().contains("from project agents"));
+    assert!(!catalog.text().contains("from user agents"));
+    assert!(catalog.text().contains("only one"));
 }
 
 #[test]

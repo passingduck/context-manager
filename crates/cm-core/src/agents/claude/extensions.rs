@@ -478,6 +478,12 @@ fn ext_id(kind: ExtKind, file: &AbsPath) -> ExtId {
     ExtId(sha256_hex(format!("claude\0{tag}\0{file}").as_bytes())[..16].to_owned())
 }
 
+/// Spec 4: what a skill or command body and a subagent prompt send when invoked: the file
+/// without its frontmatter. The scan counts this text and `load_texts` returns it.
+pub(super) fn body_of(text: &str) -> &str {
+    &text[frontmatter::parse(text).body]
+}
+
 /// Spec 4, "What reaches the model": one catalog line and what the cut did to it. A skill or
 /// command entry is `description - when_to_use`, cut at `max_desc` characters. A subagent entry
 /// is the whole description and the `(Tools: ...)` suffix.
@@ -812,7 +818,7 @@ impl Builder<'_, '_> {
                 ExtKind::Subagent => DocKind::SubagentPrompt,
             };
             let via = Via::Discovery { rule: rule.clone() };
-            let body_text = &p.text[p.fm.body.clone()];
+            let body_text = body_of(&p.text);
 
             if let Some((why, _)) = &p.rejected {
                 let status = if *why == "claude.ext.rejected_too_large" {

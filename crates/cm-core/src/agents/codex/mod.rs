@@ -20,10 +20,13 @@ mod tests;
 
 use std::sync::OnceLock;
 
-use super::{Agent, AgentScan, PlanCx, ScanCx, home_dir, presence, rules_from};
+use std::collections::BTreeMap;
+
+use super::{
+    Agent, AgentScan, PlanCx, ScanCx, assemble, file_text, home_dir, presence, rules_from,
+};
 use crate::model::*;
-use crate::tokens;
-use out::{Block, BlockPart, Out, me};
+use out::{Out, me};
 use setup::Setup;
 
 pub use hooks::{HookInspection, TrustStatus, current_hash};
@@ -40,7 +43,9 @@ pub fn inspect_hooks(cx: &ScanCx) -> Vec<HookInspection> {
 
 struct Computed {
     scan: AgentScan,
-    blocks: Vec<Block>,
+    rendered: Vec<RenderedBlock>,
+    /// The text of each delivered load that fires after the session starts.
+    texts: BTreeMap<LoadId, String>,
 }
 
 fn rank(delivery: Delivery) -> u8 {
@@ -80,7 +85,19 @@ fn compute(cx: &ScanCx) -> Computed {
     let presence = presence(cx, "codex", home.exists);
 
     out.blocks.sort_by_key(|b| rank(b.delivery));
-    let session: Vec<ContextBlock> = out.blocks.iter().map(context_block).collect();
+    let (session, rendered): (Vec<ContextBlock>, Vec<RenderedBlock>) =
+        std::mem::take(&mut out.blocks)
+            .into_iter()
+            .map(|block| {
+                // Spec 3.4: the memory template is not reproduced.
+                let fidelity = if block.label == BlockLabel::Memory {
+                    Fidelity::Approximate
+                } else {
+                    Fidelity::Exact
+                };
+                assemble(block.delivery, block.label, fidelity, block.pieces)
+            })
+            .unzip();
     let by_label = {
         let mut by: Vec<(BlockLabel, u32)> = Vec::new();
         for block in &session {
@@ -120,42 +137,8 @@ fn compute(cx: &ScanCx) -> Computed {
             files: std::mem::take(&mut out.files),
             diagnostics: std::mem::take(&mut out.diagnostics),
         },
-        blocks: std::mem::take(&mut out.blocks),
-    }
-}
-
-fn context_block(block: &Block) -> ContextBlock {
-    let parts: Vec<Part> = block
-        .parts
-        .iter()
-        .map(|p| match p {
-            BlockPart::Text(t) => Part::Glue {
-                tokens: tokens::count(t),
-            },
-            BlockPart::Load(id, t) => Part::Load {
-                load: id.clone(),
-                tokens: tokens::count(t),
-            },
-        })
-        .collect();
-    let total = parts
-        .iter()
-        .map(|p| match p {
-            Part::Glue { tokens } | Part::Load { tokens, .. } => *tokens,
-        })
-        .sum();
-    ContextBlock {
-        delivery: block.delivery,
-        label: block.label,
-        parts,
-        tokens: total,
-        // Spec 3.4: the memory template is not reproduced.
-        fidelity: if block.label == BlockLabel::Memory {
-            Fidelity::Approximate
-        } else {
-            Fidelity::Exact
-        },
-        preceded_by: Vec::new(),
+        rendered,
+        texts: std::mem::take(&mut out.texts),
     }
 }
 
@@ -242,20 +225,16 @@ impl Agent for Codex {
 
     /// Spec 1.4: the literal blocks, in delivery order.
     fn render(&self, cx: &ScanCx, _view: &AgentView) -> Vec<RenderedBlock> {
-        compute(cx)
-            .blocks
-            .iter()
-            .map(|block| {
-                let text = block.text();
-                RenderedBlock {
-                    delivery: block.delivery,
-                    label: block.label,
-                    tokens: tokens::count(&text),
-                    fidelity: context_block(block).fidelity,
-                    text,
-                }
-            })
-            .collect()
+        compute(cx).rendered
+    }
+
+    /// A skill body or a subagent prompt as the scan counted it. Any other load that fires later
+    /// is a file the model reads as it is.
+    fn load_text(&self, cx: &ScanCx, _view: &AgentView, load: &Load) -> Option<String> {
+        match compute(cx).texts.remove(&load.id) {
+            Some(text) => Some(text),
+            None => file_text(cx, &load.file),
+        }
     }
 
     fn known_projects(&self, cx: &ScanCx) -> Vec<AbsPath> {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useChange, useFile, useRevertCheck } from "../api/queries";
+import { useChange, useFile, useLoadTexts, useRevertCheck } from "../api/queries";
 import { useProject } from "../app/project";
 import { CodeEditor, DiffView, EditableEditor } from "../components/CodeEditor";
 import { Badge, Button, Chip, ErrorNote, Loading, Mono, PrimaryButton } from "../components/ui";
@@ -7,11 +7,12 @@ import type { ChangeRecord } from "../gen/ChangeRecord";
 import type { FileEntry } from "../gen/FileEntry";
 import type { Hook } from "../gen/Hook";
 import type { Load } from "../gen/Load";
+import type { LoadText } from "../gen/LoadText";
 import { useI18n } from "../i18n";
 import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
-import { exact, positionOf } from "../lib/prefix";
-import { activationTone, statusTone, truncationLine } from "../lib/loads";
+import { exact, positionsOf, type Position } from "../lib/prefix";
+import { activationTone, picked, sends, statusTone, truncationLine } from "../lib/loads";
 import type { Route } from "../lib/route";
 import { isDirty, setBuffer, useBuffer } from "../write/buffers";
 import { useWrite, type Proposal } from "../write/flow";
@@ -57,18 +58,25 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
   const { t, d } = useI18n();
   const project = useProject();
   const entry: FileEntry | undefined = project.snapshot.files[path];
+  // The picked place first, then the other places of the agent the route names, then the rest in scan order.
   const uses = useMemo(() => {
-    const all = project.snapshot.agents.flatMap((view) => view.loads.filter((l) => l.file === path).map((load) => ({ agent: view.agent, load })));
-    return all.sort((a, b) => Number(b.agent === route.ag) - Number(a.agent === route.ag));
-  }, [project.snapshot, path, route.ag]);
+    const all = project.snapshot.agents.flatMap((view) => {
+      const chosen = picked(view, route)?.load ?? null;
+      return view.loads.filter((l) => l.file === path).map((load) => ({ agent: view.agent, load, chosen: chosen?.id === load.id }));
+    });
+    const rank = (use: { agent: string; chosen: boolean }) => (use.chosen ? 2 : 0) + (use.agent === route.ag ? 1 : 0);
+    return all.sort((a, b) => rank(b) - rank(a));
+  }, [project.snapshot, path, route]);
   const rev = entry?.state.kind === "present" ? entry.state.rev : "none";
   const file = useFile(project.cwd, entry?.state.kind === "present" ? path : null, rev);
+  // An agent the route does not name shows every place of the file.
   const places = useMemo(
     () => project.snapshot.agents.flatMap((view) => {
-      const pos = positionOf(view, path);
-      return pos ? [{ agent: view.agent, pos }] : [];
+      const chosen = picked(view, route) ?? { file: path, load: null };
+      const positions = positionsOf(view, chosen);
+      return positions.length > 0 || chosen.load ? [{ agent: view.agent, positions }] : [];
     }),
-    [project.snapshot, path],
+    [project.snapshot, path, route],
   );
   const lead = uses[0];
   const cutLine = lead && file.data?.text ? truncationLine(file.data.text, lead.load.status) : null;
@@ -157,11 +165,20 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
         <section className="border-b border-line px-4 py-2" aria-label={t.prefix.detailTitle}>
           <h3 className="mb-1 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.prefix.detailTitle}</h3>
           <ul className="space-y-0.5">
-            {places.map(({ agent, pos }) => (
-              <li key={agent} data-prefix-position={agent} className="flex items-baseline gap-2">
+            {places.map(({ agent, positions }) => (
+              <li key={agent} data-prefix-position={agent} data-testid="position-line" className="flex items-baseline gap-2">
                 <span className="size-2 shrink-0 rounded-full" style={{ background: project.color(agent) }} aria-hidden />
                 <b>{project.name(agent)}</b>
-                <span className="tabular-nums">{t.prefix.detailLine(t.prefix.positionText(exact(pos.seg.start), exact(pos.seg.end), exact(pos.total)), (pos.unsized.length > 0 ? t.prefix.afterAtLeast : t.prefix.afterText)(exact(pos.after)))}</span>
+                {positions.length === 0 && <span>{t.prefix.notInPrefix}</span>}
+                {positions.length === 1 && <span className="tabular-nums">{positionLine(positions[0]!, t)}</span>}
+                {positions.length > 1 && (
+                  <div>
+                    <p>{t.prefix.places(positions.length)}</p>
+                    <ul className="tabular-nums">
+                      {positions.map((pos) => <li key={pos.seg.index}>{positionLine(pos, t)}</li>)}
+                    </ul>
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -172,17 +189,18 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
         <h3 className="mb-1.5 text-[12px] font-semibold uppercase tracking-wide text-faint">{t.detail.why}</h3>
         {uses.length === 0 && <p className="rounded border border-line bg-subtle p-2 text-muted">{t.detail.notLoaded}</p>}
         <div className="space-y-2">
-          {uses.map(({ agent, load }) => (
-            <WhyCard key={`${agent}:${load.id}`} agent={agent} load={load} text={file.data?.text ?? null} />
+          {uses.map(({ agent, load, chosen }) => (
+            <WhyCard key={`${agent}:${load.id}`} agent={agent} load={load} chosen={chosen} text={file.data?.text ?? null} />
           ))}
         </div>
       </section>
       </div>
 
-      <section className="flex min-h-[12rem] flex-1 flex-col border-t border-line" aria-label={t.detail.text}>
+      <section className="flex min-h-[12rem] flex-1 flex-col border-t border-line" aria-label={editable ? t.detail.text : t.detail.textReadOnly}>
         <Toolbar
           left={
             <>
+              <b data-testid="editor-heading" className="truncate">{editable ? t.detail.text : t.detail.textReadOnly}</b>
               <Chip>{t.format[entry.format]}</Chip>
               {state.kind === "present" && <span className="text-muted">{t.detail.lines(state.lines)}</span>}
               {cutLine && <Badge tone="bad">{t.detail.cutLine(cutLine)}</Badge>}
@@ -230,9 +248,15 @@ function FileDetail({ path, route }: { path: string; route: Route }) {
   );
 }
 
-function WhyCard({ agent, load, text }: { agent: string; load: Load; text: string | null }) {
+function positionLine(pos: Position, t: ReturnType<typeof useI18n>["t"]): string {
+  return t.prefix.detailLine(t.prefix.positionText(exact(pos.seg.start), exact(pos.seg.end), exact(pos.total)), (pos.unsized.length > 0 ? t.prefix.afterAtLeast : t.prefix.afterText)(exact(pos.after)));
+}
+
+function WhyCard({ agent, load, chosen, text }: { agent: string; load: Load; chosen: boolean; text: string | null }) {
   const { t, d } = useI18n();
   const project = useProject();
+  const texts = useLoadTexts(project.cwd, agent, load.file, project.snapshot.fingerprint);
+  const sent = texts.data?.kind === "current" ? texts.data.texts.find((entry) => entry.load === load.id) : undefined;
   const view = project.view(agent);
   const tone = statusTone(load.status);
   const via = load.via;
@@ -246,10 +270,11 @@ function WhyCard({ agent, load, text }: { agent: string; load: Load; text: strin
   const line = cut && text ? truncationLine(text, load.status) : null;
 
   return (
-    <article className="rounded border border-line bg-subtle p-2.5">
+    <article data-testid="why-card" data-agent={agent} data-via={load.via.kind} data-kind={load.kind} data-chosen={chosen || undefined} aria-current={chosen || undefined} className={`rounded border p-2.5 ${chosen ? "border-accent bg-accent-bg" : "border-line bg-subtle"}`}>
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="size-2 rounded-full" style={{ background: project.color(agent) }} aria-hidden />
         <b>{project.name(agent)}</b>
+        {chosen && <Badge tone="info">{t.detail.picked}</Badge>}
         <Badge tone={activationTone(load.when)}>{say(t.activation.badge, load.when, d)}</Badge>
         {tone && <Badge tone={tone}>{load.status.kind === "skipped" ? say(t.skipShort, load.status.skip, d) : say(t.status.badge, load.status, d)}</Badge>}
         <Chip>{t.docKind[load.kind]}</Chip>
@@ -267,13 +292,30 @@ function WhyCard({ agent, load, text }: { agent: string; load: Load; text: strin
         <Field label={t.detail.whenLabel}>{say(t.activation.detail, load.when, d)}</Field>
         <Field label={t.detail.statusLabel}>
           <div className="space-y-0.5">
-            <p>{say(t.status.detail, load.status, d)}</p>
+            <p data-testid="why-sends">{say(t.sends, sends(load), d)}</p>
             {load.status.kind === "skipped" && <p>{load.status.skip.kind === "notRead" ? project.rule(load.status.skip.why) : say(t.skip, load.status.skip, d)}</p>}
             {cut && <p>{t.detail.cutAt(cut.kept, cut.total, t.unit[cut.limit.unit], t.limit(cut.limit))}{line ? ` ${t.detail.cutLine(line)}` : ""}</p>}
           </div>
         </Field>
       </dl>
+      <Received load={load} sent={sent} pending={texts.isPending || texts.data?.kind === "stale"} />
     </article>
+  );
+}
+
+/** The text the model receives from one load: a block of it, or one line when it is the whole file. A skipped load receives nothing. */
+function Received({ load, sent, pending }: { load: Load; sent: LoadText | undefined; pending: boolean }) {
+  const { t } = useI18n();
+  if (load.status.kind === "skipped") return null;
+  if (!sent || sent.text === null) return pending ? <p className="mt-1.5 text-muted">{t.loading}</p> : null;
+  if (sent.wholeFile) return <p data-testid="load-text-whole" className="mt-1.5 text-muted">{t.detail.sameAsFile}</p>;
+  return (
+    <div className="mt-1.5">
+      <p className="mb-0.5 text-[11px] text-muted">{t.detail.receives(fmt.tokens(load.delivered?.tokens ?? 0))}</p>
+      <pre data-testid="load-text" className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-bg px-2 py-1.5 font-mono text-[12px] leading-5">
+        {sent.text}
+      </pre>
+    </div>
   );
 }
 

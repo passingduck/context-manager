@@ -532,6 +532,23 @@ variants! {
         Load { load: LoadId, tokens: u32 },
         Glue { tokens: u32 },
     }
+
+    /// One run of a session-start block's literal text. A block's text is its pieces joined,
+    /// and its `parts` count the same pieces in the same order.
+    pub enum Piece {
+        /// Text the agent adds around the loads: a header, a separator, the intro of a list.
+        Frame { text: String },
+        /// The text one load puts in front of the model, without the frame around it.
+        Load { load: LoadId, text: String },
+    }
+}
+
+impl Piece {
+    pub fn text(&self) -> &str {
+        match self {
+            Piece::Frame { text } | Piece::Load { text, .. } => text,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -785,7 +802,7 @@ variants! {
         /// files below that depth that the agent loads.
         ListingTooDeep { max: u32 },
         /// The scan read `max` bytes and then stopped reading files, so the files it did not read
-        /// are shown as unreadable.
+        /// are shown as not read.
         ReadBudgetExhausted { max: u64 },
         /// The imports of the whole scan added `max` bytes, and the scan expanded no more, so the
         /// files it expanded after that show fewer imports than the agent loads.
@@ -794,6 +811,10 @@ variants! {
         /// scan counted the tokens of its first `max` bytes and estimated the rest, and it looked
         /// for links only in those first bytes.
         TextPartlyAnalyzed { max: u64 },
+        /// A skill, command or subagent whose body also loads at session start, because `line`
+        /// of `host` imports its file. The body then reaches the model in every session, and
+        /// again when the item is invoked.
+        BodyAlsoImported { import: LoadId, host: AbsPath, line: u32 },
     }
 }
 
@@ -999,13 +1020,22 @@ records! {
         pub timed_out: bool,
     }
 
-    /// The literal text of one session-start block.
+    /// The literal text of one session-start block, as the ordered pieces it is made of.
     pub struct RenderedBlock {
         pub delivery: Delivery,
         pub label: BlockLabel,
-        pub text: String,
+        pub pieces: Vec<Piece>,
         pub tokens: u32,
         pub fidelity: Fidelity,
+    }
+
+    /// What the model receives from one load of a file.
+    pub struct LoadText {
+        pub load: LoadId,
+        /// `None` when the load sends nothing: it is skipped.
+        pub text: Option<String>,
+        /// The text is the file as it is on disk, apart from white space at either end.
+        pub whole_file: bool,
     }
 
     /// Per agent: what a path access adds.
@@ -1065,6 +1095,23 @@ records! {
     }
 }
 
+impl RenderedBlock {
+    /// The block's literal text: its pieces joined.
+    pub fn text(&self) -> String {
+        self.pieces.iter().map(Piece::text).collect()
+    }
+}
+
+variants! {
+    /// The answer of `load_texts`.
+    pub enum LoadTexts {
+        /// One entry per load of the file, in load order.
+        Current { texts: Vec<LoadText> },
+        /// The disk no longer matches the snapshot the request names. Scan again.
+        Stale,
+    }
+}
+
 choices! {
     pub enum MatcherKind { None, Exact, Regex, ExactOrRegex }
     pub enum FieldType { String, Number, Bool, StringList, StringMap, Json }
@@ -1079,6 +1126,8 @@ records! {
     pub struct ScanReq { pub cwd: AbsPath }
     pub struct ReadReq { pub cwd: AbsPath, pub path: AbsPath }
     pub struct RenderReq { pub cwd: AbsPath, pub agent: AgentId }
+    /// `fingerprint` is the one of the snapshot the client shows.
+    pub struct LoadTextsReq { pub cwd: AbsPath, pub agent: AgentId, pub file: AbsPath, pub fingerprint: Fingerprint }
     pub struct SimReq { pub cwd: AbsPath, pub path: AbsPath }
     pub struct SearchReq { pub cwd: AbsPath, pub query: String, pub regex: bool, pub case_sensitive: bool }
     pub struct WatchReq { pub cwd: AbsPath, pub since: Fingerprint }

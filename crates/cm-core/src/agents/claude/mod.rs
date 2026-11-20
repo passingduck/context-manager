@@ -173,6 +173,11 @@ impl Agent for Claude {
             .collect()
     }
 
+    /// The same text `render` would send, for a load that fires later.
+    fn load_text(&self, cx: &ScanCx, _view: &AgentView, load: &Load) -> Option<String> {
+        render::text_of(cx, load)
+    }
+
     /// Spec 5.2: the keys of `projects` in `~/.claude.json`.
     fn known_projects(&self, cx: &ScanCx) -> Vec<AbsPath> {
         let setup = Setup::load(cx);

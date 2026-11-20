@@ -1,6 +1,6 @@
 //! Memories (spec 3): which root, whether it is on, the one injected file, the read-only rest.
 
-use super::out::{Block, BlockPart, NewLoad, Out, delivered, discovery};
+use super::out::{Block, NewLoad, Out, delivered, discovery};
 use super::setup::{Setup, get_bool, get_path, get_str};
 use crate::agents::ScanCx;
 use crate::limits::cut_tokens;
@@ -201,11 +201,12 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
         delivered: deliv,
     });
     if let Some(shown) = shown {
-        out.blocks.push(Block {
-            delivery: Delivery::DeveloperMessage,
-            label: BlockLabel::Memory,
-            parts: vec![BlockPart::Load(id, shown)],
-        });
+        out.blocks.push(Block::one(
+            Delivery::DeveloperMessage,
+            BlockLabel::Memory,
+            id,
+            shown,
+        ));
     }
 }
 

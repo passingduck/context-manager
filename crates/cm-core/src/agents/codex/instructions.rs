@@ -1,7 +1,8 @@
 //! `AGENTS.md` and the config keys that inject instructions (spec 1 and 5.5).
 
-use super::out::{Block, BlockPart, NewLoad, Out, delivered, discovery};
+use super::out::{Block, NewLoad, Out, delivered, discovery};
 use super::setup::{Layer, Setup, get_str, read_lossy};
+use crate::agents::Pieces;
 use crate::agents::ScanCx;
 use crate::limits::cut_bytes_lossy;
 use crate::model::*;
@@ -335,11 +336,12 @@ fn model_instructions(cx: &ScanCx, setup: &Setup, out: &mut Out) {
         delivered: deliv,
     });
     if let Some(text) = text {
-        out.blocks.push(Block {
-            delivery: Delivery::SystemPrompt,
-            label: BlockLabel::Instructions,
-            parts: vec![BlockPart::Load(id, text)],
-        });
+        out.blocks.push(Block::one(
+            Delivery::SystemPrompt,
+            BlockLabel::Instructions,
+            id,
+            text,
+        ));
     }
 }
 
@@ -366,11 +368,12 @@ fn developer_instructions(setup: &Setup, out: &mut Out) {
         delivered: deliv,
     });
     if loaded {
-        out.blocks.push(Block {
-            delivery: Delivery::DeveloperMessage,
-            label: BlockLabel::Instructions,
-            parts: vec![BlockPart::Load(id, text.to_owned())],
-        });
+        out.blocks.push(Block::one(
+            Delivery::DeveloperMessage,
+            BlockLabel::Instructions,
+            id,
+            text.to_owned(),
+        ));
     }
 }
 
@@ -412,7 +415,7 @@ fn agents_block(
     if global.is_none() && project.is_empty() {
         return;
     }
-    let mut parts = Vec::new();
+    let mut pieces = Pieces::default();
     let header = if project.is_empty() {
         "# AGENTS.md instructions\n\n<INSTRUCTIONS>\n".to_owned()
     } else {
@@ -421,31 +424,28 @@ fn agents_block(
             setup.cwd
         )
     };
-    parts.push(BlockPart::Text(header));
+    pieces.frame(&header);
     let mut has_previous = false;
     if let Some((id, text)) = global {
-        parts.push(BlockPart::Load(id, text));
+        pieces.load(id, text);
         has_previous = true;
     }
     for (index, (id, text)) in project.into_iter().enumerate() {
         if has_previous {
-            parts.push(BlockPart::Text(
-                if index == 0 {
-                    PROJECT_SEPARATOR
-                } else {
-                    "\n\n"
-                }
-                .to_owned(),
-            ));
+            pieces.frame(if index == 0 {
+                PROJECT_SEPARATOR
+            } else {
+                "\n\n"
+            });
         }
-        parts.push(BlockPart::Load(id, text));
+        pieces.load(id, text);
         has_previous = true;
     }
-    parts.push(BlockPart::Text("\n</INSTRUCTIONS>".to_owned()));
+    pieces.frame("\n</INSTRUCTIONS>");
     out.blocks.push(Block {
         delivery: Delivery::UserMessage,
         label: BlockLabel::Instructions,
-        parts,
+        pieces,
     });
 }
 

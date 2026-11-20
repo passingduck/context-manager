@@ -30,6 +30,14 @@ const CHARS_PER_TOKEN: f64 = 4.0;
 const AGENTS_PLUGIN: &str = "cc-plugin-agents-md@builtin";
 const AGENTS_PLUGIN_LEGACY: &str = "agents-md@builtin";
 
+/// Spec 1.8: what Claude Code sends of an instruction file. Frontmatter and block comments are
+/// removed and the ends are trimmed. The flag says whether anything was removed. The scan counts
+/// this text and `render` sends it, so the two agree.
+pub(super) fn delivered_text(raw: &str) -> (String, bool) {
+    let stripped = strip(raw);
+    (stripped.text.trim().to_owned(), stripped.transformed)
+}
+
 pub(super) fn on_demand_cap(window_tokens: u32) -> u64 {
     let scaled = (f64::from(window_tokens) * ON_DEMAND_FRACTION * CHARS_PER_TOKEN).round() as u64;
     scaled.max(ON_DEMAND_FLOOR_CHARS)
@@ -465,16 +473,11 @@ impl<'a> Collector<'a> {
                 return Verdict::Skip(Skip::Invalid { why });
             }
         };
-        let raw = String::from_utf8_lossy(&bytes);
-        let stripped = strip(&raw);
-        let text = stripped.text.trim().to_owned();
+        let (text, stripped) = delivered_text(&String::from_utf8_lossy(&bytes));
         if text.is_empty() {
             return Verdict::Skip(Skip::Empty);
         }
-        Verdict::Present {
-            text,
-            stripped: stripped.transformed,
-        }
+        Verdict::Present { text, stripped }
     }
 
     #[allow(clippy::too_many_arguments)]

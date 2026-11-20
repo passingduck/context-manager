@@ -2,6 +2,7 @@
 import type { AbsPath } from "../gen/AbsPath";
 import type { HookRun } from "../gen/HookRun";
 import type { Load } from "../gen/Load";
+import type { LoadText } from "../gen/LoadText";
 import type { RenderedBlock } from "../gen/RenderedBlock";
 import type { Request } from "../gen/Request";
 import type { SearchHit } from "../gen/SearchHit";
@@ -40,6 +41,13 @@ function simulate(path: AbsPath): Simulation[] {
   });
 }
 
+/** The mock's stand-in for an adapter's text of one load: the file, or its kept lines. */
+function loadText(load: Load): string | null {
+  if (load.status.kind === "skipped") return null;
+  const text = texts[load.file] ?? "";
+  return load.status.kind === "truncated" ? text.split("\n").slice(0, load.status.kept).join("\n") : text;
+}
+
 function render(agent: string): RenderedBlock[] {
   const view = snapshot.agents.find((item) => item.agent === agent);
   if (!view) return [];
@@ -48,15 +56,20 @@ function render(agent: string): RenderedBlock[] {
     label: block.label,
     tokens: block.tokens,
     fidelity: block.fidelity,
-    text: block.parts
-      .map((part) => {
-        if (part.kind === "glue") return "";
-        const load = view.loads[part.load]!;
-        const text = texts[load.file] ?? "";
-        return load.status.kind === "truncated" ? text.split("\n").slice(0, load.status.kept).join("\n") : text;
-      })
-      .join("\n\n"),
+    pieces: block.parts.map((part) =>
+      part.kind === "glue" ? { kind: "frame" as const, text: "\n\n" } : { kind: "load" as const, load: part.load, text: loadText(view.loads[part.load]!) ?? "" },
+    ),
   }));
+}
+
+function loadTexts(agent: string, file: AbsPath): LoadText[] {
+  const view = snapshot.agents.find((item) => item.agent === agent);
+  return (view?.loads ?? [])
+    .filter((load) => load.file === file)
+    .map((load) => {
+      const text = loadText(load);
+      return { load: load.id, text, wholeFile: text !== null && text.trim() === (texts[file] ?? "").trim() };
+    });
 }
 
 function search(query: string, caseSensitive: boolean, regex: boolean): { hits: SearchHit[]; capped: boolean } {
@@ -136,6 +149,8 @@ export async function handle(request: Request): Promise<unknown> {
     }
     case "render":
       return render(request.args.agent);
+    case "load_texts":
+      return request.args.fingerprint === mockState.fingerprint ? { kind: "current", texts: loadTexts(request.args.agent, request.args.file) } : { kind: "stale" };
     case "simulate":
       return simulate(request.args.path);
     case "search":

@@ -12,6 +12,8 @@ export interface Route {
   sel: string;
   /** Agent whose load the file detail should lead with. */
   ag: string;
+  /** With a file selected, the place of it the operator picked: a `loadKey` of one of the agent's loads. Empty means every place of the file. */
+  at: string;
   mode: "tree" | "order";
   q: string;
   sim: string;
@@ -27,6 +29,7 @@ function parse(hash: string): Route {
     p: params.get("p") ?? "",
     sel: params.get("sel") ?? "",
     ag: params.get("ag") ?? "",
+    at: params.get("at") ?? "",
     mode: params.get("mode") === "order" ? "order" : "tree",
     q: params.get("q") ?? "",
     sim: params.get("sim") ?? "",
@@ -49,12 +52,13 @@ function subscribe(listener: () => void): () => void {
   return () => window.removeEventListener("hashchange", listener);
 }
 
-/** The route lives in `location.hash`, so reload and the back button work. */
+/** The route lives in `location.hash`, so reload and the back button work. A patch that selects something else without naming a place clears the place. */
 export function useRoute(): [Route, (patch: Partial<Route>, replace?: boolean) => void] {
   const hash = useSyncExternalStore(subscribe, () => window.location.hash);
   const route = useMemo(() => parse(hash), [hash]);
   const go = useCallback((patch: Partial<Route>, replace = false) => {
-    const next = write({ ...parse(window.location.hash), ...patch });
+    const place = ("sel" in patch || "ag" in patch) && !("at" in patch) ? { at: "" } : {};
+    const next = write({ ...parse(window.location.hash), ...place, ...patch });
     const url = `${window.location.pathname}${window.location.search}${next ? `#${next}` : ""}`;
     if (replace) history.replaceState(null, "", url);
     else history.pushState(null, "", url);
