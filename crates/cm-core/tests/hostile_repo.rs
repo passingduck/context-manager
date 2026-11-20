@@ -3,7 +3,7 @@
 //! (design section 8, "resource exhaustion by repository content").
 
 use std::io::Write;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use cm_core::env::ScanEnv;
@@ -58,10 +58,14 @@ fn scan_within_a_second(env: ScanEnv, case: &str) -> Scanned {
     scan_within(env, case, 1)
 }
 
+/// One scan at a time, so that the wait measures one scan and not the other tests' scans.
+static ONE_SCAN: Mutex<()> = Mutex::new(());
+
 /// Runs the scan on a worker thread and waits `seconds` for it.
 fn scan_within(env: ScanEnv, case: &str, seconds: u64) -> Scanned {
     // The tokenizer loads once per process. Load it first so the wait measures the scan.
     tokens::count("warm up");
+    let _one = ONE_SCAN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(scan_full(&env));
