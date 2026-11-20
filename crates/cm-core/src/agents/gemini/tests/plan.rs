@@ -474,6 +474,24 @@ fn switching_a_hook_off_and_on_returns_the_file_to_its_bytes() {
 }
 
 #[test]
+fn switching_an_extension_hook_writes_the_user_settings_and_no_other_file() {
+    let fx = Fixture::new();
+    let ext = fx.home_path(".gemini/extensions/e");
+    fx.write(
+        &ext.join("gemini-extension.json"),
+        r#"{"name":"e","version":"1"}"#,
+    );
+    fx.write(
+        &ext.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"ext.sh"}]}]}}"#,
+    );
+    let env = trusted(&fx);
+    let preview = switch(&fx, &env, "ext.sh", false);
+    let written: Vec<_> = preview.change_set.ops.iter().map(|op| &op.path).collect();
+    assert_eq!(written, [&settings(&fx)]);
+}
+
+#[test]
 fn the_switch_key_is_the_name_when_there_is_one_and_it_is_added_to_an_existing_list() {
     let fx = Fixture::new();
     fx.write(

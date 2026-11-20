@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cm_core::agents::{Agent, ScanCx, registry};
+use cm_core::agents::{Agent, ScanCx, find_in, registry};
 use cm_core::env::ScanEnv;
 use cm_core::probe_fs::{EntryKind, ProbeFs, fingerprint_of};
 use cm_core::scan::{Scanned, scan_with_parked};
@@ -163,12 +163,7 @@ impl Host {
     }
 
     fn agent(&self, id: &AgentId) -> Result<&'static dyn Agent, ApiError> {
-        self.ctx
-            .agents
-            .iter()
-            .copied()
-            .find(|agent| agent.id() == *id)
-            .ok_or(ApiError::NotFound)
+        find_in(self.ctx.agents, id).ok_or(ApiError::NotFound)
     }
 
     async fn probed_paths(&self, cwd: &AbsPath) -> Result<Vec<AbsPath>, ApiError> {
@@ -419,14 +414,8 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
-            let (agent, hook) = agents
-                .iter()
-                .zip(&scanned.snapshot.agents)
-                .find_map(|(agent, view)| {
-                    let hook = view.hooks.iter().find(|hook| hook.id == req.hook)?;
-                    Some((*agent, hook))
-                })
-                .ok_or(ApiError::NotFound)?;
+            let (view, hook) = scanned.snapshot.hook(&req.hook).ok_or(ApiError::NotFound)?;
+            let agent = find_in(agents, &view.agent).ok_or(ApiError::NotFound)?;
             let cx = ScanCx {
                 env: &env,
                 fs: scanned.fs(),

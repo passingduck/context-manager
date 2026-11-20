@@ -477,7 +477,46 @@ fn a_managed_or_unsupported_hook_cannot_be_switched() {
             enabled: false,
         })
         .unwrap_err();
-    assert!(matches!(err, ApiError::InvalidEdit { .. }), "{err:?}");
+    assert_eq!(
+        err,
+        ApiError::InvalidEdit {
+            field: "enabled".into(),
+            why: RuleRef::new("codex.hooks.toggle_unsupported")
+        }
+    );
+}
+
+#[test]
+fn switching_a_plugin_hook_writes_the_user_config_and_no_other_file() {
+    let home = Home::new();
+    home.write(
+        "config.toml",
+        "[features]\nhooks = true\n\n[plugins.\"demo@mkt\"]\nenabled = true\n",
+    );
+    let root = "plugins/cache/mkt/demo/1.0.0";
+    home.write(
+        &format!("{root}/.codex-plugin/plugin.json"),
+        r#"{"name":"demo","hooks":"./hooks/hooks.json"}"#,
+    );
+    home.write(
+        &format!("{root}/hooks/hooks.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"plug.sh"}]}]}}"#,
+    );
+    let hook = home.hook("plug.sh");
+    assert_eq!(
+        hook.source.scope,
+        Scope::Plugin {
+            id: "demo@mkt".into()
+        }
+    );
+    let preview = home
+        .plan(&Edit::SetHookEnabled {
+            hook: hook.id,
+            enabled: false,
+        })
+        .unwrap();
+    let written: Vec<_> = preview.change_set.ops.iter().map(|op| &op.path).collect();
+    assert_eq!(written, [&home.codex("config.toml")]);
 }
 
 // --- stale ids and bad drafts -------------------------------------------------------------

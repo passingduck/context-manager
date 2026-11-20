@@ -146,7 +146,10 @@ fn codex(t: &Tree) {
         "{\n  \"hooks\": {\"Stop\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"echo json\"}]}]}\n}\n",
     );
     t.write(&format!("{h}/AGENTS.md"), "# user agents\n");
-    t.write("project/AGENTS.md", "# project agents\nsee [x](docs/x.md)\n");
+    t.write(
+        "project/AGENTS.md",
+        "# project agents\nsee [x](docs/x.md)\n",
+    );
     t.write("project/docs/x.md", "x\n");
     t.write("project/sub/AGENTS.md", "# sub agents\n");
     t.write(

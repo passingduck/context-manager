@@ -35,9 +35,11 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
         Edit::AddHook { agent, file, draft } if *agent == claude() => {
             Some(hooks::add(cx, edit, file, draft))
         }
-        Edit::UpdateHook { hook, draft } => hooks::update(cx, edit, hook, draft),
-        Edit::RemoveHook { hook } => hooks::remove(cx, edit, hook),
-        Edit::SetHookEnabled { hook, enabled } => hooks::set_enabled(cx, edit, hook, *enabled),
+        Edit::UpdateHook { draft, .. } => cx.hook.map(|hook| hooks::update(cx, edit, hook, draft)),
+        Edit::RemoveHook { .. } => cx.hook.map(|hook| hooks::remove(cx, edit, hook)),
+        Edit::SetHookEnabled { enabled, .. } => cx
+            .hook
+            .map(|hook| hooks::set_enabled(cx, edit, hook, *enabled)),
         _ => None,
     }
 }

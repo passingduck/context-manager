@@ -46,13 +46,9 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
             body,
         } if *agent == me() => Some(add_memory(cx, store, title, description, body)),
         Edit::AddHook { agent, file, draft } if *agent == me() => Some(add_hook(cx, file, draft)),
-        Edit::UpdateHook { hook, draft } => {
-            on_hook(cx, hook, |cx, hook| update_hook(cx, hook, draft))
-        }
-        Edit::RemoveHook { hook } => on_hook(cx, hook, remove_hook),
-        Edit::SetHookEnabled { hook, enabled } => {
-            on_hook(cx, hook, |cx, hook| set_enabled(cx, hook, *enabled))
-        }
+        Edit::UpdateHook { draft, .. } => cx.hook.map(|hook| update_hook(cx, hook, draft)),
+        Edit::RemoveHook { .. } => cx.hook.map(|hook| remove_hook(cx, hook)),
+        Edit::SetHookEnabled { enabled, .. } => cx.hook.map(|hook| set_enabled(cx, hook, *enabled)),
         _ => None,
     }
 }
@@ -342,24 +338,6 @@ fn at_of(hook: &Hook) -> Option<At> {
     }
 }
 
-/// Runs `then` for a hook Codex lists. A hook no agent lists is `NotFound`: the entry changed
-/// since the scan, so the id names nothing now. A hook another agent lists is not ours.
-fn on_hook(
-    cx: &PlanCx,
-    id: &HookId,
-    then: impl FnOnce(&PlanCx, &Hook) -> Result<Preview, ApiError>,
-) -> Option<Result<Preview, ApiError>> {
-    if let Some(hook) = view(cx).and_then(|v| v.hooks.iter().find(|h| h.id == *id)) {
-        return Some(then(cx, hook));
-    }
-    let elsewhere = cx
-        .snapshot
-        .agents
-        .iter()
-        .any(|v| v.agent != me() && v.hooks.iter().any(|h| h.id == *id));
-    (!elsewhere).then_some(Err(ApiError::NotFound))
-}
-
 fn check_draft(draft: &HookDraft) -> Result<(), ApiError> {
     if !EVENTS.contains(&draft.event.as_str()) {
         return Err(invalid("draft.event", RULE_EVENT));
@@ -581,12 +559,6 @@ fn update_hook(cx: &PlanCx, hook: &Hook, draft: &HookDraft) -> Result<Preview, A
 
 /// Spec 2.5: `[hooks.state."<key>"].enabled` in the user `config.toml`, nothing else.
 fn set_enabled(cx: &PlanCx, hook: &Hook, enabled: bool) -> Result<Preview, ApiError> {
-    if let Toggle::Unavailable { why } = &hook.toggle {
-        return Err(ApiError::InvalidEdit {
-            field: "hook".to_owned(),
-            why: why.clone(),
-        });
-    }
     let at = at_of(hook).ok_or(ApiError::NotFound)?;
     let suffix = format!(":{}:{}:{}", snake(&at.event), at.group, at.handler);
     let scx = scan_cx(cx);

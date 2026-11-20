@@ -33,6 +33,9 @@ pub struct PlanCx<'a> {
     pub snapshot: &'a Snapshot,
     /// Where the tool keeps parked hook records (`parked/`). A planner may write inside it.
     pub parked_dir: &'a AbsPath,
+    /// The hook a `UpdateHook`, `RemoveHook` or `SetHookEnabled` names, resolved in `snapshot`.
+    /// The planner resolves it and calls only the agent that lists it. `None` for every other edit.
+    pub hook: Option<&'a Hook>,
 }
 
 /// A file an adapter looked at, with the edit policy it claims for it.
@@ -125,7 +128,13 @@ pub fn registry() -> &'static [&'static dyn Agent] {
 }
 
 pub fn find(id: &AgentId) -> Option<&'static dyn Agent> {
-    registry().iter().copied().find(|agent| agent.id() == *id)
+    find_in(registry(), id)
+}
+
+/// The agent with `id` among `agents`. Every pairing of an agent with its view goes through this
+/// lookup, never through a shared position.
+pub fn find_in<'a>(agents: &[&'a dyn Agent], id: &AgentId) -> Option<&'a dyn Agent> {
+    agents.iter().copied().find(|agent| agent.id() == *id)
 }
 
 // ---------------------------------------------------------------------------------------------

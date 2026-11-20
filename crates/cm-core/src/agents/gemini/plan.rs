@@ -28,21 +28,14 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
         Edit::AddHook { agent, file, draft } if *agent == id() => {
             Some(hook_edit::add(cx, file, draft))
         }
-        Edit::UpdateHook { hook, draft } if is_ours(hook) => {
-            Some(hook_edit::update(cx, hook, draft))
-        }
-        Edit::RemoveHook { hook } if is_ours(hook) => Some(hook_edit::remove(cx, hook)),
-        Edit::SetHookEnabled { hook, enabled } if is_ours(hook) => {
-            Some(hook_edit::set_enabled(cx, hook, *enabled))
-        }
+        Edit::UpdateHook { draft, .. } => cx.hook.map(|hook| hook_edit::update(cx, hook, draft)),
+        Edit::RemoveHook { .. } => cx.hook.map(|hook| hook_edit::remove(cx, hook)),
+        Edit::SetHookEnabled { enabled, .. } => cx
+            .hook
+            .map(|hook| hook_edit::set_enabled(cx, hook, *enabled)),
         Edit::Trash { path, base } => memory_edit::trash(cx, path, base),
         _ => None,
     }
-}
-
-/// A hook id of this adapter starts with `gemini:` (see `hooks::hook_id`).
-fn is_ours(hook: &HookId) -> bool {
-    hook.0.starts_with("gemini:")
 }
 
 pub(super) fn view<'a>(cx: &'a PlanCx) -> Result<&'a AgentView, ApiError> {

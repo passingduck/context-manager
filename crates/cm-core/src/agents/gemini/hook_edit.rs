@@ -23,9 +23,9 @@ pub(super) fn add(cx: &PlanCx, file: &AbsPath, draft: &HookDraft) -> Planned {
     finish(file, disk, after, ChangeEdit::AddHook)
 }
 
-pub(super) fn update(cx: &PlanCx, id: &HookId, draft: &HookDraft) -> Planned {
+pub(super) fn update(cx: &PlanCx, hook: &Hook, draft: &HookDraft) -> Planned {
     check_draft(draft)?;
-    let (hook, text) = locate(cx, id)?;
+    let text = locate(cx, hook)?;
     let at = Position::of(hook)?;
     let group_ptr = format!("/hooks/{}/{}", at.event, at.group);
     let group = get(&text, &group_ptr)?.unwrap_or(Value::Null);
@@ -62,8 +62,8 @@ pub(super) fn update(cx: &PlanCx, id: &HookId, draft: &HookDraft) -> Planned {
     finish(&hook.source.file, Some(text), after, ChangeEdit::UpdateHook)
 }
 
-pub(super) fn remove(cx: &PlanCx, id: &HookId) -> Planned {
-    let (hook, text) = locate(cx, id)?;
+pub(super) fn remove(cx: &PlanCx, hook: &Hook) -> Planned {
+    let text = locate(cx, hook)?;
     let after = remove_handler(&text, &Position::of(hook)?)?;
     finish(&hook.source.file, Some(text), after, ChangeEdit::RemoveHook)
 }
@@ -80,9 +80,8 @@ pub(super) fn switch_key(hook: &Hook) -> Option<&str> {
     text("name").or_else(|| text("command"))
 }
 
-pub(super) fn set_enabled(cx: &PlanCx, id: &HookId, enabled: bool) -> Planned {
+pub(super) fn set_enabled(cx: &PlanCx, hook: &Hook, enabled: bool) -> Planned {
     let view = view(cx)?;
-    let hook = find(view, id)?;
     let key = switch_key(hook).ok_or_else(|| invalid("hook", "gemini.hook.no_switch_key"))?;
     let others = view
         .hooks
@@ -220,17 +219,9 @@ impl Position {
     }
 }
 
-fn find<'a>(view: &'a AgentView, id: &HookId) -> Result<&'a Hook, ApiError> {
-    view.hooks
-        .iter()
-        .find(|h| h.id == *id)
-        .ok_or(ApiError::NotFound)
-}
-
-/// The hook of a fresh scan and the text of its file. An entry that is no longer what the scan
-/// saw is `NotFound`, never a write to whatever sits at that position now.
-fn locate<'a>(cx: &'a PlanCx, id: &HookId) -> Result<(&'a Hook, String), ApiError> {
-    let hook = find(view(cx)?, id)?;
+/// The text of the hook's file. An entry that is no longer what the scan saw is `NotFound`,
+/// never a write to whatever sits at that position now.
+fn locate(cx: &PlanCx, hook: &Hook) -> Result<String, ApiError> {
     let text = read(cx, &hook.source.file)?.ok_or(ApiError::NotFound)?;
     let Locator::Json { pointer } = &hook.source.at else {
         return Err(ApiError::NotFound);
@@ -238,7 +229,7 @@ fn locate<'a>(cx: &'a PlanCx, id: &HookId) -> Result<(&'a Hook, String), ApiErro
     if get(&text, pointer)?.as_ref() != Some(&hook.handler.raw) {
         return Err(ApiError::NotFound);
     }
-    Ok((hook, text))
+    Ok(text)
 }
 
 /// Spec 5: the 11 events, and a handler object with a string `type`, which the CLI discards
