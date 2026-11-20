@@ -9,7 +9,7 @@ use super::setup::{SettingsKind, Setup};
 use crate::agents::{Candidate, FileClaim, ScanCx};
 use crate::glob::{ExcludeGlobs, RuleGlobs, split_paths_string};
 use crate::md::frontmatter;
-use crate::md::imports::{ImportNode, ImportOutcome, ImportRules, expand_with_seen};
+use crate::md::imports::{ImportCap, ImportNode, ImportOutcome, ImportRules, expand_with_seen};
 use crate::md::strip::strip;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeErrorKind};
@@ -646,6 +646,13 @@ impl<'a> Collector<'a> {
     fn imports_of(&mut self, file: &AbsPath, host: LoadId, scope: &Scope) {
         let rules = self.import_rules(scope);
         let tree = expand_with_seen(file, &rules, self.cx.fs, &mut self.seen);
+        if let Some(problem) = tree.capped.and_then(ImportCap::problem) {
+            let at = Subject::File {
+                path: file.clone(),
+                line: None,
+            };
+            self.problem(Severity::Warning, at, problem);
+        }
         self.emit_imports(&tree.nodes, host, scope);
     }
 

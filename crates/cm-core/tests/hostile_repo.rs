@@ -461,3 +461,144 @@ fn ten_links_to_one_8_mib_command_stop_at_the_scan_read_budget() {
         "the scan read at most 64 MiB"
     );
 }
+
+/// `GEMINI.md` or `CLAUDE.md` with `lines` lines, each made by `line` from its number.
+fn root_file(fx: &Fixture, name: &str, lines: usize, line: impl Fn(usize) -> String) {
+    let text: String = (0..lines).map(|n| line(n) + "\n").collect();
+    fx.write(&fx.project_path(name), &text);
+}
+
+/// `count` links `l<n>.md` in the project, each to `target`.
+fn links_to(fx: &Fixture, target: &str, count: usize) {
+    for n in 0..count {
+        fx.symlink(
+            &fx.project_path(&format!("l{n}.md")),
+            &fx.project_path(target),
+        );
+    }
+}
+
+fn at_file(path: &AbsPath) -> Subject {
+    Subject::File {
+        path: path.clone(),
+        line: None,
+    }
+}
+
+#[test]
+fn a_gemini_md_that_imports_one_1_mib_file_on_1_000_lines_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(MIB))]);
+    root_file(&fx, "GEMINI.md", 1_000, |_| "@./big.md".to_owned());
+    let scanned = scan_within(
+        fx.env(),
+        "GEMINI.md that imports a 1 MiB file 1,000 times",
+        3,
+    );
+
+    let root = fx.project_path("GEMINI.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names GEMINI.md and the expansion budget of 4 MiB"
+    );
+    // GEMINI.md is 10 kB, so three imports of 1 MiB fit in 4 MiB and the fourth does not.
+    let big = fx.project_path("big.md");
+    let imports = view(&scanned, "gemini")
+        .loads
+        .iter()
+        .filter(|load| load.file == big)
+        .count();
+    assert_eq!(imports, 3, "Gemini loads big.md three times");
+}
+
+#[test]
+fn a_gemini_md_that_imports_1_000_links_to_one_8_mib_file_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 1_000);
+    root_file(&fx, "GEMINI.md", 1_000, |n| format!("@./l{n}.md"));
+    let scanned = scan_within(
+        fx.env(),
+        "GEMINI.md that imports 1,000 links to an 8 MiB file",
+        3,
+    );
+
+    let root = fx.project_path("GEMINI.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names GEMINI.md and the expansion budget of 4 MiB"
+    );
+}
+
+#[test]
+fn a_claude_md_that_imports_500_links_to_one_8_mib_file_stops_at_the_byte_budget() {
+    let fx = project(&[("big.md", &plain_text(8 * MIB))]);
+    links_to(&fx, "big.md", 500);
+    root_file(&fx, "CLAUDE.md", 500, |n| format!("@l{n}.md"));
+    let scanned = scan_within(
+        fx.env(),
+        "CLAUDE.md that imports 500 links to an 8 MiB file",
+        3,
+    );
+
+    let root = fx.project_path("CLAUDE.md");
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ImportBytesExhausted { .. }
+        )),
+        [(
+            &at_file(&root),
+            &Problem::ImportBytesExhausted {
+                max: 4 * MIB as u64
+            }
+        )],
+        "one diagnostic names CLAUDE.md and the expansion budget of 4 MiB"
+    );
+}
+
+#[test]
+fn a_hundred_gemini_md_files_that_import_one_1_mib_file_stop_at_the_scan_expansion_budget() {
+    let fx = project(&[("big.md", &plain_text(MIB))]);
+    for n in 0..100 {
+        fx.write(
+            &fx.project_path(&format!("d{n}/GEMINI.md")),
+            "@../big.md\n@../big.md\n@../big.md\n",
+        );
+    }
+    let scanned = scan_within(fx.env(), "100 GEMINI.md files that import a 1 MiB file", 3);
+
+    let max = 8 * MIB as u64;
+    assert_eq!(
+        problems(&scanned, |p| matches!(
+            p,
+            Problem::ScanExpansionExhausted { .. }
+        )),
+        [(&Subject::Agent, &Problem::ScanExpansionExhausted { max })],
+        "one diagnostic names the scan expansion budget of 8 MiB"
+    );
+    // Each import adds the whole 1 MiB file, so eight fit in 8 MiB.
+    let big = fx.project_path("big.md");
+    let imports = view(&scanned, "gemini")
+        .loads
+        .iter()
+        .filter(|load| load.file == big && matches!(load.via, Via::Import { .. }))
+        .count();
+    assert_eq!(imports, 8, "Gemini expands big.md eight times in all");
+}

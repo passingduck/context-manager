@@ -186,6 +186,7 @@ fn estimated_counts(
 fn budget_diagnostic(exceeded: Exceeded) -> Diagnostic {
     let (at, problem) = match exceeded {
         Exceeded::Reads { max } => (Subject::Agent, Problem::ReadBudgetExhausted { max }),
+        Exceeded::Expansions { max } => (Subject::Agent, Problem::ScanExpansionExhausted { max }),
         Exceeded::ListingEntries { dir, max } => (
             Subject::File {
                 path: dir,

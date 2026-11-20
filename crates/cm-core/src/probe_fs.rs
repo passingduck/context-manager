@@ -116,6 +116,8 @@ pub struct Probe {
 pub enum Exceeded {
     /// `read` refused files once the scan had read `max` bytes.
     Reads { max: u64 },
+    /// Import expansions stopped once they had added `max` bytes in this scan.
+    Expansions { max: u64 },
     /// A tree listing of `dir` stopped at its entry budget.
     ListingEntries { dir: AbsPath, max: u32 },
     /// A tree listing of `dir` did not list directories deeper than `max`.
@@ -133,6 +135,7 @@ struct State {
     probes: BTreeMap<AbsPath, bool>,
     exceeded: BTreeSet<Exceeded>,
     bytes_read: u64,
+    bytes_expanded: u64,
 }
 
 #[derive(Default)]
@@ -232,6 +235,18 @@ impl ProbeFs {
     /// The bytes this scan has read from the disk. A cached read counts once.
     pub fn bytes_read(&self) -> u64 {
         self.state.lock().expect("probe state").bytes_read
+    }
+
+    /// Adds `bytes` to what the import expansions of this scan have added. Returns `false`, adds
+    /// nothing and records the exceeded budget when that would pass `max`.
+    pub(crate) fn charge_expansion(&self, bytes: u64, max: u64) -> bool {
+        let mut state = self.state.lock().expect("probe state");
+        if state.bytes_expanded.saturating_add(bytes) > max {
+            state.exceeded.insert(Exceeded::Expansions { max });
+            return false;
+        }
+        state.bytes_expanded += bytes;
+        true
     }
 
     pub(crate) fn note_exceeded(&self, exceeded: Exceeded) {

@@ -720,6 +720,9 @@ variants! {
         /// The scan stopped expanding the imports of this root file after `max` import nodes,
         /// so what it shows for the file is less than the agent loads.
         ImportBudgetExhausted { max: u32 },
+        /// The scan stopped expanding the imports of this root file before they passed `max`
+        /// bytes, so what it shows for the file is less than the agent loads.
+        ImportBytesExhausted { max: u64 },
         ImportCycle { path: AbsPath },
         ImportNeedsApproval { raw: String },
         AccidentalImport { raw: String },
@@ -755,6 +758,9 @@ variants! {
         /// The scan read `max` bytes and then stopped reading files, so the files it did not read
         /// are shown as unreadable.
         ReadBudgetExhausted { max: u64 },
+        /// The imports of the whole scan added `max` bytes, and the scan expanded no more, so the
+        /// files it expanded after that show fewer imports than the agent loads.
+        ScanExpansionExhausted { max: u64 },
         /// The text of this file is over `max` bytes, on disk or where it reaches the model. The
         /// scan counted the tokens of its first `max` bytes and estimated the rest, and it looked
         /// for links only in those first bytes.

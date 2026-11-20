@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use super::spans::{self, AtStyle};
-use crate::model::AbsPath;
+use crate::model::{AbsPath, Problem};
 use crate::probe_fs::ProbeFs;
 
 /// Which `@token`s count as imports.
@@ -58,6 +58,20 @@ impl CyclePolicy {
 /// Import nodes per root file under [`CyclePolicy::PerChain`]. A real context file tree has tens.
 /// Five files of ten lines that each import the next file reach 111,110.
 const PER_CHAIN_MAX_NODES: u32 = 1_000;
+
+/// Bytes per expansion: the root file and every file it imports, counted each time it is imported.
+/// The largest context window of the three agents' models is about a million tokens, about 4 MiB
+/// of text, so a larger expansion cannot reach the model whole. A real context file tree has tens
+/// of kilobytes. One 1 MiB file imported on 1,000 lines would otherwise expand to 1 GB.
+pub const MAX_EXPANDED_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Bytes that every import of one scan may add together, counting a file each time it is
+/// imported. Gemini expands each context file on its own, and it finds one in every directory of
+/// the project, so a thousand directories that each import one 1 MiB file three times would
+/// expand 3 GB. A scan counts and scans what it expands at about 25 ms per MiB in a release
+/// build, so this costs at most a fifth of a second. It is two full expansions of one file; a
+/// real setup imports tens of kilobytes in all.
+pub const MAX_SCAN_EXPANDED_BYTES: u64 = 8 * 1024 * 1024;
 
 /// What happens to an import that resolves outside the allowed root.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +163,9 @@ pub struct ImportRules {
     pub protect: Protect,
     pub cycles: CyclePolicy,
     pub file_types: FileTypes,
+    /// Expansion stops before an import that would take the root file and its imports past this
+    /// many bytes (design section 5).
+    pub max_bytes: u64,
 }
 
 impl ImportRules {
@@ -166,6 +183,7 @@ impl ImportRules {
             protect: Protect::Markdown,
             cycles: CyclePolicy::OneSeenSet,
             file_types: FileTypes::Extensions(CLAUDE_TEXT_EXTENSIONS),
+            max_bytes: MAX_EXPANDED_BYTES,
         }
     }
 
@@ -184,6 +202,7 @@ impl ImportRules {
                 max_nodes: PER_CHAIN_MAX_NODES,
             },
             file_types: FileTypes::Any,
+            max_bytes: MAX_EXPANDED_BYTES,
         }
     }
 
@@ -208,6 +227,7 @@ impl ImportRules {
             protect: Protect::Nothing,
             cycles: CyclePolicy::OneSeenSet,
             file_types: FileTypes::Any,
+            max_bytes: MAX_EXPANDED_BYTES,
         }
     }
 }
@@ -246,13 +266,35 @@ pub struct ImportNode {
     pub children: Vec<ImportNode>,
 }
 
+/// The budget an expansion stopped at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportCap {
+    /// [`CyclePolicy::PerChain`]'s `max_nodes`.
+    Nodes(u32),
+    /// [`ImportRules::max_bytes`].
+    Bytes(u64),
+    /// [`MAX_SCAN_EXPANDED_BYTES`], shared by every expansion of the scan.
+    ScanBytes,
+}
+
+impl ImportCap {
+    /// The diagnostic on the root file. The scan reports the budget it shares across files once.
+    pub fn problem(self) -> Option<Problem> {
+        match self {
+            ImportCap::Nodes(max) => Some(Problem::ImportBudgetExhausted { max }),
+            ImportCap::Bytes(max) => Some(Problem::ImportBytesExhausted { max }),
+            ImportCap::ScanBytes => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportTree {
     pub root: AbsPath,
     pub nodes: Vec<ImportNode>,
-    /// The node budget, when expansion stopped at it. `nodes` then holds the first nodes in
-    /// document order and leaves the rest out.
-    pub capped: Option<u32>,
+    /// The budget expansion stopped at. `nodes` then holds the first nodes in document order and
+    /// leaves the rest out.
+    pub capped: Option<ImportCap>,
 }
 
 impl ImportTree {
@@ -296,11 +338,11 @@ pub fn expand_with_seen(
                 fs,
                 seen,
                 nodes_left: rules.cycles.max_nodes(),
-                capped: false,
+                bytes: bytes.len() as u64,
+                capped: None,
             };
             let nodes = expander.nodes(root, &text, 0, &mut Vec::new());
-            let capped = rules.cycles.max_nodes().filter(|_| expander.capped);
-            (nodes, capped)
+            (nodes, expander.capped)
         }
         _ => (Vec::new(), None),
     };
@@ -317,7 +359,9 @@ struct Expander<'a> {
     seen: &'a mut HashSet<AbsPath>,
     /// `None` when the cycle policy has no budget.
     nodes_left: Option<u32>,
-    capped: bool,
+    /// The bytes of the root file and of every import so far.
+    bytes: u64,
+    capped: Option<ImportCap>,
 }
 
 impl Expander<'_> {
@@ -336,6 +380,9 @@ impl Expander<'_> {
         let dir = file.parent().unwrap_or_else(AbsPath::root);
         let mut out = Vec::new();
         for token in spans::at_tokens_of(text, style) {
+            if self.capped.is_some() {
+                break;
+            }
             let start = token.span.range.start;
             if protected.iter().any(|r| r.contains(&start)) {
                 continue;
@@ -374,45 +421,64 @@ impl Expander<'_> {
                 out.push(node);
                 continue;
             }
-            node.outcome = self.load(&path, &mut node.children, depth + 1, chain);
+            let Some(outcome) = self.load(&path, &mut node.children, depth + 1, chain) else {
+                break;
+            };
+            node.outcome = outcome;
             out.push(node);
         }
         out
     }
 
+    /// `None` when the file would take the expansion past its byte budget, which ends the
+    /// expansion at every level.
     fn load(
         &mut self,
         path: &AbsPath,
         children: &mut Vec<ImportNode>,
         depth: u32,
         chain: &mut Vec<AbsPath>,
-    ) -> ImportOutcome {
+    ) -> Option<ImportOutcome> {
         if let Some(outcome) = self.outside_root(path) {
-            return outcome;
+            return Some(outcome);
         }
         if !self.accepts_type(path) {
-            return ImportOutcome::NotText;
+            return Some(ImportOutcome::NotText);
         }
         match self.rules.cycles {
             CyclePolicy::OneSeenSet if self.seen.contains(path) => {
-                return ImportOutcome::AlreadyLoaded;
+                return Some(ImportOutcome::AlreadyLoaded);
             }
-            CyclePolicy::PerChain { .. } if chain.contains(path) => return ImportOutcome::Cycle,
+            CyclePolicy::PerChain { .. } if chain.contains(path) => {
+                return Some(ImportOutcome::Cycle);
+            }
             _ => {}
         }
         let bytes = match self.fs.read(path) {
             Ok(bytes) => bytes,
-            Err(err) if err.is_not_found() => return ImportOutcome::Missing,
-            Err(_) => return ImportOutcome::Unreadable,
+            Err(err) if err.is_not_found() => return Some(ImportOutcome::Missing),
+            Err(_) => return Some(ImportOutcome::Unreadable),
         };
         let Ok(text) = std::str::from_utf8(&bytes) else {
-            return ImportOutcome::NotText;
+            return Some(ImportOutcome::NotText);
         };
+        self.bytes += bytes.len() as u64;
+        if self.bytes > self.rules.max_bytes {
+            self.capped = Some(ImportCap::Bytes(self.rules.max_bytes));
+            return None;
+        }
+        if !self
+            .fs
+            .charge_expansion(bytes.len() as u64, MAX_SCAN_EXPANDED_BYTES)
+        {
+            self.capped = Some(ImportCap::ScanBytes);
+            return None;
+        }
         self.seen.insert(path.clone());
         chain.push(path.clone());
         *children = self.nodes(path, text, depth, chain);
         chain.pop();
-        ImportOutcome::Imported
+        Some(ImportOutcome::Imported)
     }
 
     /// Takes one node from the budget of the root file. False once it is spent, which ends the
@@ -421,7 +487,7 @@ impl Expander<'_> {
         match &mut self.nodes_left {
             None => true,
             Some(0) => {
-                self.capped = true;
+                self.capped = Some(ImportCap::Nodes(self.rules.cycles.max_nodes().unwrap_or(0)));
                 false
             }
             Some(left) => {
@@ -842,7 +908,7 @@ mod tests {
         assert_eq!((flat(&whole).len(), whole.capped), (6, None));
 
         let cut = c.run(&budget(4), "A.md");
-        assert_eq!(cut.capped, Some(4));
+        assert_eq!(cut.capped, Some(ImportCap::Nodes(4)));
         assert_eq!(
             flat(&cut),
             [
@@ -852,6 +918,35 @@ mod tests {
                 row("@B.md", Imported, 1),
             ]
         );
+    }
+
+    #[test]
+    fn expansion_stops_before_the_import_that_passes_the_byte_budget() {
+        // `A.md` is 14 bytes and `B.md` 16. Each import of the 100-byte `big.md` adds 100.
+        let c = Case::new(&[
+            ("A.md", "@big.md @B.md\n"),
+            ("B.md", "@big.md @big.md\n"),
+            ("big.md", &"x".repeat(100)),
+        ]);
+        let budget = |max_bytes, rules: ImportRules| ImportRules { max_bytes, ..rules };
+        for rules in [c.gemini(), c.claude()] {
+            let whole = c.run(&budget(1_000, rules.clone()), "A.md");
+            assert_eq!(whole.capped, None);
+        }
+        let cut = c.run(&budget(250, c.gemini()), "A.md");
+        assert_eq!(cut.capped, Some(ImportCap::Bytes(250)));
+        // 14 + 100 + 16 + 100 = 230, and the next import of `big.md` would pass 250.
+        assert_eq!(
+            flat(&cut),
+            [
+                row("@big.md", Imported, 1),
+                row("@B.md", Imported, 1),
+                row("@big.md", Imported, 2),
+            ]
+        );
+        let cut = c.run(&budget(100, c.claude()), "A.md");
+        assert_eq!(cut.capped, Some(ImportCap::Bytes(100)));
+        assert!(cut.nodes.is_empty());
     }
 
     // ---- no imports ----
