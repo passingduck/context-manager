@@ -678,7 +678,12 @@ variants! {
     pub enum Place {
         File { path: AbsPath },
         NamedFile { dir: AbsPath, ext: String },
+        /// An item that is a directory: `<dir>/<name>/` with its entry file, such as
+        /// `skills/<name>/SKILL.md`.
         NamedDir { dir: AbsPath, file: String },
+        /// A file with a fixed name in a subdirectory of `dir` that the user names, such as
+        /// Gemini's `src/GEMINI.md`. The subdirectory belongs to the project and is no item.
+        InSubdir { dir: AbsPath, file: String },
     }
 }
 

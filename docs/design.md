@@ -238,7 +238,7 @@ pub struct Extension {
     pub status: ExtStatus,                   // Active | Conditional { patterns } | Hidden { why } | Shadowed { by } | Rejected { why } | Disabled { by }
 }
 pub struct Slot { pub id: SlotId, pub place: Place, pub new_kind: NewItemKind, pub scope: Scope, pub rule: RuleRef }
-pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String } }
+pub enum Place { File { path: AbsPath }, NamedFile { dir: AbsPath, ext: String }, NamedDir { dir: AbsPath, file: String }, InSubdir { dir: AbsPath, file: String } }
 pub enum NewItemKind { Instructions, Rule, Skill, Command, Subagent, Memory }
 
 pub struct Diagnostic { pub severity: Severity, pub agent: Option<AgentId>, pub at: Subject, pub problem: Problem, pub fix: Option<Edit> }
@@ -657,4 +657,5 @@ Three candidates wrote this design independently against one grounding file: one
 - Write safety unit: the root in `Warning::ThroughSymlink` ("below the slot's root") is the deepest of the home directory, the project root and `cwd` that holds the path. A path below none of them is checked at its own entry only. `ProbeErrorKind` gains `DanglingLink`; `is_not_found` still holds for it, so a reader sees such a link as absent and only the planner refuses it.
 - Write safety unit: `ProbeFs`'s `Stat` gains `links`, the hard link count, so the plan warns `HardLinked` through the one reader. `apply` decides to write in place from the link count on disk at the moment of the write.
 - Write safety unit: `ProbeFs` gains `listing`, the entries of a directory with `not_utf8`, the count of names it has no entry for. `list` returns the entries alone, so the adapters read directories as before. The walk of a directory trashed whole does not follow a symlink inside it.
+- Write safety unit: `Place` gains `InSubdir { dir, file }`, a file with a fixed name in a subdirectory that the user names. Gemini's subdirectory context slot uses it instead of `NamedDir`, so no rule about directory items, such as `TrashDir` or a write inside an item, applies to `src/GEMINI.md`. `NamedDir` is only for items that are directories. The listed-item check in `Planner::item_entry` stays for those.
 - Read bounds unit: the import node budget is 1,000 nodes per root file and belongs to `CyclePolicy::PerChain`, the policy that lets a file expand once per path. Claude's one seen-set expands each file once, so its nodes grow with the files and it has no budget. `tests/hostile_repo.rs` shows the fan-out shape stays linear for Claude.

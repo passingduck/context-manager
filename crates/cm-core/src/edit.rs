@@ -337,7 +337,7 @@ impl<'a> Planner<'a> {
                             name.ends_with(&format!(".{}", ext.trim_start_matches('.')))
                         })
                 }
-                Place::NamedDir { dir, file } => {
+                Place::NamedDir { dir, file } | Place::InSubdir { dir, file } => {
                     path.file_name() == Some(file.as_str())
                         && path.parent().and_then(|d| d.parent()).as_ref() == Some(dir)
                 }
