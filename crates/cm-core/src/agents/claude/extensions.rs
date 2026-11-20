@@ -110,16 +110,11 @@ struct Cand {
 // ---------------------------------------------------------------------------------------------
 
 fn list_dirs(cx: &ScanCx, dir: &AbsPath) -> Vec<String> {
-    cx.fs
-        .list(dir)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter(|e| e.kind == EntryKind::Dir)
-                .map(|e| e.name.clone())
-                .collect()
-        })
-        .unwrap_or_default()
+    walk::list_dir(cx.fs, dir)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::Dir)
+        .map(|e| e.name().to_owned())
+        .collect()
 }
 
 fn is_file(cx: &ScanCx, path: &AbsPath) -> bool {
@@ -131,39 +126,15 @@ fn is_file(cx: &ScanCx, path: &AbsPath) -> bool {
 
 /// `.md` files below `dir`, recursive, with the path segments between `dir` and the file.
 fn md_files(cx: &ScanCx, dir: &AbsPath) -> Vec<(AbsPath, Vec<String>)> {
-    fn go(
-        cx: &ScanCx,
-        dir: &AbsPath,
-        segs: &mut Vec<String>,
-        out: &mut Vec<(AbsPath, Vec<String>)>,
-        depth: u32,
-    ) {
-        if depth > 8 {
-            return;
-        }
-        let Ok(entries) = cx.fs.list(dir) else {
-            return;
-        };
-        for entry in entries.iter() {
-            let path = dir.join(&entry.name);
-            match entry.kind {
-                EntryKind::Dir => {
-                    segs.push(entry.name.clone());
-                    go(cx, &path, segs, out, depth + 1);
-                    segs.pop();
-                }
-                EntryKind::File if entry.name.ends_with(".md") => {
-                    let mut all = segs.clone();
-                    all.push(entry.name.trim_end_matches(".md").to_owned());
-                    out.push((path, all));
-                }
-                _ => {}
-            }
-        }
-    }
-    let mut out = Vec::new();
-    go(cx, dir, &mut Vec::new(), &mut out, 0);
-    out
+    walk::list_tree(cx.fs, dir, |_| true)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(".md"))
+        .map(|mut e| {
+            let last = e.rel.pop().unwrap_or_default();
+            e.rel.push(last.trim_end_matches(".md").to_owned());
+            (e.path, e.rel)
+        })
+        .collect()
 }
 
 /// Spec 4, "Locations" of skills: `<dir>/<name>/SKILL.md`. The folder names `synced` and

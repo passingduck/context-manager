@@ -55,21 +55,26 @@ fn project(files: &[(&str, &str)]) -> Fixture {
 
 /// Runs the scan on a worker thread and waits a second for it.
 fn scan_within_a_second(env: ScanEnv, case: &str) -> Scanned {
+    scan_within(env, case, 1)
+}
+
+/// Runs the scan on a worker thread and waits `seconds` for it.
+fn scan_within(env: ScanEnv, case: &str, seconds: u64) -> Scanned {
     // The tokenizer loads once per process. Load it first so the wait measures the scan.
     tokens::count("warm up");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let _ = tx.send(scan_full(&env));
     });
-    match rx.recv_timeout(Duration::from_secs(1)) {
+    match rx.recv_timeout(Duration::from_secs(seconds)) {
         Ok(scanned) => scanned,
         Err(_) => {
-            // A scan stuck on a device keeps allocating, so the process ends here instead of
-            // leaving it to grow while the other tests run. Writing to stderr directly keeps the
-            // message, which the test harness would otherwise hold back.
+            // A stuck scan keeps allocating, so the process ends here instead of leaving it to
+            // grow while the other tests run. Writing to stderr directly keeps the message, which
+            // the test harness would otherwise hold back.
             let _ = writeln!(
                 std::io::stderr(),
-                "{case}: the scan did not return within a second"
+                "{case}: the scan did not return within {seconds} s"
             );
             std::process::exit(101);
         }
@@ -235,4 +240,108 @@ fn claude_imports_of_the_same_shape_stay_linear() {
         // four files that load, and k too deep in the fifth.
         assert_eq!(imports, 5 * k, "Claude import loads for k = {k}");
     }
+}
+
+/// One listed directory of each agent: the directory, the agent that lists it, and the one item
+/// in it.
+const LISTED_DIRS: &[(&str, &str, &str, &str)] = &[
+    (".claude/commands", "claude", "c.md", "hi\n"),
+    (
+        ".codex/agents",
+        "codex",
+        "c.toml",
+        "name = \"c\"\ndescription = \"d\"\ndeveloper_instructions = \"p\"\n",
+    ),
+    (".gemini/commands", "gemini", "c.toml", "prompt = \"p\"\n"),
+    (
+        ".claude/skills",
+        "claude",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+    (
+        ".agents/skills",
+        "codex",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+    (
+        ".gemini/skills",
+        "gemini",
+        "s/SKILL.md",
+        "---\nname: s\ndescription: d\n---\n",
+    ),
+];
+
+#[test]
+fn links_that_loop_in_a_listed_directory_list_it_once() {
+    for (dir, agent, item, text) in LISTED_DIRS {
+        let fx = project(&[(&format!("{dir}/{item}"), text)]);
+        fx.write(
+            &fx.home_path(".codex/config.toml"),
+            &format!(
+                "[projects.\"{}\"]\ntrust_level = \"trusted\"\n",
+                fx.project()
+            ),
+        );
+        for n in 0..6 {
+            fx.symlink(
+                &fx.project_path(&format!("{dir}/l{n}")),
+                &fx.project_path(dir),
+            );
+        }
+        let scanned = scan_within(fx.env(), &format!("six links to . in {dir}"), 3);
+        let under = fx.project_path(dir);
+        let items: Vec<&AbsPath> = view(&scanned, agent)
+            .extensions
+            .iter()
+            .map(|ext| &ext.file)
+            .filter(|file| file.starts_with(&under))
+            .collect();
+        assert_eq!(
+            items,
+            [&fx.project_path(&format!("{dir}/{item}"))],
+            "{agent} lists the one item of {dir} once"
+        );
+    }
+}
+
+#[test]
+fn a_skills_directory_of_50_000_entries_is_listed_to_the_entry_budget() {
+    let fx = project(&[]);
+    let skills = fx.project_path(".claude/skills");
+    for n in 0..50_000 {
+        let dir = skills.join(&format!("s{n:05}"));
+        std::fs::create_dir_all(dir.as_path()).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md").as_path(),
+            format!("---\nname: s{n:05}\ndescription: d\n---\n"),
+        )
+        .unwrap();
+    }
+    let scanned = scan_within(fx.env(), "a skills directory of 50,000 entries", 3);
+    let listed = view(&scanned, "claude")
+        .extensions
+        .iter()
+        .filter(|ext| ext.file.starts_with(&skills))
+        .count();
+    assert_eq!(listed, 5_000, "Claude lists the first 5,000 skills");
+    let capped: Vec<_> = scanned
+        .snapshot
+        .diagnostics
+        .iter()
+        .filter(|d| matches!(d.problem, Problem::ListingCapped { .. }))
+        .map(|d| (&d.at, &d.problem))
+        .collect();
+    assert_eq!(
+        capped,
+        [(
+            &Subject::File {
+                path: skills.clone(),
+                line: None
+            },
+            &Problem::ListingCapped { max: 5_000 }
+        )],
+        "one diagnostic names the skills directory and the budget of 5,000 entries"
+    );
 }

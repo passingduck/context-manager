@@ -377,14 +377,11 @@ fn developer_instructions(setup: &Setup, out: &mut Out) {
 /// Spec 5.2: `$CODEX_HOME/prompts/*.md` has no loader in 0.165.0.
 fn legacy_prompts(cx: &ScanCx, setup: &Setup, out: &mut Out) {
     let dir = setup.codex_home.join("prompts");
-    let Ok(entries) = cx.fs.list(&dir) else {
-        return;
-    };
-    for entry in entries
-        .iter()
-        .filter(|e| e.kind == EntryKind::File && e.name.ends_with(".md"))
+    for entry in walk::list_dir(cx.fs, &dir)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(".md"))
     {
-        let path = dir.join(&entry.name);
+        let path = entry.path;
         let delivered_info =
             read_lossy(cx, &path).map(|(bytes, text)| delivered(&text, bytes.len() as u64));
         out.claim(&path, EditPolicy::Editable);

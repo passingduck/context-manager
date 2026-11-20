@@ -6,6 +6,7 @@ use crate::agents::ScanCx;
 use crate::limits::cut_tokens;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 pub(super) const RULE_STORE: &str = "codex.memory.store";
 pub(super) const RULE_SUMMARY: &str = "codex.memory.summary";
@@ -34,16 +35,11 @@ fn root(cx: &ScanCx, setup: &Setup) -> (AbsPath, &'static str) {
 }
 
 fn md_files(cx: &ScanCx, dir: &AbsPath) -> Vec<AbsPath> {
-    cx.fs
-        .list(dir)
-        .map(|entries| {
-            entries
-                .iter()
-                .filter(|e| e.kind == EntryKind::File && e.name.ends_with(".md"))
-                .map(|e| dir.join(&e.name))
-                .collect()
-        })
-        .unwrap_or_default()
+    walk::list_dir(cx.fs, dir)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(".md"))
+        .map(|e| e.path)
+        .collect()
 }
 
 fn title_of(path: &AbsPath) -> String {
@@ -90,12 +86,13 @@ pub(super) fn run(cx: &ScanCx, setup: &Setup, out: &mut Out) {
         entries.push(entry(file, MemoryRole::Note));
     }
     // Memory-generated skills live under `<root>/skills/<name>/SKILL.md`.
-    if let Ok(skills) = cx.fs.list(&root.join("skills")) {
-        for skill in skills.iter().filter(|e| e.kind == EntryKind::Dir) {
-            let file = root.join("skills").join(&skill.name).join("SKILL.md");
-            if cx.fs.stat(&file).is_ok() {
-                entries.push(entry(file, MemoryRole::Generated));
-            }
+    for skill in walk::list_dir(cx.fs, &root.join("skills")) {
+        if skill.kind != EntryKind::Dir {
+            continue;
+        }
+        let file = skill.path.join("SKILL.md");
+        if cx.fs.stat(&file).is_ok() {
+            entries.push(entry(file, MemoryRole::Generated));
         }
     }
     for e in &entries {

@@ -746,6 +746,12 @@ variants! {
         ProjectUntrusted { skipped: Vec<RuleRef> },
         GlobMatchesNothing { glob: String },
         WalkCapped { entries: u32 },
+        /// A listing of this directory stopped after `max` entries, so the scan can miss files
+        /// below it that the agent loads.
+        ListingCapped { max: u32 },
+        /// A listing of this directory went no deeper than `max` levels, so the scan can miss
+        /// files below that depth that the agent loads.
+        ListingTooDeep { max: u32 },
     }
 }
 

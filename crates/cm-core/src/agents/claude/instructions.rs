@@ -14,6 +14,7 @@ use crate::md::strip::strip;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeErrorKind};
 use crate::tokens;
+use crate::walk;
 
 /// Spec 1.8: a file over 4 MiB is skipped whole.
 pub(super) const MAX_FILE_BYTES: u64 = 4_194_304;
@@ -1004,31 +1005,13 @@ fn rule_head(text: &str) -> RuleHead {
 /// Every `.md` file under a rules directory, recursive, in path order. Symlinks are followed
 /// once each (spec 1.4: cycles are handled).
 pub(super) fn rule_files(cx: &ScanCx, dir: &AbsPath) -> Vec<AbsPath> {
-    let mut out = Vec::new();
-    let mut visited = HashSet::new();
-    walk_rules(cx, dir, &mut visited, &mut out);
+    let mut out: Vec<AbsPath> = walk::list_tree(cx.fs, dir, |_| true)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(".md"))
+        .map(|e| e.path)
+        .collect();
     out.sort();
     out
-}
-
-fn walk_rules(cx: &ScanCx, dir: &AbsPath, visited: &mut HashSet<AbsPath>, out: &mut Vec<AbsPath>) {
-    let Ok(real) = cx.fs.real_path(dir) else {
-        return;
-    };
-    if !visited.insert(real) {
-        return;
-    }
-    let Ok(entries) = cx.fs.list(dir) else {
-        return;
-    };
-    for entry in entries.iter() {
-        let path = dir.join(&entry.name);
-        match entry.kind {
-            EntryKind::Dir => walk_rules(cx, &path, visited, out),
-            EntryKind::File if entry.name.ends_with(".md") => out.push(path),
-            _ => {}
-        }
-    }
 }
 
 /// Spec 1.8: a scratchpad-shaped path, `connector-downloads`, a device or process file.

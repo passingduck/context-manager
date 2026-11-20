@@ -7,7 +7,7 @@ use crate::agents::{Agent, FileClaim, ScanCx, registry};
 use crate::env::ScanEnv;
 use crate::model::*;
 pub use crate::probe_fs::MAX_READ_BYTES;
-use crate::probe_fs::{ProbeErrorKind, ProbeFs};
+use crate::probe_fs::{Exceeded, ProbeErrorKind, ProbeFs};
 use crate::{doctor, passes, walk};
 
 /// A snapshot plus what the host needs to answer follow-up calls about the same scan.
@@ -98,6 +98,7 @@ pub fn scan_with_parked(
         existing: &diagnostics,
     });
     diagnostics.extend(found);
+    diagnostics.extend(fs.exceeded().into_iter().map(budget_diagnostic));
 
     let snapshot = Snapshot {
         cwd: env.cwd.clone(),
@@ -117,6 +118,33 @@ pub fn scan_with_parked(
         snapshot,
         probed,
         fs,
+    }
+}
+
+/// A budget the scan ran out of (design section 8, "resource exhaustion by repository content").
+fn budget_diagnostic(exceeded: Exceeded) -> Diagnostic {
+    let (at, problem) = match exceeded {
+        Exceeded::ListingEntries { dir, max } => (
+            Subject::File {
+                path: dir,
+                line: None,
+            },
+            Problem::ListingCapped { max },
+        ),
+        Exceeded::ListingDepth { dir, max } => (
+            Subject::File {
+                path: dir,
+                line: None,
+            },
+            Problem::ListingTooDeep { max },
+        ),
+    };
+    Diagnostic {
+        severity: Severity::Warning,
+        agent: None,
+        at,
+        problem,
+        fix: None,
     }
 }
 

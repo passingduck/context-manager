@@ -8,6 +8,7 @@ use super::util::{accessible, normalize_name, read_lossy, real, rule, within};
 use crate::agents::ScanCx;
 use crate::model::{AbsPath, Diagnostic, Problem, Severity, Subject};
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 #[derive(Debug, Clone)]
 pub(super) struct ExtInfo {
@@ -44,19 +45,20 @@ pub(super) fn load(cx: &ScanCx, gdir: &AbsPath, cwd: &AbsPath, settings: &Settin
         fatal: Vec::new(),
     };
     let base = gdir.join("extensions");
-    let Ok(entries) = cx.fs.list(&base) else {
+    if !cx.fs.stat(&base).is_ok_and(|s| s.kind == EntryKind::Dir) {
         return out;
-    };
+    }
+    let entries = walk::list_dir(cx.fs, &base);
     let admin_off = settings
         .get("admin.extensions.enabled")
         .and_then(Value::as_bool)
         == Some(false);
     let enablement = read_enablement(cx, &base);
     for entry in entries.iter().filter(|e| e.kind == EntryKind::Dir) {
-        if entry.name.ends_with(".lock") {
+        if entry.name().ends_with(".lock") {
             continue;
         }
-        let dir = base.join(&entry.name);
+        let dir = entry.path.clone();
         let manifest_path = dir.join("gemini-extension.json");
         let reject = |why: &'static str, at: &AbsPath| Diagnostic {
             severity: Severity::Warning,

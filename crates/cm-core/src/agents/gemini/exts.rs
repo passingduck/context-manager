@@ -12,6 +12,7 @@ use crate::md::frontmatter;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
 use crate::tokens;
+use crate::walk::{self, Listed};
 
 pub(super) struct Exts {
     pub items: Vec<Extension>,
@@ -245,14 +246,12 @@ fn skill_files(w: &World, dir: &AbsPath) -> Vec<AbsPath> {
     if is_file(w.cx, &top) {
         files.push(top);
     }
-    if let Ok(entries) = w.cx.fs.list(dir) {
-        for entry in entries.iter() {
-            if entry.kind == EntryKind::Dir && entry.name != "node_modules" && entry.name != ".git"
-            {
-                let file = dir.join(&entry.name).join("SKILL.md");
-                if is_file(w.cx, &file) {
-                    files.push(file);
-                }
+    for entry in walk::list_dir(w.cx.fs, dir) {
+        if entry.kind == EntryKind::Dir && entry.name() != "node_modules" && entry.name() != ".git"
+        {
+            let file = entry.path.join("SKILL.md");
+            if is_file(w.cx, &file) {
+                files.push(file);
             }
         }
     }
@@ -469,7 +468,7 @@ fn commands(b: &mut Builder, out: &mut Exts) {
         if !is_dir(w.cx, &source.dir) {
             continue;
         }
-        for file in files_with_ext(w.cx, &source.dir, ".toml", 8) {
+        for file in files_with_ext(w.cx, &source.dir, ".toml") {
             let relative = &file.as_str()[source.dir.as_str().len() + 1..];
             let mut name = command_name(relative);
             let text = read_lossy(w.cx, &file).unwrap_or_default();
@@ -595,15 +594,13 @@ fn agents(b: &mut Builder, out: &mut Exts) {
         });
     }
     for source in sources {
-        let Ok(entries) = w.cx.fs.list(&source.dir) else {
-            continue;
-        };
+        let entries = walk::list_dir(w.cx.fs, &source.dir);
         let mut names: Vec<&str> = entries
             .iter()
             .filter(|e| {
-                e.kind == EntryKind::File && !e.name.starts_with('_') && e.name.ends_with(".md")
+                e.kind == EntryKind::File && !e.name().starts_with('_') && e.name().ends_with(".md")
             })
-            .map(|e| e.name.as_str())
+            .map(Listed::name)
             .collect();
         names.sort_by(|a, b| cmp_utf16(a, b));
         for file_name in names {

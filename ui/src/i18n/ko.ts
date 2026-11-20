@@ -578,6 +578,8 @@ export const ko: typeof en = {
     projectUntrusted: (v) => `폴더를 신뢰하지 않아서 에이전트가 프로젝트 설정 ${v.skipped.length}개를 건너뜁니다.`,
     globMatchesNothing: (v) => `패턴 ${v.glob}에 맞는 파일이 없습니다.`,
     walkCapped: (v) => `프로젝트 훑기가 항목 ${v.entries.toLocaleString("ko-KR")}개에서 멈춰서 일부 파일이 빠졌을 수 있습니다.`,
+    listingCapped: (v) => `스캔이 이 디렉터리의 항목을 처음 ${v.max.toLocaleString("ko-KR")}개까지만 나열했습니다. 그래서 에이전트가 불러오는 파일 가운데 일부가 여기에 빠졌을 수 있습니다.`,
+    listingTooDeep: (v) => `스캔이 이 디렉터리를 ${v.max}단계 깊이까지만 나열했습니다. 그래서 그보다 깊은 곳에서 에이전트가 불러오는 파일이 여기에 빠졌을 수 있습니다.`,
   },
   hookBlock,
   hookState: {

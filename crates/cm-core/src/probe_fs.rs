@@ -6,7 +6,7 @@
 //! records every path read, listed, checked or resolved, misses included. The fingerprint hashes
 //! the stat of exactly those paths.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::io::{self, Read};
 use std::sync::{Arc, Mutex};
@@ -95,6 +95,15 @@ pub struct Probe {
     pub hit: bool,
 }
 
+/// A budget that one scan ran out of. The scan reports each as a diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Exceeded {
+    /// A tree listing of `dir` stopped at its entry budget.
+    ListingEntries { dir: AbsPath, max: u32 },
+    /// A tree listing of `dir` did not list directories deeper than `max`.
+    ListingDepth { dir: AbsPath, max: u32 },
+}
+
 type Cached<T> = Result<T, ProbeError>;
 
 #[derive(Default)]
@@ -104,6 +113,7 @@ struct State {
     stats: HashMap<AbsPath, Cached<Stat>>,
     real_paths: HashMap<AbsPath, Cached<AbsPath>>,
     probes: BTreeMap<AbsPath, bool>,
+    exceeded: BTreeSet<Exceeded>,
 }
 
 #[derive(Default)]
@@ -188,6 +198,17 @@ impl ProbeFs {
 
     pub fn probed(&self) -> Vec<AbsPath> {
         self.record().into_iter().map(|probe| probe.path).collect()
+    }
+
+    pub(crate) fn note_exceeded(&self, exceeded: Exceeded) {
+        let mut state = self.state.lock().expect("probe state");
+        state.exceeded.insert(exceeded);
+    }
+
+    /// Every budget this scan ran out of, each once, in a stable order.
+    pub fn exceeded(&self) -> Vec<Exceeded> {
+        let state = self.state.lock().expect("probe state");
+        state.exceeded.iter().cloned().collect()
     }
 
     /// Hash over the stat of every probed path, taken now.

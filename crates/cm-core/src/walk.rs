@@ -1,16 +1,175 @@
-//! One bounded walk of the project tree, shared by every adapter.
+//! One bounded walk of the project tree, shared by every adapter, and the one bounded lister
+//! through which an adapter lists any directory (design section 5).
 //!
-//! It lists directories through [`ProbeFs`], so each listed directory lands in the probe
+//! The walk lists directories through [`ProbeFs`], so each listed directory lands in the probe
 //! record. It honours `.gitignore` files (each applies below its own directory), skips hidden
 //! directories except the agent homes, does not descend into symlinked directories, and stops
 //! at [`MAX_ENTRIES`] entries.
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
 use crate::model::AbsPath;
-use crate::probe_fs::{EntryKind, ProbeFs};
+use crate::probe_fs::{DirEntry, EntryKind, Exceeded, ProbeFs};
+
+/// A tree listing lists directories down to this depth, the listed directory being depth 0. The
+/// specs give no depth for the trees an adapter lists (Codex skills stop at 6 themselves), and
+/// the deepest real one, a command namespace, is 3. Links cannot make a tree deeper than its real
+/// directories, because each real directory is listed once.
+pub const MAX_TREE_DEPTH: u32 = 8;
+
+/// A tree listing stops after this many entries. The largest real tree on the development
+/// machine, `~/.codex/skills`, has 958 entries in all, and Codex's own skill scan already stops a
+/// plugin hash at this many in a scan. Each entry can become a load, so the budget bounds the
+/// work an adapter does for one listing.
+pub const MAX_TREE_ENTRIES: usize = 5_000;
+
+/// One entry of a tree listing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub path: AbsPath,
+    /// The names from the listed directory down to this entry, its own name last.
+    pub rel: Vec<String>,
+    /// A link to a directory lists as a directory, as the agents see it.
+    pub kind: EntryKind,
+}
+
+impl Listed {
+    pub fn name(&self) -> &str {
+        self.rel.last().map_or("", String::as_str)
+    }
+
+    /// 1 for an entry of the listed directory itself.
+    pub fn depth(&self) -> u32 {
+        self.rel.len() as u32
+    }
+}
+
+/// Where a tree listing stops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TreeLimits {
+    pub depth: u32,
+    pub entries: usize,
+}
+
+/// The limits of every listing that looks for items: commands, skills, agents, rules.
+pub const ITEM_LIMITS: TreeLimits = TreeLimits {
+    depth: MAX_TREE_DEPTH,
+    entries: MAX_TREE_ENTRIES,
+};
+
+/// What a tree listing found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tree {
+    pub entries: Vec<Listed>,
+    /// True when the listing stopped at a limit, so entries below the root can be missing.
+    pub capped: bool,
+}
+
+/// The entries of `dir`, in name order, at most [`MAX_TREE_ENTRIES`] of them.
+pub fn list_dir(fs: &ProbeFs, dir: &AbsPath) -> Vec<Listed> {
+    list_tree(fs, dir, |_| false)
+}
+
+/// [`list_tree_with`] at [`ITEM_LIMITS`].
+pub fn list_tree(
+    fs: &ProbeFs,
+    root: &AbsPath,
+    descend: impl FnMut(&Listed) -> bool,
+) -> Vec<Listed> {
+    list_tree_with(fs, root, ITEM_LIMITS, descend).entries
+}
+
+/// Lists `root` and every directory below it that `descend` accepts, depth first: siblings in
+/// name order, and the entries of a directory right after the directory. It lists each real
+/// directory once, whatever number of links reaches it, and stops at `limits`, the listed
+/// directory being depth 0. [`ProbeFs::exceeded`] records each stop. A root that cannot be
+/// listed yields nothing.
+pub fn list_tree_with(
+    fs: &ProbeFs,
+    root: &AbsPath,
+    limits: TreeLimits,
+    mut descend: impl FnMut(&Listed) -> bool,
+) -> Tree {
+    struct Frame {
+        dir: AbsPath,
+        rel: Vec<String>,
+        entries: Arc<Vec<DirEntry>>,
+        next: usize,
+    }
+    let mut out = Vec::new();
+    let mut capped = false;
+    let (Ok(real_root), Ok(entries)) = (fs.real_path(root), fs.list(root)) else {
+        return Tree {
+            entries: out,
+            capped,
+        };
+    };
+    let mut visited: HashSet<AbsPath> = HashSet::from([real_root]);
+    let mut stack = vec![Frame {
+        dir: root.clone(),
+        rel: Vec::new(),
+        entries,
+        next: 0,
+    }];
+    while let Some(frame) = stack.last_mut() {
+        let Some(entry) = frame.entries.get(frame.next) else {
+            stack.pop();
+            continue;
+        };
+        frame.next += 1;
+        if out.len() >= limits.entries {
+            fs.note_exceeded(Exceeded::ListingEntries {
+                dir: root.clone(),
+                max: u32::try_from(limits.entries).unwrap_or(u32::MAX),
+            });
+            capped = true;
+            break;
+        }
+        let mut rel = frame.rel.clone();
+        rel.push(entry.name.clone());
+        let listed = Listed {
+            path: frame.dir.join(&entry.name),
+            rel,
+            kind: entry.kind,
+        };
+        let child = (listed.kind == EntryKind::Dir && descend(&listed))
+            .then(|| (listed.path.clone(), listed.rel.clone()));
+        out.push(listed);
+        let Some((dir, rel)) = child else {
+            continue;
+        };
+        let Ok(real) = fs.real_path(&dir) else {
+            continue;
+        };
+        if visited.contains(&real) {
+            continue;
+        }
+        if rel.len() as u32 > limits.depth {
+            fs.note_exceeded(Exceeded::ListingDepth {
+                dir: root.clone(),
+                max: limits.depth,
+            });
+            capped = true;
+            continue;
+        }
+        visited.insert(real);
+        if let Ok(entries) = fs.list(&dir) {
+            stack.push(Frame {
+                dir,
+                rel,
+                entries,
+                next: 0,
+            });
+        }
+    }
+    Tree {
+        entries: out,
+        capped,
+    }
+}
 
 /// The walk stops after this many files and directories.
 pub const MAX_ENTRIES: usize = 20_000;
@@ -275,5 +434,118 @@ mod tests {
         let index = walk(&f.project(), &ProbeFs::new());
         assert_eq!(index.files_under(&f.project_path("link")).count(), 0);
         assert_eq!(index.files_under(&f.project_path("real")).count(), 1);
+    }
+
+    fn rels(tree: &[Listed]) -> Vec<String> {
+        tree.iter().map(|e| e.rel.join("/")).collect()
+    }
+
+    #[test]
+    fn a_tree_listing_lists_each_real_directory_once_whatever_links_reach_it() {
+        let f = Fixture::new();
+        let dir = f.project_path("commands");
+        f.write(&dir.join("a/x.md"), "x");
+        f.write(&dir.join("c.md"), "c");
+        for link in ["l0", "l1", "l2"] {
+            f.symlink(&dir.join(link), &dir);
+        }
+        f.symlink(&dir.join("a/up"), &dir);
+        f.symlink(&dir.join("b"), &dir.join("a"));
+        let fs = ProbeFs::new();
+        let tree = list_tree(&fs, &dir, |_| true);
+        // `a` is listed once, under its first path in name order. Every link shows as an entry.
+        assert_eq!(
+            rels(&tree),
+            ["a", "a/up", "a/x.md", "b", "c.md", "l0", "l1", "l2"]
+        );
+        assert!(fs.exceeded().is_empty());
+    }
+
+    #[test]
+    fn a_tree_listing_follows_descend_and_lists_a_flat_directory_without_it() {
+        let f = Fixture::new();
+        let dir = f.project_path("skills");
+        f.write(&dir.join("s/SKILL.md"), "s");
+        f.write(&dir.join(".hidden/SKILL.md"), "h");
+        let fs = ProbeFs::new();
+        let tree = list_tree(&fs, &dir, |e| !e.name().starts_with('.'));
+        assert_eq!(rels(&tree), [".hidden", "s", "s/SKILL.md"]);
+        assert_eq!(rels(&list_dir(&fs, &dir)), [".hidden", "s"]);
+        assert!(list_dir(&fs, &f.project_path("missing")).is_empty());
+    }
+
+    #[test]
+    fn a_tree_listing_stops_at_its_entry_budget_and_says_so() {
+        let f = Fixture::new();
+        let dir = f.project_path("big");
+        f.mkdir(&dir);
+        for i in 0..MAX_TREE_ENTRIES + 5 {
+            std::fs::write(dir.join(&format!("f{i:05}.md")).as_path(), "").unwrap();
+        }
+        let fs = ProbeFs::new();
+        let tree = list_tree(&fs, &dir, |_| true);
+        assert_eq!(tree.len(), MAX_TREE_ENTRIES);
+        assert_eq!(tree[0].name(), "f00000.md");
+        assert_eq!(
+            fs.exceeded(),
+            [Exceeded::ListingEntries {
+                dir,
+                max: MAX_TREE_ENTRIES as u32
+            }]
+        );
+    }
+
+    #[test]
+    fn a_tree_listing_stops_below_its_depth_limit_and_says_so() {
+        let f = Fixture::new();
+        let dir = f.project_path("deep");
+        let segs: Vec<String> = (1..=MAX_TREE_DEPTH + 2).map(|d| format!("d{d}")).collect();
+        f.write(&dir.join(&segs.join("/")).join("x.md"), "x");
+        let fs = ProbeFs::new();
+        let tree = list_tree(&fs, &dir, |_| true);
+        // Directories down to the limit are listed, so the entries reach one level further.
+        assert_eq!(tree.len(), MAX_TREE_DEPTH as usize + 1);
+        assert_eq!(tree.last().unwrap().depth(), MAX_TREE_DEPTH + 1);
+        assert_eq!(
+            fs.exceeded(),
+            [Exceeded::ListingDepth {
+                dir,
+                max: MAX_TREE_DEPTH
+            }]
+        );
+    }
+
+    /// Design section 5: no adapter lists a directory by itself. Each listing goes through
+    /// [`list_tree`], which is what bounds it.
+    #[test]
+    fn no_adapter_calls_the_raw_directory_listing() {
+        fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    rust_files(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agents");
+        let mut files = Vec::new();
+        rust_files(&agents, &mut files);
+        let offenders: Vec<String> = files
+            .iter()
+            .flat_map(|file| {
+                let text = std::fs::read_to_string(file).unwrap();
+                text.lines()
+                    .enumerate()
+                    .filter(|(_, line)| line.contains(".list("))
+                    .map(|(n, _)| format!("{}:{}", file.display(), n + 1))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "list directories with walk::list_tree or walk::list_dir, not ProbeFs::list: {offenders:?}"
+        );
     }
 }

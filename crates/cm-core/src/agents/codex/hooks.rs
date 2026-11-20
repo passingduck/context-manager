@@ -13,6 +13,7 @@ use super::setup::{Layer, LayerKind, Setup, get_bool, get_path, to_json};
 use crate::agents::ScanCx;
 use crate::model::*;
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 /// Spec 2.4: the 14 event keys, in `HookEventsToml` field order, which is the order Codex lists
 /// them in within one source (`into_matcher_groups`).
@@ -597,7 +598,8 @@ fn eval_matcher(event: &str, raw: Option<&str>) -> MatcherEval {
     }
 }
 
-/// `plugin_content_hash`, over the files of the plugin directory.
+/// `plugin_content_hash`, over the files of the plugin directory. A tree over `max_entries`
+/// entries or over its byte bound has no hash.
 fn plugin_content_hash(cx: &ScanCx, root: &AbsPath, max_entries: usize) -> Option<String> {
     // Bytes are bounded too, so one huge dependency tree cannot make a scan read gigabytes.
     let max_bytes: u64 = if max_entries > 5_000 {
@@ -605,44 +607,42 @@ fn plugin_content_hash(cx: &ScanCx, root: &AbsPath, max_entries: usize) -> Optio
     } else {
         16 << 20
     };
+    let skipped = |name: &str| {
+        matches!(name, "__pycache__" | ".venv")
+            || name.ends_with(".pyc")
+            || name.ends_with(".egg-info")
+    };
+    if cx.fs.stat(root).ok()?.kind != EntryKind::Dir {
+        return None;
+    }
+    // Codex hashes the whole tree at any depth, so only the entry count bounds the listing.
+    let limits = walk::TreeLimits {
+        depth: u32::MAX,
+        entries: max_entries,
+    };
+    let tree = walk::list_tree_with(cx.fs, root, limits, |e| !skipped(e.name()));
+    if tree.capped {
+        return None;
+    }
     let mut total: u64 = 0;
     let mut hash = Sha256::new();
     hash.update(b"codex-plugin-bundle-v1");
-    let mut pending = vec![root.clone()];
-    let mut seen = 0usize;
-    while let Some(path) = pending.pop() {
-        seen += 1;
-        if seen > max_entries {
-            return None;
-        }
-        let name = path.file_name().unwrap_or("");
-        let relative = &path.as_str()[root.as_str().len()..];
-        let relative = relative.trim_start_matches('/');
-        if path != *root
-            && (matches!(name, "__pycache__" | ".venv")
-                || name.ends_with(".pyc")
-                || name.ends_with(".egg-info"))
-        {
-            continue;
-        }
+    // The root comes first, with an empty relative path.
+    hash.update(0u64.to_le_bytes());
+    hash.update(b"directory");
+    for entry in tree.entries.iter().filter(|e| !skipped(e.name())) {
+        let relative = entry.rel.join("/");
         hash.update((relative.len() as u64).to_le_bytes());
         hash.update(relative.as_bytes());
-        let stat = cx.fs.stat(&path).ok()?;
-        match stat.kind {
-            EntryKind::Dir => {
-                hash.update(b"directory");
-                let list = cx.fs.list(&path).ok()?;
-                for entry in list.iter().rev() {
-                    pending.push(path.join(&entry.name));
-                }
-            }
+        match entry.kind {
+            EntryKind::Dir => hash.update(b"directory"),
             EntryKind::File => {
-                total = total.saturating_add(stat.len);
+                total = total.saturating_add(cx.fs.stat(&entry.path).ok()?.len);
                 if total > max_bytes {
                     return None;
                 }
                 hash.update(b"file");
-                let bytes = cx.fs.read(&path).ok()?;
+                let bytes = cx.fs.read(&entry.path).ok()?;
                 hash.update((bytes.len() as u64).to_le_bytes());
                 hash.update(&bytes[..]);
             }

@@ -605,6 +605,8 @@ export const en = {
     projectUntrusted: (v) => `The folder is not trusted, so the agent skips ${v.skipped.length} project ${v.skipped.length === 1 ? "setting" : "settings"}.`,
     globMatchesNothing: (v) => `The pattern ${v.glob} matches no file.`,
     walkCapped: (v) => `The project walk stopped after ${v.entries.toLocaleString("en-US")} entries, so some files may be missing here.`,
+    listingCapped: (v) => `The scan listed only the first ${v.max.toLocaleString("en-US")} entries of this directory, so it can miss files below it that the agent loads.`,
+    listingTooDeep: (v) => `The scan listed this directory only ${v.max} levels deep, so it can miss deeper files that the agent loads.`,
   } satisfies Msgs<Problem>,
   hookBlock,
   hookState: {

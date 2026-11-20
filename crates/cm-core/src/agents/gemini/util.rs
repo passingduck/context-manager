@@ -5,6 +5,7 @@ use std::cmp::Ordering;
 use crate::agents::ScanCx;
 use crate::model::{AbsPath, Os, RuleRef};
 use crate::probe_fs::EntryKind;
+use crate::walk;
 
 /// Builds a [`RuleRef`]. Every rule an adapter names goes through here, so a test can find them.
 pub(super) fn rule(id: &'static str) -> RuleRef {
@@ -86,32 +87,16 @@ pub(super) fn normalize_name(name: &str) -> String {
     parts.join("/")
 }
 
-/// Files below `dir`, at any depth up to `max_depth`, whose name ends with `ext`, sorted by
-/// path. Symlinks to directories are followed, as the CLI's glob does.
-pub(super) fn files_with_ext(
-    cx: &ScanCx,
-    dir: &AbsPath,
-    ext: &str,
-    max_depth: usize,
-) -> Vec<AbsPath> {
-    let mut out = Vec::new();
-    collect(cx, dir, ext, max_depth, &mut out);
+/// Files below `dir`, at any depth, whose name ends with `ext`, sorted by path. Symlinks to
+/// directories are followed, as the CLI's glob does.
+pub(super) fn files_with_ext(cx: &ScanCx, dir: &AbsPath, ext: &str) -> Vec<AbsPath> {
+    let mut out: Vec<AbsPath> = walk::list_tree(cx.fs, dir, |_| true)
+        .into_iter()
+        .filter(|e| e.kind == EntryKind::File && e.name().ends_with(ext))
+        .map(|e| e.path)
+        .collect();
     out.sort_by(|a, b| cmp_utf16(a.as_str(), b.as_str()));
     out
-}
-
-fn collect(cx: &ScanCx, dir: &AbsPath, ext: &str, depth: usize, out: &mut Vec<AbsPath>) {
-    let Ok(entries) = cx.fs.list(dir) else {
-        return;
-    };
-    for entry in entries.iter() {
-        let path = dir.join(&entry.name);
-        match entry.kind {
-            EntryKind::File if entry.name.ends_with(ext) => out.push(path),
-            EntryKind::Dir if depth > 0 => collect(cx, &path, ext, depth - 1, out),
-            _ => {}
-        }
-    }
 }
 
 /// JavaScript's `String.prototype.trim`: Unicode white space and the byte order mark.
