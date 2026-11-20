@@ -724,6 +724,37 @@ async fn a_trashed_skill_directory_comes_back_from_its_blobs() {
     );
 }
 
+/// Design section 4, step 4: without an OS trash, a directory the history does not hold
+/// completely is never removed.
+#[tokio::test]
+async fn without_an_os_trash_a_skill_the_history_cannot_hold_stays_on_disk() {
+    let fx = Fixture::new();
+    let dir = fx.project_path(".claude/skills");
+    let entry = dir.join("deep/SKILL.md");
+    fx.write(&entry, "skill");
+    let levels: String = (1..=17).map(|i| format!("d{i}/")).collect();
+    let deep = dir.join(&format!("deep/{levels}f.txt"));
+    let near = dir.join("deep/refs/notes.md");
+    fx.write(&deep, "17 levels down");
+    fx.write(&near, "notes");
+    let host = host_with(&fx, skill_agent(&entry, &dir), false, Box::new(NoTrash));
+    let edit = Edit::Trash {
+        path: entry.clone(),
+        base: Revision::of(b"skill"),
+    };
+    let preview = plan(&host, &fx, &edit).await.unwrap();
+    assert!(preview.warnings.contains(&Warning::NotRevertible));
+
+    let err = apply(&host, &fx, &edit, &preview.digest).await.unwrap_err();
+    assert!(matches!(err, ApiError::Io { .. }), "{err:?}");
+    assert_eq!(
+        (read(&entry), read(&near), read(&deep)),
+        ("skill".into(), "notes".into(), "17 levels down".into())
+    );
+    let records = history(&host).await;
+    assert_eq!(records[0].state, ChangeState::Aborted);
+}
+
 #[tokio::test]
 async fn trashing_a_single_file_and_reverting_it() {
     let fx = Fixture::new();

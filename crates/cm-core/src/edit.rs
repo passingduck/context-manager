@@ -26,6 +26,8 @@ use crate::scan::{MAX_READ_BYTES, Scanned};
 /// the OS trash is the only copy and the plan warns [`Warning::NotRevertible`].
 pub const MAX_TREE_JOURNAL_BYTES: u64 = 16 * 1024 * 1024;
 
+/// The walk of a directory trashed whole stops at these limits. A tree it could not read to the
+/// end is not revertible (design section 4, step 4).
 const TREE_DEPTH: usize = 16;
 const TREE_ENTRIES: usize = 10_000;
 
@@ -91,6 +93,9 @@ struct Draft {
 struct Tree {
     files: Vec<(AbsPath, Vec<u8>)>,
     hash: String,
+    /// False when the walk skipped something: a level below its depth limit, entries over its
+    /// count limit, or an entry it could not read.
+    complete: bool,
 }
 
 /// `<dir>/<name>` when `path` lies below it, deeper than `<dir>/<name>` itself.
@@ -255,7 +260,8 @@ impl<'a> Planner<'a> {
     fn tree(&self, dir: &AbsPath) -> Tree {
         let mut files = Vec::new();
         let mut seen = 0usize;
-        self.walk(dir, 0, &mut seen, &mut files);
+        let mut complete = true;
+        self.walk(dir, 0, &mut seen, &mut files, &mut complete);
         files.sort_by(|a, b| a.0.cmp(&b.0));
         let mut hasher = Sha256::new();
         for (path, bytes) in &files {
@@ -268,6 +274,7 @@ impl<'a> Planner<'a> {
         Tree {
             files,
             hash: format!("tree:{}", crate::model::hex(&hasher.finalize())),
+            complete,
         }
     }
 
@@ -277,27 +284,31 @@ impl<'a> Planner<'a> {
         depth: usize,
         seen: &mut usize,
         out: &mut Vec<(AbsPath, Vec<u8>)>,
+        complete: &mut bool,
     ) {
         if depth > TREE_DEPTH {
+            *complete = false;
             return;
         }
         let Ok(entries) = self.fs().list(dir) else {
+            *complete = false;
             return;
         };
         for entry in entries.iter() {
             *seen += 1;
             if *seen > TREE_ENTRIES {
+                *complete = false;
                 return;
             }
             let path = dir.join(&entry.name);
             match entry.kind {
-                EntryKind::Dir => self.walk(&path, depth + 1, seen, out),
-                EntryKind::File => {
-                    if let Ok(bytes) = self.fs().read(&path) {
-                        out.push((path, bytes.as_ref().clone()));
-                    }
-                }
-                EntryKind::Other => {}
+                EntryKind::Dir => self.walk(&path, depth + 1, seen, out, complete),
+                EntryKind::File => match self.fs().read(&path) {
+                    Ok(bytes) => out.push((path, bytes.as_ref().clone())),
+                    Err(_) => *complete = false,
+                },
+                // A broken symlink, a socket or a pipe: history cannot hold it.
+                EntryKind::Other => *complete = false,
             }
         }
     }
@@ -722,7 +733,7 @@ impl<'a> Planner<'a> {
             .all(|(_, bytes)| std::str::from_utf8(bytes).is_ok());
         let mut warnings = Vec::new();
         let mut before = BTreeMap::new();
-        if total > MAX_TREE_JOURNAL_BYTES || !all_text {
+        if total > MAX_TREE_JOURNAL_BYTES || !all_text || !tree.complete {
             warnings.push(Warning::NotRevertible);
         }
         if total <= MAX_TREE_JOURNAL_BYTES {
@@ -1094,6 +1105,36 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    /// Design section 4, step 4: a tree the plan could not capture completely is not revertible.
+    #[test]
+    fn a_skill_with_a_file_deeper_than_the_walk_is_not_revertible() {
+        let fx = Fixture::new();
+        let entry = fx.project_path(".claude/skills/deep/SKILL.md");
+        fx.write(&entry, "skill");
+        let trash = Edit::Trash {
+            path: entry.clone(),
+            base: Revision::of(b"skill"),
+        };
+        let a = writer(&fx, &[], &["deep/SKILL.md"]);
+        let levels = |n: usize| (1..=n).map(|i| format!("d{i}/")).collect::<String>();
+
+        fx.write(
+            &fx.project_path(&format!(".claude/skills/deep/{}f.txt", levels(16))),
+            "16",
+        );
+        let preview = plan_with(&a, &fx, &trash).unwrap();
+        assert_eq!(preview.change_set.ops[0].action, Action::TrashDir);
+        assert!(!preview.warnings.contains(&Warning::NotRevertible));
+        assert_eq!(preview.before.len(), 2);
+
+        let deep = fx.project_path(&format!(".claude/skills/deep/{}f.txt", levels(17)));
+        fx.write(&deep, "17");
+        let preview = plan_with(&a, &fx, &trash).unwrap();
+        assert_eq!(preview.change_set.ops[0].action, Action::TrashDir);
+        assert!(preview.warnings.contains(&Warning::NotRevertible));
+        assert!(!preview.before.contains_key(&deep));
     }
 
     #[test]

@@ -21,7 +21,7 @@ use cm_core::env::ScanEnv;
 use cm_core::scan::scan_with_parked;
 use cm_core::{
     AbsPath, Action, ApiError, ApplyResult, Base, ChangeId, ChangeRecord, ChangeState, Edit,
-    FileOp, JournalOp, Preview, Revision, sha256_hex,
+    FileOp, JournalOp, Preview, Revision, Warning, sha256_hex,
 };
 
 use crate::fsio::{
@@ -159,10 +159,11 @@ impl Ctx {
 
         // Step 4: execute. A failed operation is not a crash: the run undoes what it did.
         let effects = self.effects();
+        let held = !preview.warnings.contains(&Warning::NotRevertible);
         let mut files = Vec::new();
         let mut not_trashed = Vec::new();
         for (index, op) in preview.change_set.ops.iter().enumerate() {
-            if let Err(err) = effects.run_op(&id.0, index, op, &mut files, &mut not_trashed) {
+            if let Err(err) = effects.run_op(&id.0, index, op, held, &mut files, &mut not_trashed) {
                 let done = if index == 0 { 0 } else { ends[index - 1] };
                 self.undo(&mut record, done, ends[index]);
                 return Err(err);
@@ -315,11 +316,13 @@ pub(crate) fn disk_hash(path: &AbsPath) -> std::io::Result<Option<String>> {
 }
 
 impl Effects<'_> {
+    /// `held`: the history holds every file of a directory the change trashes whole.
     fn run_op(
         &self,
         id: &str,
         index: usize,
         op: &FileOp,
+        held: bool,
         files: &mut Vec<(AbsPath, Option<Revision>)>,
         not_trashed: &mut Vec<AbsPath>,
     ) -> Result<(), ApiError> {
@@ -330,13 +333,14 @@ impl Effects<'_> {
                     .map_err(io_detail)?;
                 files.push((op.path.clone(), Some(Revision::of(text.as_bytes()))));
             }
+            // The plan holds the text of a file it trashes alone.
             Action::Trash => {
                 self.expect(op)?;
-                self.trash(&op.path, not_trashed).map_err(io_detail)?;
+                self.trash(&op.path, true, not_trashed).map_err(io_detail)?;
                 files.push((op.path.clone(), None));
             }
             Action::TrashDir => {
-                self.trash(&op.path, not_trashed).map_err(io_detail)?;
+                self.trash(&op.path, held, not_trashed).map_err(io_detail)?;
                 files.push((op.path.clone(), None));
             }
         }
@@ -388,14 +392,21 @@ impl Effects<'_> {
     }
 
     /// Moves a file or directory to the OS trash. When the trash is not available, as on a
-    /// headless Linux host, the path is removed and listed in `not_trashed`. The history blob is
-    /// then the copy.
-    pub fn trash(&self, path: &AbsPath, not_trashed: &mut Vec<AbsPath>) -> std::io::Result<()> {
+    /// headless Linux host, a path whose content the history `held` is removed and listed in
+    /// `not_trashed`: the history blobs are the copy. Any other path stays, and the call fails.
+    pub fn trash(
+        &self,
+        path: &AbsPath,
+        held: bool,
+        not_trashed: &mut Vec<AbsPath>,
+    ) -> std::io::Result<()> {
         if fs::symlink_metadata(path.as_path()).is_err() {
             return Ok(());
         }
-        if self.trasher.trash(path.as_path()).is_ok() {
-            return Ok(());
+        match self.trasher.trash(path.as_path()) {
+            Ok(()) => return Ok(()),
+            Err(err) if !held => return Err(std::io::Error::other(err)),
+            Err(_) => {}
         }
         let result = if path.as_path().is_dir() && !path.as_path().is_symlink() {
             fs::remove_dir_all(path.as_path())
