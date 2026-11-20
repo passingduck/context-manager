@@ -118,14 +118,25 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 
-# run_tlc NAME CFG: runs TLC on CFG in $tmp/NAME. Sets `peak_kb` and `killed`.
+# Actions that only a broken variant, the missing lock or an in-place write can take. Every
+# other action must fire in the model, or a pass would say nothing about it.
+variant_only="ApplyReturn RecoveryRoll RecoveryGcRemove Truncate WriteInPlace UndoTruncate UndoInPlace"
+
+# The model runs on up to four workers. A run that breaks an invariant runs again on one,
+# because only a breadth-first search on one worker gives the shortest trace.
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+workers=$(( cores < 4 ? cores : 4 ))
+
+# run_tlc NAME CFG TLC-OPTION...: runs TLC on CFG in $tmp/NAME. Sets `peak_kb` and `killed`.
 run_tlc() {
   local work="$tmp/$1"
   mkdir -p "$work"
   cp "$model/WritePipeline.tla" "$work/"
   cp "$model/$2" "$work/run.cfg"
-  (cd "$work" && exec "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 1 \
-      -checkpoint 0 -config run.cfg -metadir "$work/states" WritePipeline.tla) \
+  shift 2
+  rm -rf "$work/states"
+  (cd "$work" && exec "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC \
+      -checkpoint 0 "$@" -config run.cfg -metadir "$work/states" WritePipeline.tla) \
       >"$work/tlc.out" 2>&1 &
   tlc_pid=$!
   local begin used
@@ -150,6 +161,22 @@ run_tlc() {
   tlc_pid=""
 }
 
+# result_of OUT: sets `got` (pass, the invariant broken, or error) and `states`.
+result_of() {
+  states="$(sed -n 's/.* states generated, \([0-9]*\) distinct states found.*/\1/p' "$1" | tail -n 1)"
+  local broke
+  broke="$(sed -n 's/^Error: Invariant \([A-Za-z]*\) is violated.*/\1/p' "$1" | head -n 1)"
+  if [ -n "$killed" ]; then
+    got="error"
+  elif grep -q "Model checking completed. No error has been found." "$1"; then
+    got="pass"
+  elif [ -n "$broke" ]; then
+    got="$broke"
+  else
+    got="error"
+  fi
+}
+
 errors=0
 total_start=$(date +%s)
 total_peak_kb=0
@@ -157,20 +184,25 @@ for entry in "${configs[@]}"; do
   IFS=: read -r name cfg expect <<<"$entry"
   selected "$name" || continue
   start=$(date +%s)
-  run_tlc "$name" "$cfg"
   out="$tmp/$name/tlc.out"
+  if [ "$name" = model ]; then
+    run_tlc "$name" "$cfg" -workers "$workers" -coverage 600
+    result_of "$out"
+    if [ "$got" != pass ] && [ "$got" != error ] && [ "$workers" -gt 1 ]; then
+      run_tlc "$name" "$cfg" -workers 1
+    fi
+  else
+    run_tlc "$name" "$cfg" -workers 1
+  fi
+  result_of "$out"
   secs=$(( $(date +%s) - start ))
   [ "$peak_kb" -gt "$total_peak_kb" ] && total_peak_kb=$peak_kb
-  states="$(sed -n 's/.* states generated, \([0-9]*\) distinct states found.*/\1/p' "$out" | tail -n 1)"
-  if [ -n "$killed" ]; then
-    got="error"
-  elif grep -q "Model checking completed. No error has been found." "$out"; then
-    got="pass"
-  elif broke="$(sed -n 's/^Error: Invariant \([A-Za-z]*\) is violated.*/\1/p' "$out" | head -n 1)" \
-       && [ -n "$broke" ]; then
-    got="$broke"
-  else
-    got="error"
+  never=""
+  if [ "$name" = model ] && [ "$got" = pass ]; then
+    for action in $(sed -n 's/^<\([A-Za-z]*\) line .*>: 0:0$/\1/p' "$out" | sort -u); do
+      case " $variant_only " in *" $action "*) ;; *) never="$never $action" ;; esac
+    done
+    [ -n "$never" ] && got="error"
   fi
   label="$name"
   [ "$cfg" = "WritePipeline.cfg" ] || label="${cfg%%s/*} $name"
@@ -185,7 +217,9 @@ for entry in "${configs[@]}"; do
   else
     errors=$((errors + 1))
     echo "FAIL  $summary   (expected: $expect)"
-    if [ -n "$killed" ]; then
+    if [ -n "$never" ]; then
+      echo "      these actions never fire in the model, so the pass says nothing about them:$never"
+    elif [ -n "$killed" ]; then
       echo "      killed: $killed. Make the bounds in $cfg smaller."
     elif [ "$got" = error ]; then
       grep -v '^\s*$' "$out" | tail -n 30
