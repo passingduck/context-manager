@@ -145,7 +145,16 @@ fn settings_the_planners_wrote_pass_claude_doctor() {
         "the control did not trip:\n{report}"
     );
     rig.fx.write(&settings, "{\n  \"model\": \"opus\"\n}\n");
-    assert!(!rig.doctor(&claude).contains("Invalid settings"));
+
+    // `claude doctor` takes seconds, so it runs after a run of edits, not after each one.
+    let assert_valid = |when: &str| {
+        let report = rig.doctor(&claude);
+        assert!(
+            !report.contains("Invalid settings"),
+            "{when}:\n{}\n{report}",
+            std::fs::read_to_string(settings.as_path()).unwrap()
+        );
+    };
 
     for edit in [
         add(
@@ -168,13 +177,8 @@ fn settings_the_planners_wrote_pass_claude_doctor() {
         ),
     ] {
         rig.plan_and_apply(&edit);
-        let report = rig.doctor(&claude);
-        assert!(
-            !report.contains("Invalid settings"),
-            "after {edit:?}:\n{}\n{report}",
-            std::fs::read_to_string(settings.as_path()).unwrap()
-        );
     }
+    assert_valid("after adding a command, a prompt and an http hook");
 
     // Park a hook, update another, and put the parked one back.
     let parked_hook = rig.hook("echo checked");
@@ -182,7 +186,6 @@ fn settings_the_planners_wrote_pass_claude_doctor() {
         hook: parked_hook.id,
         enabled: false,
     });
-    assert!(!rig.doctor(&claude).contains("Invalid settings"));
     let stop = rig.hook("Did the tests pass?");
     rig.plan_and_apply(&Edit::UpdateHook {
         hook: stop.id,
@@ -197,9 +200,8 @@ fn settings_the_planners_wrote_pass_claude_doctor() {
         hook: back.id,
         enabled: true,
     });
-    assert!(!rig.doctor(&claude).contains("Invalid settings"));
     rig.plan_and_apply(&Edit::RemoveHook {
         hook: rig.hook("https://example.com/hook").id,
     });
-    assert!(!rig.doctor(&claude).contains("Invalid settings"));
+    assert_valid("after a park, an update, an unpark and a removal");
 }
