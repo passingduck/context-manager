@@ -2,6 +2,8 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { useEffect, useRef } from "react";
 import type { AbsPath } from "../gen/AbsPath";
 import type { AgentId as Agent } from "../gen/AgentId";
+import type { PieceRef } from "../gen/PieceRef";
+import type { TraceKey } from "../gen/TraceKey";
 import { call } from "./client";
 
 // Query keys follow docs/design.md section 10: ['scan', cwd], ['file', path, rev], ['history', cwd].
@@ -61,6 +63,18 @@ export const useHistory = (cwd: AbsPath) =>
 
 export const useChange = (id: string | null) =>
   useQuery({ queryKey: ["change", id], queryFn: () => call("change", { id: id as string }), enabled: id !== null });
+
+export const useTraces = (cwd: AbsPath) => useQuery({ queryKey: ["traces", cwd], queryFn: () => call("traces", { cwd }), refetchInterval: 15_000 });
+
+export const useTrace = (cwd: AbsPath, key: TraceKey | null) =>
+  useQuery({ queryKey: ["trace", cwd, key], queryFn: () => call("trace", { cwd, key: key as TraceKey }), enabled: key !== null });
+
+/** The pieces of one call's request. `read` names the trace the client shows, so a trace that changed answers `stale` and the key changes with the next trace. */
+export const useStepPieces = (cwd: AbsPath, key: TraceKey, read: number, step: number | null) =>
+  useQuery({ queryKey: ["trace-step", cwd, key, read, step], queryFn: () => call("trace_step", { cwd, key, read, step: step as number }), enabled: step !== null });
+
+export const usePieceText = (cwd: AbsPath, key: TraceKey, read: number, step: number, piece: PieceRef | null) =>
+  useQuery({ queryKey: ["trace-piece", cwd, key, read, step, piece], queryFn: () => call("trace_piece", { cwd, key, read, step, piece: piece as PieceRef }), enabled: piece !== null });
 
 /**
  * One long-poll loop per open project. It refetches the scan when the fingerprint changes and

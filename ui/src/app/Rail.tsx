@@ -2,7 +2,7 @@ import { Badge } from "../components/ui";
 import type { Snapshot } from "../gen/Snapshot";
 import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
-import { VIEWS, type Route, type View } from "../lib/route";
+import { NO_SESSION, VIEWS, type Route, type View } from "../lib/route";
 
 const ICONS: Record<View, string> = {
   context: "M3 4h10M3 8h10M3 12h6",
@@ -10,6 +10,7 @@ const ICONS: Record<View, string> = {
   hooks: "M9 1 3 9h4l-1 6 6-8H8l1-6Z",
   doctor: "M8 3v10M3 8h10",
   history: "M3 8a5 5 0 1 0 1.5-3.5M3 2v3h3M8 5v3l2 1",
+  sessions: "M2 13h12M4 13V8M7 13V4M10 13V6M13 13V9",
 };
 
 export function Rail({ route, go, snapshot, pending }: { route: Route; go: (patch: Partial<Route>) => void; snapshot: Snapshot; pending: number }) {
@@ -21,6 +22,7 @@ export function Rail({ route, go, snapshot, pending }: { route: Route; go: (patc
     hooks: snapshot.agents.reduce((n, v) => n + v.hooks.length, 0),
     doctor: snapshot.diagnostics.length,
     history: pending > 0 ? pending : null,
+    sessions: null,
   };
   return (
     <nav aria-label={t.rail.sections} className="flex min-h-0 flex-col border-r border-line bg-subtle px-2 py-3">
@@ -33,7 +35,7 @@ export function Rail({ route, go, snapshot, pending }: { route: Route; go: (patc
               <button
                 type="button"
                 aria-current={current ? "page" : undefined}
-                onClick={() => go({ view, sel: "", ag: "", ln: 0 })}
+                onClick={() => go({ view, sel: "", ag: "", ln: 0, ...NO_SESSION })}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-sunken aria-[current=page]:bg-accent-bg aria-[current=page]:font-semibold aria-[current=page]:text-accent"
               >
                 <svg viewBox="0 0 16 16" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

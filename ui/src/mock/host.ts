@@ -9,6 +9,7 @@ import type { SearchHit } from "../gen/SearchHit";
 import type { Simulation } from "../gen/Simulation";
 import { agentOfHook, controls, history, initDisk, installControls, mockState, pendingIds, reject, waitForBump } from "./disk";
 import { apply, plan } from "./plan";
+import { pieceText, stepPieces, traceList, traceOf } from "./trace";
 import { agentInfos, coreRules, CWD, files, HOME, snapshot, texts } from "./snapshot";
 
 const globToRegExp = (glob: string) =>
@@ -174,13 +175,13 @@ export async function handle(request: Request): Promise<unknown> {
       return SAMPLES[request.args.event] ?? { hook_event_name: request.args.event };
     case "run_hook":
       return runHook(request.args.hook, request.args.input);
-    // The mock records no sessions.
     case "traces":
-      return [];
+      return traceList();
     case "trace":
-      return reject({ kind: "notFound" });
+      return traceOf(request.args) ?? reject({ kind: "notFound" });
     case "trace_step":
+      return stepPieces(request.args);
     case "trace_piece":
-      return { kind: "stale" };
+      return pieceText(request.args);
   }
 }

@@ -11,11 +11,13 @@ import { useRoute, type Route } from "./lib/route";
 import { runSelftest } from "./selftest";
 import { ContextView } from "./views/ContextView";
 import { Detail } from "./views/Detail";
+import { CallDetail } from "./views/CallDetail";
 import { DoctorView } from "./views/DoctorView";
 import { HistoryView } from "./views/HistoryView";
 import { HooksView } from "./views/HooksView";
 import { MemoryView } from "./views/MemoryView";
 import { SearchPanel } from "./views/SearchPanel";
+import { SessionsView } from "./views/SessionsView";
 import { dirtyPaths } from "./write/buffers";
 import { WriteProvider } from "./write/flow";
 
@@ -46,6 +48,7 @@ function defaultSelection(view: Route["view"], snapshot: Snapshot): Partial<Rout
       return {};
     }
     case "history":
+    case "sessions":
       return {};
   }
 }
@@ -110,12 +113,14 @@ export function App() {
                 <HooksView route={route} go={go} />
               ) : route.view === "doctor" ? (
                 <DoctorView route={route} go={go} />
+              ) : route.view === "sessions" ? (
+                <SessionsView route={route} go={go} />
               ) : (
                 <HistoryView route={route} go={go} />
               )}
             </main>
             <aside className="min-h-0 min-w-0 bg-bg" aria-label={t.detail.why}>
-              <Detail route={shown} go={go} />
+              {route.view === "sessions" ? <CallDetail route={route} go={go} /> : <Detail route={shown} go={go} />}
             </aside>
           </div>
           </div>

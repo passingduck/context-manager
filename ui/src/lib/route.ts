@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
 
-export const VIEWS = ["context", "memory", "hooks", "doctor", "history"] as const;
+export const VIEWS = ["context", "memory", "hooks", "doctor", "history", "sessions"] as const;
 export type View = (typeof VIEWS)[number];
 
 /** Everything the address bar remembers. Empty strings mean "not set". */
@@ -19,6 +19,12 @@ export interface Route {
   sim: string;
   /** Line to reveal in the open file. */
   ln: number;
+  /** Sessions view: the opened session's id (the agent is `ag`), its subagent, the selected call counted from 1, the selected piece (`s<n>` of the request, `r<n>` of the reply), and the chart mode. */
+  ss: string;
+  pt: string;
+  call: number;
+  pc: string;
+  cm: "cache" | "kind";
 }
 
 function parse(hash: string): Route {
@@ -34,13 +40,18 @@ function parse(hash: string): Route {
     q: params.get("q") ?? "",
     sim: params.get("sim") ?? "",
     ln: Number(params.get("ln") ?? "0") || 0,
+    ss: params.get("ss") ?? "",
+    pt: params.get("pt") ?? "",
+    call: Number(params.get("call") ?? "0") || 0,
+    pc: params.get("pc") ?? "",
+    cm: params.get("cm") === "kind" ? "kind" : "cache",
   };
 }
 
 function write(route: Route): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(route)) {
-    if (value === "" || value === 0 || (key === "view" && value === "context") || (key === "mode" && value === "tree"))
+    if (value === "" || value === 0 || (key === "view" && value === "context") || (key === "mode" && value === "tree") || (key === "cm" && value === "cache"))
       continue;
     params.set(key, String(value));
   }
@@ -66,3 +77,6 @@ export function useRoute(): [Route, (patch: Partial<Route>, replace?: boolean) =
   }, []);
   return [route, go];
 }
+
+/** The patch that leaves the open session. Every view switch applies it, so no selection outlives its view. */
+export const NO_SESSION = { ss: "", pt: "", call: 0, pc: "" } as const;
