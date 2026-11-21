@@ -380,16 +380,30 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> (Trace, Vec<StepFit>) {
         if sent.is_none() {
             previous = None;
         }
-        let reply = step
+        let reply_spans: Vec<(&Span, u32)> = step
             .reply
             .iter()
             .flat_map(|&block| {
                 data.blocks[block as usize]
                     .spans
                     .iter()
-                    .zip(&tokens[block as usize])
+                    .zip(tokens[block as usize].iter().copied())
             })
-            .map(|(span, &tokens)| ReplyPiece {
+            .collect();
+        let weighed: Vec<(PieceKind, u64, u32)> = reply_spans
+            .iter()
+            .map(|&(span, raw)| {
+                let weight = match span.text.len() {
+                    0 => span.opaque,
+                    len => len as u64,
+                };
+                (span.kind, weight, raw)
+            })
+            .collect();
+        let reply = reply_spans
+            .iter()
+            .zip(fit::reply(step.usage.as_ref(), &weighed))
+            .map(|(&(span, _), tokens)| ReplyPiece {
                 kind: span.kind,
                 label: span.label.clone(),
                 bytes: span.text.len() as u64,
