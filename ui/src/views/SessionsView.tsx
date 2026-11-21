@@ -212,7 +212,7 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
         <section aria-label={t.sessions.parts.title}>
           <h3 className="text-[12px] font-semibold">{t.sessions.parts.title}</h3>
           <p className="mb-1 text-[11px] text-muted">{t.sessions.parts.note}</p>
-          <ul>
+          <ul data-testid="parts" className="max-h-56 overflow-y-auto">
             {trace.parts.map((part) => (
               <li key={part.part}>
                 <button type="button" data-testid="part-row" data-part={part.part} onClick={() => go({ pt: part.part, call: 0, pc: "" })} className="flex w-full items-baseline gap-2 px-1 py-0.5 text-left hover:bg-subtle">

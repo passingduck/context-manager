@@ -152,7 +152,7 @@ export function axisTicks(max: number): number[] {
   if (max <= 0) return [];
   const raw = max / 4;
   const pow = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? pow * 10;
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * pow).find((s) => s >= raw) ?? pow * 10;
   const out: number[] = [];
   for (let v = step; v <= max; v += step) out.push(v);
   return out;
