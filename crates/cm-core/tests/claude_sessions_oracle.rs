@@ -212,7 +212,7 @@ fn open(sandbox: &Sandbox, id: &TraceId, part: Option<&str>) -> OpenTrace {
     let env = sandbox.env(&sandbox.cwd());
     let fs = ProbeFs::new();
     let data = Claude
-        .trace(&ScanCx::new(&env, &fs), id, part)
+        .trace(&ScanCx::new(&env, &fs), id, part, None)
         .expect("the session opens");
     OpenTrace::new(data)
 }

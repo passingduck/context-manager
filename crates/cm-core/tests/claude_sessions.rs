@@ -264,10 +264,19 @@ fn env(fx: &Fixture) -> ScanEnv {
 }
 
 fn open(fx: &Fixture, id: &str) -> OpenTrace {
+    open_prefix(fx, id, None)
+}
+
+fn open_prefix(fx: &Fixture, id: &str, prefix: Option<u64>) -> OpenTrace {
     let env = env(fx);
     let fs = ProbeFs::new();
     let data = Claude
-        .trace(&ScanCx::new(&env, &fs), &TraceId(id.to_owned()), None)
+        .trace(
+            &ScanCx::new(&env, &fs),
+            &TraceId(id.to_owned()),
+            None,
+            prefix,
+        )
         .expect("the session opens");
     OpenTrace::new(data)
 }
@@ -515,6 +524,34 @@ fn a_partial_last_line_is_ignored_and_a_broken_line_is_counted() {
 }
 
 #[test]
+fn a_prefix_of_a_grown_record_gives_the_trace_the_record_had_at_that_length() {
+    let fx = Fixture::new();
+    let r = conversation(&fx);
+    let file = r.write(&fx, "sess-g");
+    let whole = std::fs::read(file.as_path()).unwrap();
+    // The record as it was while the session ran: cut inside the line of the second request.
+    let line = r
+        .lines
+        .iter()
+        .position(|l| l.contains(r#""id":"r2""#))
+        .unwrap();
+    let cut = r.lines[..line].iter().map(|l| l.len() + 1).sum::<usize>() + 20;
+    std::fs::write(file.as_path(), &whole[..cut]).unwrap();
+    let then = open(&fx, "sess-g");
+    assert_eq!(then.read(), cut as u64);
+
+    std::fs::write(file.as_path(), &whole).unwrap();
+    let now = open(&fx, "sess-g");
+    assert!(now.trace().steps.len() > then.trace().steps.len());
+    let again = open_prefix(&fx, "sess-g", Some(then.read()));
+    assert_eq!(again.read(), then.read());
+    assert_eq!(again.trace().steps, then.trace().steps);
+    for step in 0..then.trace().steps.len() as u32 {
+        assert_eq!(pieces(&again, step), pieces(&then, step));
+    }
+}
+
+#[test]
 fn replies_without_request_records_are_steps_without_a_request() {
     let fx = Fixture::new();
     let mut r = Record::new(&fx.project());
@@ -577,7 +614,12 @@ fn a_record_over_the_limit_keeps_the_steps_read_so_far() {
         line: 1 << 20,
     });
     let data = Claude
-        .trace(&ScanCx::new(&env, &fs), &TraceId("sess-6".into()), None)
+        .trace(
+            &ScanCx::new(&env, &fs),
+            &TraceId("sess-6".into()),
+            None,
+            None,
+        )
         .unwrap();
     let open = OpenTrace::new(data);
     assert_eq!(check(&open, &r.sent, &secrets()), 1);
@@ -610,7 +652,7 @@ fn an_id_outside_the_listing_is_not_found_and_opens_no_other_file() {
     let env = env(&fx);
     for id in ["sess-unknown", "../secret", "sess-7/../../secret"] {
         let fs = ProbeFs::new();
-        let got = Claude.trace(&ScanCx::new(&env, &fs), &TraceId(id.into()), None);
+        let got = Claude.trace(&ScanCx::new(&env, &fs), &TraceId(id.into()), None, None);
         assert_eq!(got.err(), Some(ApiError::NotFound), "{id}");
         assert!(
             fs.probed()
@@ -624,6 +666,7 @@ fn an_id_outside_the_listing_is_not_found_and_opens_no_other_file() {
         &ScanCx::new(&env, &fs),
         &TraceId("sess-7".into()),
         Some("../sess-7"),
+        None,
     );
     assert_eq!(got.err(), Some(ApiError::NotFound));
 }

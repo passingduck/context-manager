@@ -451,18 +451,21 @@ impl Api for Host {
     async fn trace(&self, req: TraceReq) -> Result<Trace, ApiError> {
         let env = self.config.env.with_cwd(req.cwd);
         let (agents, memo) = (self.ctx.agents, self.traces.clone());
-        tokio::task::spawn_blocking(move || Ok(memo.open(agents, &env, &req.key)?.trace().clone()))
-            .await
-            .map_err(join_error)?
+        tokio::task::spawn_blocking(move || {
+            Ok(memo.current(agents, &env, &req.key)?.trace().clone())
+        })
+        .await
+        .map_err(join_error)?
     }
 
-    /// `Stale` when the record no longer has the length the client's trace was built from.
+    /// Answers for the trace of the record's first `read` bytes. `Stale` when the record is now
+    /// shorter than that, or is gone.
     async fn trace_step(&self, req: TraceStepReq) -> Result<StepPieces, ApiError> {
         let env = self.config.env.with_cwd(req.cwd);
         let (agents, memo) = (self.ctx.agents, self.traces.clone());
         tokio::task::spawn_blocking(move || {
-            let open = memo.open(agents, &env, &req.key)?;
-            traces::step_pieces(&open, req.read, req.step)
+            let open = memo.prefix(agents, &env, &req.key, req.read)?;
+            traces::step_pieces(open.as_deref(), req.step)
         })
         .await
         .map_err(join_error)?
@@ -472,8 +475,8 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         let (agents, memo) = (self.ctx.agents, self.traces.clone());
         tokio::task::spawn_blocking(move || {
-            let open = memo.open(agents, &env, &req.key)?;
-            traces::piece_text(&open, req.read, req.step, req.piece)
+            let open = memo.prefix(agents, &env, &req.key, req.read)?;
+            traces::piece_text(open.as_deref(), req.step, req.piece)
         })
         .await
         .map_err(join_error)?
@@ -533,7 +536,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_trace_operations_answer_and_a_changed_record_is_stale() {
+    async fn the_trace_operations_answer_for_the_read_prefix_of_a_growing_record() {
         let fx = Fixture::new();
         let file = write_record(&fx);
         let host = host(&fx, Duration::from_millis(100));
@@ -611,22 +614,34 @@ mod tests {
         let missing = call(&host, &piece(read, r#"{"kind":"sent","piece":9}"#)).await;
         assert_eq!(missing.err(), Some(ApiError::NotFound));
 
-        // The session goes on: the record grows, and a request naming the old length is stale.
+        // The session goes on: the record grows by one reply. A request naming the old length
+        // answers for the record as it was, from the memo.
         let mut bytes = std::fs::read(file.as_path()).unwrap();
         bytes.extend_from_slice(
-            b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"more\"}}\n",
+            br#"{"type":"assistant","timestamp":"2026-11-20T10:00:04.000Z","message":{"id":"m2","role":"assistant","model":"m","content":[{"type":"text","text":"again"}]}}"#,
         );
+        bytes.push(b'\n');
         std::fs::write(file.as_path(), &bytes).unwrap();
-        let stale: StepPieces =
-            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
-        assert_eq!(stale, StepPieces::Stale);
-        let stale: PieceText = serde_json::from_value(
+        let same = |answer: serde_json::Value| {
+            let answer: StepPieces = serde_json::from_value(answer).unwrap();
+            assert_eq!(
+                answer,
+                StepPieces::Current {
+                    pieces: pieces.clone()
+                }
+            );
+        };
+        same(call(&host, &step(read)).await.unwrap());
+        let reply_again: PieceText = serde_json::from_value(
             call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
                 .await
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(stale, PieceText::Stale);
+        assert_eq!(reply_again, reply);
+
+        // A second `trace` shows the new step and replaces the old trace in the memo, so the old
+        // length is read again from the first `read` bytes.
         let fresh: Trace = serde_json::from_value(
             call(
                 &host,
@@ -637,6 +652,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fresh.read, bytes.len() as u64);
+        assert_eq!(fresh.steps.len(), 2);
+        same(call(&host, &step(read)).await.unwrap());
+        let step_at = |read: u64, step: u32| {
+            format!(
+                r#"{{"op":"trace_step","args":{{"cwd":{cwd},"key":{key},"read":{read},"step":{step}}}}}"#
+            )
+        };
+        let new_step: StepPieces =
+            serde_json::from_value(call(&host, &step_at(fresh.read, 1)).await.unwrap()).unwrap();
+        assert_eq!(new_step, StepPieces::Current { pieces: Vec::new() });
+        let before_it = call(&host, &step_at(read, 1)).await;
+        assert_eq!(before_it.err(), Some(ApiError::NotFound));
+
+        // A record shorter than the client's `read` is stale, and so is a record that is gone.
+        std::fs::write(file.as_path(), &bytes[..read as usize - 10]).unwrap();
+        let stale: StepPieces =
+            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
+        assert_eq!(stale, StepPieces::Stale);
+        let stale: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stale, PieceText::Stale);
+        std::fs::remove_file(file.as_path()).unwrap();
+        let gone: StepPieces =
+            serde_json::from_value(call(&host, &step_at(fresh.read, 0)).await.unwrap()).unwrap();
+        assert_eq!(gone, StepPieces::Stale);
 
         let unknown = r#"{"agent":"claude","id":"../s1","part":null}"#;
         let missing = call(

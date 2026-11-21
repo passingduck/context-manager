@@ -41,11 +41,15 @@ const COMMAND_TAGS: [&str; 4] = [
     "<local-command-stderr>",
 ];
 
-/// Reads the record at `info.file`.
-pub(super) fn read(fs: &ProbeFs, info: TraceInfo) -> Result<TraceData, ApiError> {
+/// Reads the record at `info.file`, or only its first `prefix` bytes.
+pub(super) fn read(
+    fs: &ProbeFs,
+    info: TraceInfo,
+    prefix: Option<u64>,
+) -> Result<TraceData, ApiError> {
     let mut reader = Reader::default();
     let mut line_no = 0usize;
-    let lines = fs.read_lines(&info.file, &mut |bytes, ended| {
+    let lines = fs.read_lines(&info.file, prefix, &mut |bytes, ended| {
         reader.line(line_no, bytes, ended);
         line_no += 1;
     })?;
