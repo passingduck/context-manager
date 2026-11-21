@@ -2,12 +2,16 @@
 //! projections into [`Trace`], [`StepPieces`] and [`PieceText`].
 //!
 //! An adapter returns a [`TraceData`]: every distinct block once, as the spans it is made of, and
-//! every step as references to blocks. [`OpenTrace`] counts tokens once per span and computes
-//! `shared`, `by_kind`, `top`, and the problems that follow from the steps. No adapter builds
-//! those.
+//! every step as references to blocks. [`OpenTrace`] counts tokens once per span, fits the counts
+//! to the usage the API reported ([`fit`]), and computes `shared`, `by_kind`, `top`, and the
+//! problems that follow from the steps. No adapter builds those.
+
+mod fit;
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+pub use fit::{Added, Coarse, Fit, StepFit, Unfitted, prompt};
 
 use crate::model::*;
 use crate::tokens;
@@ -31,6 +35,9 @@ pub struct Span {
     pub label: Option<String>,
     pub file: Option<AbsPath>,
     pub text: String,
+    /// Bytes the record holds for the span besides its text, such as the signature of a
+    /// thinking block whose text the record leaves out.
+    pub opaque: u64,
 }
 
 impl Span {
@@ -40,7 +47,13 @@ impl Span {
             label: None,
             file: None,
             text: text.into(),
+            opaque: 0,
         }
+    }
+
+    pub fn with_opaque(mut self, bytes: u64) -> Span {
+        self.opaque = bytes;
+        self
     }
 
     pub fn labelled(mut self, label: Option<String>) -> Span {
@@ -132,12 +145,13 @@ pub struct TraceData {
     pub problems: Vec<TraceProblem>,
 }
 
-/// A trace with its tokens counted and its overview computed. The host keeps the last two.
+/// A trace with its tokens counted and fitted and its overview computed. The host keeps the
+/// last two.
 #[derive(Debug)]
 pub struct OpenTrace {
     data: TraceData,
-    /// Per block, per span.
-    tokens: Vec<Vec<u32>>,
+    /// Per step, the sizes of its request's pieces.
+    fits: Vec<StepFit>,
     trace: Trace,
 }
 
@@ -152,12 +166,8 @@ struct At {
 impl OpenTrace {
     pub fn new(data: TraceData) -> OpenTrace {
         let tokens = count_all(&data.blocks);
-        let trace = project(&data, &tokens);
-        OpenTrace {
-            data,
-            tokens,
-            trace,
-        }
+        let (trace, fits) = project(&data, &tokens);
+        OpenTrace { data, fits, trace }
     }
 
     pub fn trace(&self) -> &Trace {
@@ -168,6 +178,11 @@ impl OpenTrace {
         self.data.read
     }
 
+    /// How each step's sizes were found, in step order.
+    pub fn fits(&self) -> &[StepFit] {
+        &self.fits
+    }
+
     /// The pieces of one step's request. Empty for a step without one. `None` for no such step.
     pub fn step_pieces(&self, step: u32) -> Option<Vec<TracePiece>> {
         let data = self.data.steps.get(step as usize)?;
@@ -175,16 +190,18 @@ impl OpenTrace {
             return Some(Vec::new());
         };
         let (list, _) = listing(&self.data, request);
+        let sizes = &self.fits[step as usize].sizes;
         Some(
             list.into_iter()
-                .map(|at| {
+                .zip(sizes)
+                .map(|(at, &tokens)| {
                     let span = self.span(&at);
                     TracePiece {
                         kind: span.kind,
                         label: span.label.clone(),
                         file: span.file.clone(),
                         bytes: span.text.len() as u64,
-                        tokens: self.tokens[at.block as usize][at.span as usize],
+                        tokens,
                         head: span.text.chars().take(HEAD_CHARS).collect(),
                         place: at.place,
                     }
@@ -311,15 +328,17 @@ fn same(data: &TraceData, a: &At, b: &At) -> bool {
     x == y
 }
 
-fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
-    let count = |at: &At| tokens[at.block as usize][at.span as usize];
+fn project(data: &TraceData, tokens: &[Vec<u32>]) -> (Trace, Vec<StepFit>) {
+    let mut fitter = fit::Fitter::new(data, tokens);
     let mut steps = Vec::with_capacity(data.steps.len());
     let mut previous: Option<Vec<At>> = None;
     // The step and the piece at which each span was first sent.
     let mut first: HashMap<(BlockId, u32), (u32, u32)> = HashMap::new();
     for (index, step) in data.steps.iter().enumerate() {
-        let sent = step.sent.as_ref().map(|request| {
-            let (list, marks) = listing(data, request);
+        let request = step.sent.as_ref().map(|request| listing(data, request));
+        fitter.push(request.as_ref().map(|(list, _)| list.clone()));
+        let fitted = &fitter.fits[index];
+        let sent = request.map(|(list, marks)| {
             let shared = previous.as_ref().map_or(0, |before| {
                 before
                     .iter()
@@ -328,22 +347,23 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
                     .count()
             });
             let mut kinds: BTreeMap<PieceKind, (u32, u32)> = BTreeMap::new();
-            for (i, at) in list.iter().enumerate() {
+            for (i, (at, &size)) in list.iter().zip(&fitted.sizes).enumerate() {
                 let kind = data.blocks[at.block as usize].spans[at.span as usize].kind;
                 let total = kinds.entry(kind).or_default();
                 if i < shared {
-                    total.0 = total.0.saturating_add(count(at));
+                    total.0 = total.0.saturating_add(size);
                 } else {
-                    total.1 = total.1.saturating_add(count(at));
+                    total.1 = total.1.saturating_add(size);
                 }
                 first
                     .entry((at.block, at.span))
                     .or_insert((index as u32, i as u32));
             }
             let sent = Sent {
-                exact: request.exact,
+                exact: step.sent.as_ref().is_some_and(|r| r.exact),
                 pieces: list.len() as u32,
                 shared: shared as u32,
+                fitted: fitted.fit.fitted(),
                 by_kind: kinds
                     .into_iter()
                     .map(|(kind, (shared, fresh))| KindTotal {
@@ -384,6 +404,7 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
             reply,
         });
     }
+    let fits = fitter.fits;
 
     let mut top: Vec<TopPiece> = first
         .into_iter()
@@ -394,7 +415,7 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
                 piece,
                 kind: s.kind,
                 label: s.label.clone(),
-                tokens: tokens[block as usize][span as usize],
+                tokens: fits[step as usize].sizes[piece as usize],
             }
         })
         .collect();
@@ -420,7 +441,7 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
     }
     problems.extend(data.problems.iter().cloned());
 
-    Trace {
+    let trace = Trace {
         info: data.info.clone(),
         read: data.read,
         steps,
@@ -428,7 +449,8 @@ fn project(data: &TraceData, tokens: &[Vec<u32>]) -> Trace {
         parts: data.parts.clone(),
         top,
         problems,
-    }
+    };
+    (trace, fits)
 }
 
 /// The o200k count of every span, once each. Large records hold tens of megabytes of text, so
@@ -615,6 +637,166 @@ mod tests {
         let reply = top.iter().find(|t| t.kind == PieceKind::ModelText).unwrap();
         assert_eq!((reply.step, reply.piece), (1, 4));
         assert!(top.windows(2).all(|w| w[0].tokens >= w[1].tokens));
+    }
+
+    fn usage(
+        input: u64,
+        cache_read: u64,
+        cache_write: u64,
+        output: u64,
+        thinking: Option<u64>,
+    ) -> Usage {
+        Usage {
+            input,
+            cache_read,
+            cache_write,
+            output,
+            thinking,
+        }
+    }
+
+    fn thinking(signature: u64) -> Block {
+        Block::new(
+            vec![Span::new(PieceKind::Thinking, "").with_opaque(signature)],
+            PieceKind::Thinking,
+        )
+    }
+
+    /// A main request (step 0) whose reply holds two thinking blocks, a text and a tool call; a
+    /// side request with its own system block (step 1); the main request again with the reply
+    /// and a tool result added (step 2); and the same with a prompt added, without usage
+    /// (step 3). The prompt sizes are 100, 20 and 220, so step 2 added 120 real tokens.
+    fn chain() -> TraceData {
+        let mut data = data();
+        data.blocks = vec![
+            block(PieceKind::System, "You are a test."),
+            block(PieceKind::ToolDefinition, "{\"name\":\"Bash\"}"),
+            block(PieceKind::UserText, "hi"),
+            thinking(100),
+            thinking(300),
+            block(PieceKind::ModelText, "hello there, I will run it"),
+            block(PieceKind::ToolCall, "{\"command\":\"ls\"}"),
+            block(PieceKind::ToolResult, "a.txt b.txt c.txt"),
+            block(PieceKind::System, "Write a title."),
+            block(PieceKind::UserText, "next"),
+        ];
+        let message = |role, blocks: Vec<BlockId>| Message { role, blocks };
+        data.messages = vec![
+            message(Role::User, vec![2]),
+            message(Role::Model, vec![3, 4, 5, 6]),
+            message(Role::User, vec![7]),
+            message(Role::User, vec![9]),
+        ];
+        let main = |messages: Vec<Option<MessageId>>| request(messages);
+        let side = Request {
+            exact: true,
+            system: vec![8],
+            tools: vec![],
+            messages: vec![Some(3)],
+            marks: vec![],
+        };
+        let with = |sent, reply, usage| StepData {
+            usage,
+            ..step(Some(sent), reply)
+        };
+        data.steps = vec![
+            with(
+                main(vec![Some(0)]),
+                vec![3, 4, 5, 6],
+                Some(usage(10, 0, 90, 50, Some(40))),
+            ),
+            with(side, vec![], Some(usage(20, 0, 0, 3, None))),
+            with(
+                main(vec![Some(0), Some(1), Some(2)]),
+                vec![],
+                Some(usage(0, 100, 120, 5, None)),
+            ),
+            with(main(vec![Some(0), Some(1), Some(2), Some(3)]), vec![], None),
+        ];
+        data.problems = Vec::new();
+        data
+    }
+
+    fn sizes(open: &OpenTrace, step: u32) -> Vec<u32> {
+        open.step_pieces(step)
+            .unwrap()
+            .iter()
+            .map(|p| p.tokens)
+            .collect()
+    }
+
+    #[test]
+    fn the_pieces_a_request_added_cost_the_difference_of_the_prompt_sizes() {
+        let open = OpenTrace::new(chain());
+        let steps = &open.trace().steps;
+        let fitted: Vec<bool> = steps
+            .iter()
+            .map(|s| s.sent.as_ref().unwrap().fitted)
+            .collect();
+        assert_eq!(fitted, [true, true, true, false]);
+        assert_eq!(sizes(&open, 0).iter().sum::<u32>(), 100);
+        assert_eq!(sizes(&open, 1).iter().sum::<u32>(), 20);
+
+        // Step 2 extends step 0, not the side request before it. Its pieces after step 0's three
+        // are: two thinking blocks, the text, the tool call, the tool result.
+        let step2 = sizes(&open, 2);
+        assert_eq!(step2[..3], sizes(&open, 0)[..]);
+        let added = &step2[3..];
+        assert_eq!(added.iter().sum::<u32>(), 220 - 100);
+        // The thinking tokens of step 0's reply, shared 1 to 3 by the signatures.
+        assert_eq!(added[..2], [10, 30]);
+        // The rest of its output, 50 - 40, goes to the text and the call.
+        assert_eq!(added[2] + added[3], 10);
+        // What is left is the tool result.
+        assert_eq!(added[4], 120 - 40 - 10);
+        assert_eq!(open.fits()[2].fit, Fit::Split);
+
+        // Without usage the new prompt keeps its raw count, and the rest is carried.
+        let step3 = sizes(&open, 3);
+        assert_eq!(step3[..8], step2[..]);
+        assert_eq!(open.fits()[3].fit, Fit::Raw(Unfitted::NoUsage));
+
+        // A row of the largest pieces carries the fitted size of the step that sent it first.
+        let result = open
+            .trace()
+            .top
+            .iter()
+            .find(|t| t.kind == PieceKind::ToolResult);
+        assert_eq!(
+            result.map(|t| (t.step, t.piece, t.tokens)),
+            Some((2, 7, 70))
+        );
+    }
+
+    #[test]
+    fn a_step_whose_numbers_do_not_close_falls_back_to_one_factor_or_its_raw_counts() {
+        // 45 added tokens cannot hold 40 thinking and 10 other output tokens.
+        let mut data = chain();
+        data.steps[2].usage = Some(usage(0, 100, 45, 5, None));
+        let open = OpenTrace::new(data);
+        assert_eq!(open.fits()[2].fit, Fit::Factor(Coarse::DoesNotClose));
+        assert!(open.trace().steps[2].sent.as_ref().unwrap().fitted);
+        assert_eq!(sizes(&open, 2)[3..].iter().sum::<u32>(), 45);
+
+        // A reply whose thinking was not counted.
+        let mut data = chain();
+        data.steps[0].usage = Some(usage(10, 0, 90, 50, None));
+        let open = OpenTrace::new(data);
+        assert_eq!(open.fits()[2].fit, Fit::Factor(Coarse::ThinkingUnknown));
+        assert_eq!(sizes(&open, 2).iter().sum::<u32>(), 220);
+
+        // A request that dropped one thinking block of the reply.
+        let mut data = chain();
+        data.messages[1].blocks = vec![3, 5, 6];
+        let open = OpenTrace::new(data);
+        assert_eq!(open.fits()[2].fit, Fit::Factor(Coarse::ReplyNotWhole));
+
+        // A prompt smaller than what the shared pieces already cost.
+        let mut data = chain();
+        data.steps[2].usage = Some(usage(0, 90, 0, 5, None));
+        let open = OpenTrace::new(data);
+        assert_eq!(open.fits()[2].fit, Fit::Raw(Unfitted::SharedTooLarge));
+        assert!(!open.trace().steps[2].sent.as_ref().unwrap().fitted);
     }
 
     #[test]

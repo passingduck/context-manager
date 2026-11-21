@@ -1,11 +1,12 @@
 //! Checks every trace test makes on every record it reads (the brief's invariants): the pieces
 //! of each block joined give the block's text, `shared` never passes the previous request,
-//! `by_kind` adds up to the pieces, and no identity value reaches the JSON the client receives.
+//! `by_kind` adds up to the pieces, the fitted sizes follow the usage (design section 14), and no
+//! identity value reaches the JSON the client receives.
 
 use std::collections::BTreeMap;
 
-use cm_core::trace::OpenTrace;
-use cm_core::{PiecePlace, PieceRef, PieceText, StepPieces, TracePiece};
+use cm_core::trace::{Fit, OpenTrace};
+use cm_core::{PieceKind, PiecePlace, PieceRef, PieceText, StepPieces, TracePiece, Usage};
 use serde_json::Value;
 
 /// What a request held, from a source other than the reader: one entry per message, one per
@@ -87,12 +88,71 @@ pub fn check(open: &OpenTrace, sent: &[Sent], secrets: &[String]) -> usize {
             .map(|k| u64::from(k.shared) + u64::from(k.fresh))
             .sum();
         assert_eq!(by_kind, tokens, "step {i}: by_kind adds up to the pieces");
+        check_fit(open, i, &pieces, request.fitted, tokens);
         if let Some(expected) = sent.iter().find(|s| s.at == step.at) {
             check_texts(open, i, &pieces, expected);
             texts += 1;
         }
     }
     texts
+}
+
+/// The prompt size the API reported.
+fn prompt(usage: &Usage) -> u64 {
+    usage.input + usage.cache_read + usage.cache_write
+}
+
+/// A fitted step's pieces add up to its prompt size, and a step without usage is not fitted.
+/// When the request was split against the request it extends, the pieces it added cost the
+/// difference of the two prompt sizes, and the thinking pieces among them cost the earlier
+/// reply's thinking tokens.
+fn check_fit(open: &OpenTrace, i: u32, pieces: &[TracePiece], fitted: bool, tokens: u64) {
+    let steps = &open.trace().steps;
+    let Some(usage) = &steps[i as usize].usage else {
+        assert!(!fitted, "step {i}: a step without usage is not fitted");
+        return;
+    };
+    if fitted {
+        assert_eq!(
+            tokens,
+            prompt(usage),
+            "step {i}: the pieces add up to the prompt"
+        );
+    }
+    let fit = &open.fits()[i as usize];
+    let (Fit::Split, Some(added)) = (fit.fit, fit.added) else {
+        return;
+    };
+    let before = &steps[added.to as usize];
+    let before_usage = before
+        .usage
+        .as_ref()
+        .expect("a split step extends one with usage");
+    assert_eq!(
+        before.sent.as_ref().unwrap().pieces,
+        added.after,
+        "step {i}"
+    );
+    let fresh = &pieces[added.after as usize..];
+    let sum = |pieces: &mut dyn Iterator<Item = &TracePiece>| -> u64 {
+        pieces.map(|p| u64::from(p.tokens)).sum()
+    };
+    assert_eq!(
+        sum(&mut fresh.iter()),
+        prompt(usage) - prompt(before_usage),
+        "step {i}: the added pieces cost the difference of the prompt sizes"
+    );
+    let thinking: Vec<&TracePiece> = fresh
+        .iter()
+        .filter(|p| p.kind == PieceKind::Thinking)
+        .collect();
+    if !thinking.is_empty() {
+        assert_eq!(
+            Some(sum(&mut thinking.into_iter())),
+            before_usage.thinking,
+            "step {i}: the thinking pieces cost the reply's thinking tokens"
+        );
+    }
 }
 
 fn check_texts(open: &OpenTrace, step: u32, pieces: &[TracePiece], expected: &Sent) {

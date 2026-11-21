@@ -1207,7 +1207,10 @@ records! {
         /// How many leading pieces equal the previous step's request, piece for piece. 0 when
         /// the previous step has no request.
         pub shared: u32,
-        /// Estimated tokens per kind.
+        /// The pieces' `tokens` were fitted to the usage the API reported, and add up to the
+        /// prompt size `input + cache_read + cache_write` (design section 14).
+        pub fitted: bool,
+        /// Estimated tokens per kind, fitted when `fitted`.
         pub by_kind: Vec<KindTotal>,
         /// Indexes of the pieces that end at a cache mark.
         pub marks: Vec<u32>,
@@ -1259,7 +1262,8 @@ records! {
         /// The file the piece came from, when the record names it.
         pub file: Option<AbsPath>,
         pub bytes: u64,
-        /// o200k estimate of this piece alone.
+        /// Estimate of this piece alone: fitted to the usage when the step's `Sent.fitted`,
+        /// else the o200k count.
         pub tokens: u32,
         /// Its first 160 characters.
         pub head: String,
