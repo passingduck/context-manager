@@ -345,7 +345,6 @@ function Overview({ trace, mode, losses, max, view, onScrollTo }: { trace: Trace
       if (losses[i]) lost.add(c);
     });
     return { heights, lost, cut: new Set(trace.boundaries.map((b) => column(Math.min(b.before, steps.length - 1)))) };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [steps, mode, losses, cols, trace.boundaries]);
   const move = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.buttons !== 1 && event.type !== "pointerdown") return;
