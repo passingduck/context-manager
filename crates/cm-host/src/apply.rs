@@ -27,8 +27,8 @@ use cm_core::{
 };
 
 use crate::fsio::{
-    DATA_FILE_MODE, NEW_FILE_MODE, atomic_write, create_private_dir, has_other_names, io_detail,
-    mode_of, write_in_place, write_target,
+    DATA_FILE_MODE, Failed, NEW_FILE_MODE, atomic_write, create_private_dir, has_other_names,
+    io_detail, mode_of, write_in_place, write_target,
 };
 use crate::history::{History, new_change_id, now_iso};
 use crate::recovery::{OpState, classify};
@@ -186,10 +186,12 @@ impl Ctx {
         let mut files = Vec::new();
         let mut not_trashed = Vec::new();
         for (index, op) in preview.change_set.ops.iter().enumerate() {
-            if let Err(err) = effects.run_op(&id.0, index, op, held, &mut files, &mut not_trashed) {
+            if let Err(failure) =
+                effects.run_op(&id.0, index, op, held, &mut files, &mut not_trashed)
+            {
                 let done = if index == 0 { 0 } else { ends[index - 1] };
-                self.undo(&mut record, done, ends[index]);
-                return Err(err);
+                self.undo(&mut record, done, ends[index], failure.changed);
+                return Err(failure.err);
             }
             checkpoint(Step::Op(index))?;
         }
@@ -221,18 +223,24 @@ impl Ctx {
 
     /// Design section 4, "A failed apply is not a crash". The journal operations before `done`
     /// belong to operations that completed, those up to `tried` also to the one that failed.
-    /// Each file at its after state goes back to its before blob, last first, and the record is
-    /// aborted. A completed operation's file that is at neither state was changed by someone
-    /// else, and a restore can fail: then the record needs attention.
-    fn undo(&self, record: &mut ChangeRecord, done: usize, tried: usize) {
+    /// `changed`: the failed operation had begun to change its file, as an in-place write that
+    /// fails after the truncate has. Each file at its after state, and a file the failed
+    /// operation changed, goes back to its before blob, last first, and the record is aborted.
+    /// A completed operation's file that is at neither state was changed by someone else, and a
+    /// restore can fail: then the record needs attention.
+    fn undo(&self, record: &mut ChangeRecord, done: usize, tried: usize, changed: bool) {
         let effects = self.effects();
         let mut clean = true;
         for (index, op) in record.ops[..tried].iter().enumerate().rev() {
+            let failed = index >= done;
             let undone = match classify(op) {
                 OpState::AtBefore => true,
                 OpState::AtAfter => self.restore(&effects, &record.id, index, op).is_ok(),
-                // The failed operation did not write this file.
-                OpState::Other => index >= done,
+                OpState::Other if failed && changed => {
+                    self.restore(&effects, &record.id, index, op).is_ok()
+                }
+                // The failed operation did not write this file: what it holds is someone else's.
+                OpState::Other => failed,
             };
             clean &= undone;
         }
@@ -254,7 +262,9 @@ impl Ctx {
         match (&op.before, &op.after) {
             (Some(blob), _) => {
                 let bytes = self.history.blob(blob)?;
-                effects.write(&op.path, &bytes, &format!("{}-u{index}", id.0))
+                effects
+                    .write(&op.path, &bytes, &format!("{}-u{index}", id.0))
+                    .map_err(|failed| failed.err)
             }
             // A file the change created.
             (None, Some(_)) => fs::remove_file(write_target(&op.path)),
@@ -348,12 +358,15 @@ impl Effects<'_> {
         held: bool,
         files: &mut Vec<(AbsPath, Option<Revision>)>,
         not_trashed: &mut Vec<AbsPath>,
-    ) -> Result<(), ApiError> {
+    ) -> Result<(), Failed<ApiError>> {
         match &op.action {
             Action::Write { text } => {
                 self.expect(op)?;
                 self.write(&op.path, text.as_bytes(), &format!("{id}-{index}"))
-                    .map_err(io_detail)?;
+                    .map_err(|failed| Failed {
+                        err: io_detail(failed.err),
+                        changed: failed.changed,
+                    })?;
                 files.push((op.path.clone(), Some(Revision::of(text.as_bytes()))));
             }
             // The plan holds the text of a file it trashes alone.
@@ -398,12 +411,18 @@ impl Effects<'_> {
 
     /// Writes through a temp file in the directory of the target. A symlink is followed, so the
     /// link survives. The mode bits of an existing file are kept. A file with other hard links
-    /// is written in place, so all of its names change (design section 4, step 4).
-    pub fn write(&self, path: &AbsPath, bytes: &[u8], tag: &str) -> std::io::Result<()> {
+    /// is written in place, so all of its names change (design section 4, step 4). Only that
+    /// write can fail after it changed the target.
+    pub fn write(
+        &self,
+        path: &AbsPath,
+        bytes: &[u8],
+        tag: &str,
+    ) -> Result<(), Failed<std::io::Error>> {
         let target = write_target(path);
         // A symlink to nothing that appeared after the plan. The plan refuses one already there.
         if target.is_symlink() {
-            return Err(std::io::ErrorKind::NotFound.into());
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
         }
         if has_other_names(&target) {
             return write_in_place(&target, bytes);
@@ -419,7 +438,7 @@ impl Effects<'_> {
         let new_mode = if own { DATA_FILE_MODE } else { NEW_FILE_MODE };
         let mode = mode_of(&target).unwrap_or(new_mode);
         let tmp = target.with_file_name(temp_name(tag));
-        atomic_write(&target, &tmp, bytes, mode)
+        Ok(atomic_write(&target, &tmp, bytes, mode)?)
     }
 
     /// Moves a file or directory to the OS trash. When the trash is not available, as on a

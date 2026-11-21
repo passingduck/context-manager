@@ -104,7 +104,7 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 
 ## Limits
 
-- **A failed in-place write.** When the write of a file with more than one hard link fails partway, for example on a full disk, the file is left half-written and the history says the change was cancelled. The text from before is in the history, but the tool does not offer it as a revert.
+- **A crash during an in-place write.** When a crash interrupts the write of a file with more than one hard link, the file is left half-written, and the change is listed as unfinished. A revert of that change shows the file as a conflict and leaves it as it is, but marks the change cancelled. The text from before is in the history, but the tool does not offer it as a revert.
 - **The write window.** The tool checks a file's hash and then renames the new file over it. An edit by another program between those two steps is overwritten and is not kept in the history. The window is about one system call wide.
 - **A hook's test run.** A test run that exceeds its time limit is stopped by killing the hook's process group. A hook that starts a process in a new session, with `setsid`, can leave that process running.
 - **A new Claude Code memory** always gets `metadata.type: project`.

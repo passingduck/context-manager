@@ -61,13 +61,32 @@ pub fn has_other_names(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|meta| meta.is_file() && meta.nlink() > 1)
 }
 
+/// An operation on a file that failed. `changed`: it failed after it had begun to change the
+/// file, so the file may hold neither its old content nor the new one.
+#[derive(Debug)]
+pub struct Failed<E> {
+    pub err: E,
+    pub changed: bool,
+}
+
+impl<E> From<E> for Failed<E> {
+    /// A failure before the operation changed the file.
+    fn from(err: E) -> Self {
+        Failed {
+            err,
+            changed: false,
+        }
+    }
+}
+
 /// Writes `bytes` over the content of `target` and syncs it. The inode stays, so every hard link
-/// to it reads the new content. Unlike [`atomic_write`], a crash can leave the file half written;
-/// the history holds its before content.
-pub fn write_in_place(target: &Path, bytes: &[u8]) -> io::Result<()> {
+/// to it reads the new content. Unlike [`atomic_write`], a failure or a crash after the open has
+/// truncated the file leaves it half written; the history holds its before content.
+pub fn write_in_place(target: &Path, bytes: &[u8]) -> Result<(), Failed<io::Error>> {
     let mut file = OpenOptions::new().write(true).truncate(true).open(target)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+    let changed = |err| Failed { err, changed: true };
+    file.write_all(bytes).map_err(changed)?;
+    file.sync_all().map_err(changed)
 }
 
 /// Writes a file of the data directory: temp file, sync, rename, mode 0600.

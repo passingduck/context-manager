@@ -37,10 +37,10 @@ Each action's comment in the spec has a `code:` line naming the function it mode
 | `apply.rs` `Ctx::run` (the pending record), `history.rs` `History::write_pending` | `WritePending` |
 | `apply.rs` `Effects::expect` | `CheckHash` |
 | `apply.rs` `Effects::write`, `fsio.rs` `atomic_write` | `WriteTemp`, `Rename` |
-| `apply.rs` `Effects::write` with `has_other_names`, `fsio.rs` `write_in_place` | `Truncate`, `WriteInPlace` |
+| `apply.rs` `Effects::write` with `has_other_names`, `fsio.rs` `write_in_place` and its `Failed { changed }` | `Truncate`, `WriteInPlace` |
 | `apply.rs` `Effects::trash` | `TrashFile` |
 | `apply.rs` `Ctx::run` (after the loop: `unfinished_target`, the seal), `history.rs` `History::seal`, `History::abort`, `History::close` | `AfterOp`, `TargetWrite`, `TargetRemove`, `SealWrite`, `SealRemove` |
-| `apply.rs` `Ctx::undo`, `Ctx::restore` | `StartUndo`, `UndoClassify`, `UndoTemp`, `UndoRename`, `UndoRemove`, `UndoTruncate`, `UndoInPlace`, `UndoAbortWrite`, `UndoAbortRemove`, `UndoAttention` |
+| `apply.rs` `Ctx::run` (`failure.changed`), `Ctx::undo`, `Ctx::restore` | `StartUndo`, `UndoClassify`, `UndoTemp`, `UndoRename`, `UndoRemove`, `UndoTruncate`, `UndoInPlace`, `UndoAbortWrite`, `UndoAbortRemove`, `UndoAttention` |
 | `recovery.rs` `recover` (`file.try_lock()`), `classify`, `inspect`, `remove_temp_files` | `StartRecovery`, `RecoveryLock`, `RecoveryList`, `RecoveryInspect`, `RecoveryTemps`, `RecoveryDecide`, `RecoverySealWrite`, `RecoverySealRemove`, `RecoveryAbortWrite`, `RecoveryAbortRemove`, `RecoveryAttention` |
 | `history.rs` `History::collect_garbage`, `BLOB_MAX_AGE` | `RecoveryGcRead`, `RecoveryGcRemove`, `DayPasses` |
 | `history.rs` `History::all`, `History::pending`, `History::detail_of` | `Vis`, `Unfinished`, `RecoveryList`, `BlobsKept` |
@@ -65,12 +65,13 @@ Each line is one configuration:
 
 ```text
 ok    model                          passes                             1667801 states  104s   224 MB
-ok    model in-place                 passes                             2011693 states  128s   231 MB
-ok    variant skip-undo              breaks AbortedMeansNothing            5599 states    2s     0 MB
+ok    model in-place                 passes                             1993784 states   76s   229 MB
+ok    model in-place-no-crash        passes                               87800 states    5s     1 MB
+ok    variant in-place-torn          breaks AbortedMeansNothing           13915 states    6s     0 MB
 ok    finding edit-in-window         breaks ReplacedTextKept                587 states    2s     0 MB
 ```
 
-- A `model` (`WritePipeline.cfg`, `models/*.cfg`) is the pipeline as the code at the sync commit has it. It must pass. It also fails when an action never fires, because a pass then says nothing about that action. A model's `\* not exercised:` line names the actions it leaves to another model. `models/in-place.cfg` gives file `b` a second hard link, so the tool writes `b` in place.
+- A `model` (`WritePipeline.cfg`, `models/*.cfg`) is the pipeline as the code at the sync commit has it. It must pass. It also fails when an action never fires, because a pass then says nothing about that action. A model's `\* not exercised:` line names the actions it leaves to another model. `models/in-place.cfg` gives file `b` a second hard link, so the tool writes `b` in place. `models/in-place-no-crash.cfg` does the same without a crash, so that it can check `AbortedMeansNothing` for a failed in-place write.
 - A `variant` (`variants/*.cfg`) mirrors one concrete break of the code, such as the undo restoring nothing. It must break the invariant on its `\* expect:` line. A variant that passes means the model can no longer see that break.
 - A `finding` (`findings/*.cfg`) is a case where the code at the sync commit breaks a rule. It must keep failing until the code is fixed. Then move it to `variants/`.
 
@@ -108,7 +109,7 @@ Never weaken an invariant or a bound to make the model pass.
 `scripts/check.sh` reads the lines below. It prints `write pipeline model: ... changed since <commit>` when a watched file, or a watched function (`fn`), differs from the sync commit, in the working tree too. That line is a notice, not a failure.
 
 ```text
-sync 6d459f5
+sync f83992c
 watch crates/cm-host/src/apply.rs
 watch crates/cm-host/src/recovery.rs
 watch crates/cm-host/src/history.rs
@@ -133,7 +134,7 @@ A pass covers the model under these bounds, not the whole program:
 - Steps the model takes as one: the plan's read of the files, the store of all blobs of a change, the read of the pending records, and, with the lock, the garbage collection.
 - No run takes a day between storing its blobs and writing its pending record.
 - A failed sync after a complete in-place write is left out. It leaves the new text, which the undo finds at after and restores.
-- Both models assume that the operator never writes a file between the tool's hash check and its rename. `findings/edit-in-window.cfg` shows what that window costs.
-- `models/in-place.cfg` leaves out `AbortedMeansNothing`, because `findings/in-place-torn.cfg` shows that a failed in-place write breaks it.
+- The models assume that the operator never writes a file between the tool's hash check and its rename. For a file written in place, the window runs to the end of the write, and after a write that failed halfway, to the end of its restore, which `Ctx::undo` runs right after the failure. `findings/edit-in-window.cfg` shows what that window costs.
+- `models/in-place.cfg` leaves out `AbortedMeansNothing`, because `findings/in-place-crash-revert.cfg` shows that a crash during an in-place write, then a revert of the unfinished record, breaks it.
 
 The chart for the owner, in Korean, is in `formal/write-pipeline/chart/`. When the model is wrong about the code, the `/maintain-formal-verification-skill` skill brings it back in line.

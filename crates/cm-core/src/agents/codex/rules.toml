@@ -1,7 +1,7 @@
 [[rule]]
 id = "codex.home"
 en = "Codex CLI reads its user-level files from the directory in CODEX_HOME, and from .codex in the home directory when that variable is not set."
-ko = "Codex CLI는 사용자 수준 파일을 CODEX_HOME 환경 변수가 가리키는 디렉터리에서 읽고, 이 변수가 없으면 홈 디렉터리의 .codex 디렉터리에서 읽습니다."
+ko = "Codex CLI는 사용자 수준 파일을 CODEX_HOME 환경 변수가 가리키는 디렉터리에서 읽습니다. 이 변수가 없으면 홈 디렉터리의 .codex 디렉터리에서 읽습니다."
 evidence = "docs/agents/codex.md section 6.1"
 
 [[rule]]
@@ -43,7 +43,7 @@ evidence = "docs/agents/codex.md section 5.2"
 [[rule]]
 id = "codex.skills.root.project"
 en = "Skills in a project's .codex/skills or .agents/skills directory are listed for every trust level. Codex looks for .agents/skills in each directory from the project root down to the working directory, and never below it."
-ko = "프로젝트의 .codex/skills 또는 .agents/skills 디렉터리에 있는 스킬은 신뢰 상태와 상관없이 목록에 올라갑니다. Codex는 프로젝트 루트에서 작업 디렉터리까지 각 디렉터리의 .agents/skills를 찾고, 그 아래는 찾지 않습니다."
+ko = "프로젝트의 .codex/skills 또는 .agents/skills 디렉터리에 있는 스킬은 목록에 올라갑니다. 프로젝트의 신뢰 상태와는 상관이 없습니다. Codex는 프로젝트 루트에서 작업 디렉터리까지 각 디렉터리의 .agents/skills를 찾고, 그 아래는 찾지 않습니다."
 evidence = "docs/agents/codex.md section 5.1; probe:J"
 
 [[rule]]
@@ -97,25 +97,25 @@ evidence = "docs/agents/codex.md section 5.1 (Loader rules); probe:J"
 [[rule]]
 id = "codex.agents.file"
 en = "Each .toml file in an agents directory defines one subagent role. The role needs a description, and an unknown key rejects it. A project role loads only from a trusted project."
-ko = "agents 디렉터리의 .toml 파일 하나가 하위 에이전트 역할 하나를 정의합니다. 역할에는 설명이 있어야 하고, 알 수 없는 키가 있으면 거부됩니다. 프로젝트의 역할은 신뢰하는 프로젝트에서만 읽습니다."
+ko = "agents 디렉터리의 .toml 파일 하나가 서브에이전트 역할 하나를 정의합니다. 역할에는 설명이 있어야 하고, 알 수 없는 키가 있으면 거부됩니다. 프로젝트의 역할은 신뢰하는 프로젝트에서만 읽습니다."
 evidence = "docs/agents/codex.md section 5.3"
 
 [[rule]]
 id = "codex.agents.config_entry"
 en = "An [agents.name] table in config.toml defines a subagent role and may point to a file with config_file. A higher layer overrides a lower layer for the same name."
-ko = "config.toml의 [agents.이름] 표는 하위 에이전트 역할을 정의하고, config_file로 파일을 가리킬 수 있습니다. 같은 이름이면 더 높은 계층이 낮은 계층을 덮어씁니다."
+ko = "config.toml의 [agents.이름] 표는 서브에이전트 역할을 정의합니다. 이 표는 config_file로 파일을 가리킬 수 있습니다. 같은 이름이면 더 높은 계층이 낮은 계층을 덮어씁니다."
 evidence = "docs/agents/codex.md section 5.3"
 
 [[rule]]
 id = "codex.agents.rejected"
 en = "Codex skips this subagent role and prints a warning at start. The file does not parse, or it has no description."
-ko = "Codex는 이 하위 에이전트 역할을 건너뛰고 시작할 때 경고를 냅니다. 파일을 해석할 수 없거나 설명이 없기 때문입니다."
+ko = "Codex는 이 서브에이전트 역할을 건너뛰고 시작할 때 경고를 냅니다. 파일을 해석할 수 없거나 설명이 없기 때문입니다."
 evidence = "docs/agents/codex.md section 5.3"
 
 [[rule]]
 id = "codex.agents.project_untrusted"
 en = "This project has no trusted entry in the user config.toml, so Codex does not load its subagent roles."
-ko = "이 프로젝트는 사용자 config.toml에 신뢰한다는 기록이 없어서 Codex가 하위 에이전트 역할을 읽지 않습니다."
+ko = "이 프로젝트는 사용자 config.toml에 신뢰한다는 기록이 없어서 Codex가 서브에이전트 역할을 읽지 않습니다."
 evidence = "docs/agents/codex.md section 6.3 (trust matrix)"
 
 [[rule]]
@@ -127,7 +127,7 @@ evidence = "docs/agents/codex.md sections 3.1, 3.2, 7.2"
 [[rule]]
 id = "codex.memory.summary"
 en = "memory_summary.md is the only memory file Codex sends on its own, and only when both the memories feature and use_memories are on. It is trimmed and cut at 2,500 tokens."
-ko = "memory_summary.md는 Codex가 스스로 보내는 유일한 기억 파일이며, memories 기능과 use_memories가 모두 켜져 있을 때만 보냅니다. 앞뒤 공백을 자르고 2,500토큰에서 자릅니다."
+ko = "memory_summary.md는 Codex가 스스로 보내는 유일한 기억 파일입니다. Codex는 memories 기능과 use_memories가 모두 켜져 있을 때만 이 파일을 보냅니다. 앞뒤 공백을 자르고 2,500토큰에서 자릅니다."
 evidence = "docs/agents/codex.md sections 3.1, 3.2"
 
 [[rule]]
@@ -151,7 +151,7 @@ evidence = "docs/agents/codex.md section 2.4"
 [[rule]]
 id = "codex.guard.trusted_hash"
 en = "A trusted_hash or trusted_content_hash decides whether Codex runs a hook, so writing one would approve code for the user. Only the /hooks screen of Codex may write these values."
-ko = "trusted_hash와 trusted_content_hash는 Codex가 훅을 실행할지 정하는 값이므로, 이 값을 쓰면 사용자 대신 코드를 승인하는 셈이 됩니다. 이 값은 Codex의 /hooks 화면에서만 쓸 수 있습니다."
+ko = "trusted_hash와 trusted_content_hash는 Codex가 훅을 실행할지 정하는 값입니다. 이 도구가 이 값을 쓰면 사용자 대신 코드를 승인하게 됩니다. 이 값은 Codex의 /hooks 화면에서만 쓸 수 있습니다."
 evidence = "docs/agents/codex.md sections 2.5, 7.2"
 
 [[rule]]
@@ -163,7 +163,7 @@ evidence = "docs/agents/codex.md section 1.1"
 [[rule]]
 id = "codex.slot.project_instructions"
 en = "AGENTS.md in this directory loads when it lies on the path from the project root to the working directory, within the shared 32 KiB budget."
-ko = "이 디렉터리의 AGENTS.md는 프로젝트 루트에서 작업 디렉터리로 가는 경로 위에 있으면 읽으며, 32KiB 예산을 다른 파일과 나눠 씁니다."
+ko = "Codex는 이 디렉터리의 AGENTS.md를 프로젝트 루트에서 작업 디렉터리로 가는 경로 위에 있을 때 읽습니다. 이 파일은 32KiB 예산을 다른 파일과 나눠 씁니다."
 evidence = "docs/agents/codex.md sections 1.1, 1.3"
 
 [[rule]]
@@ -175,13 +175,13 @@ evidence = "docs/agents/codex.md section 5.1"
 [[rule]]
 id = "codex.slot.subagent"
 en = "A .toml file in the agents directory of the Codex home defines a subagent role at the next session."
-ko = "Codex 홈의 agents 디렉터리에 둔 .toml 파일은 다음 세션부터 하위 에이전트 역할이 됩니다."
+ko = "Codex 홈의 agents 디렉터리에 둔 .toml 파일은 다음 세션부터 서브에이전트 역할이 됩니다."
 evidence = "docs/agents/codex.md section 5.3"
 
 [[rule]]
 id = "codex.slot.subagent_project"
 en = "A .toml file in this project's .codex/agents directory defines a subagent role, but only when the project is trusted."
-ko = "이 프로젝트의 .codex/agents 디렉터리에 둔 .toml 파일은 하위 에이전트 역할이 되지만, 프로젝트를 신뢰할 때만 그렇습니다."
+ko = "이 프로젝트의 .codex/agents 디렉터리에 둔 .toml 파일은 서브에이전트 역할이 됩니다. 다만 Codex가 프로젝트를 신뢰할 때만 그렇습니다."
 evidence = "docs/agents/codex.md sections 5.3, 6.3"
 
 [[rule]]
@@ -223,7 +223,7 @@ evidence = "docs/agents/codex.md section 5.4 (open question 6); codex-rs/core-pl
 [[rule]]
 id = "codex.edit.name"
 en = "A new skill, subagent or rule needs a name of letters, digits, dashes, underscores and dots. The name has at most 64 characters and does not start with a dot."
-ko = "새 스킬, 하위 에이전트, 규칙에는 글자, 숫자, 대시, 밑줄, 점으로 이루어진 이름이 필요합니다. 이름은 64자 이하이고 점으로 시작하지 않습니다."
+ko = "새 스킬, 서브에이전트, 규칙에는 글자, 숫자, 대시, 밑줄, 점으로 이루어진 이름이 필요합니다. 이름은 64자 이하이고 점으로 시작하지 않습니다."
 evidence = "docs/agents/codex.md sections 5.1, 5.3, 7.2"
 
 [[rule]]
