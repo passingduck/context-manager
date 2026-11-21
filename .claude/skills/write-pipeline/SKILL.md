@@ -109,7 +109,7 @@ Never weaken an invariant or a bound to make the model pass.
 `scripts/check.sh` reads the lines below. It prints `write pipeline model: ... changed since <commit>` when a watched file, or a watched function (`fn`), differs from the sync commit, in the working tree too. That line is a notice, not a failure.
 
 ```text
-sync f83992c
+sync d87635d
 watch crates/cm-host/src/apply.rs
 watch crates/cm-host/src/recovery.rs
 watch crates/cm-host/src/history.rs
