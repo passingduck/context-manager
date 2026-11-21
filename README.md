@@ -39,7 +39,7 @@ Open that URL. The token sits in the URL fragment, which a browser never sends t
 CONTEXT_MANAGER_TOKEN=choose-a-long-secret context-manager --serve
 ```
 
-The server speaks plain HTTP, and a client that holds the token can run hooks on the machine. Bind it to loopback, which is the default, and reach a remote host through an SSH tunnel:
+The server speaks plain HTTP, and a client that holds the token can run hooks on the machine. It can also read the recorded sessions of the project, which hold everything that was typed and every tool output. Bind it to loopback, which is the default, and reach a remote host through an SSH tunnel:
 
 ```sh
 ssh -L 7457:127.0.0.1:7457 user@server       # on your laptop
@@ -58,6 +58,7 @@ For each agent it finds in the project and your home directory, it shows:
 - **Extensions.** Skills, commands and subagents.
 - **Doctor.** Problems such as a hook program that does not exist, a settings file that does not parse, a link to a file that does not exist, or a skill whose body an import also loads in every session.
 - **History.** Every change the tool made, with a diff and a revert.
+- **Sessions.** What the model received in a session that Claude Code recorded. One bar for each call of the model shows how much of the prompt was read from the cache, written to it, or sent uncached, as the API reported it, with a mark at each compaction. A call that read less from the cache than the one before says why: the first piece of the request that changed, or how long the cache had been idle. A selected call lists the pieces of its request in the order the model received them (system blocks, tool definitions, instruction files, the listing of skills, your text, the model's replies and thinking, tool calls and their output), each with its size, and a piece opens its text. The view also ranks the largest pieces and lists the session's subagents, each with its own calls.
 - **Search and the path simulator.** Search across what the agents load, and a question of the form "which files load if the agent opens this path".
 
 You can add, edit and delete any file the agents read, except files the agents or a plugin manage themselves. Those open read-only with the reason.
@@ -98,6 +99,7 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 - **Claude Code.** Checked against the installed binary, run against a local sink in ten scenarios. After each planned settings change, `claude doctor` accepts the file.
 - **Gemini CLI.** Never run. Its rules come from the source at tag v0.69.0, and the adapter's tests check them against fixtures only.
 - **The write flows.** Driven through the real UI in headless Chrome on a throwaway home directory, never on a real agent home.
+- **Recorded sessions.** Claude Code records every request from version 2.1.302. A test lets the installed CLI write nine sessions against a scripted local endpoint and compares each request rebuilt from the record with what the endpoint received. On the machine this was built on, every recorded request rebuilt to the digest its record carries. The total of a request is what the API reported. The size of one piece is an estimate fitted to those totals, and the view labels it so.
 - **The write pipeline.** Besides its tests, a TLA+ model of apply, undo, recovery, revert and the lock is checked with TLC: every order of the steps of two instances, with one crash, one failed file operation and two outside edits. `formal/write-pipeline/run.sh` runs it in a few minutes. A pass covers those bounds and nothing beyond them. The model has two open findings, which are the first two limits below.
 - **Token counts.** Estimates made with the o200k tokenizer. Claude and Gemini use other tokenizers, so their real counts differ.
 - **Linux.** The headless build is only compile-checked with `scripts/check-linux.sh`. It was never run on Linux, and the trash behavior on a headless Linux host is untested.
@@ -108,6 +110,7 @@ In the platform data directory: `~/Library/Application Support/context-manager` 
 - **The write window.** The tool checks a file's hash and then renames the new file over it. An edit by another program between those two steps is overwritten and is not kept in the history. The window is about one system call wide.
 - **A hook's test run.** A test run that exceeds its time limit is stopped by killing the hook's process group. A hook that starts a process in a new session, with `setsid`, can leave that process running.
 - **A new Claude Code memory** always gets `metadata.type: project`.
+- **Recorded sessions.** Only Claude Code sessions are read. Turns that a version before 2.1.302 wrote show the conversation and the usage, not the request. Calls that Claude Code does not record, such as the one that writes a compaction summary, do not appear. Which part of a message came from which file or hook is matched by its text, so a few pieces stay unlabelled. A session is listed when it started in the project directory or below it.
 - **Large or hostile repositories.** A scan reads at most 8 MiB of one file and 64 MiB in all. It lists at most 2,000 entries and 8 levels of one directory tree, and walks at most 20,000 entries of the project. Import expansion stops at 4 MiB for one file and 8 MiB for a scan. When a budget is spent, the scan goes on, and the Doctor says which budget it was.
 
 ## License
