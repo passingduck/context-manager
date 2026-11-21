@@ -177,6 +177,16 @@ impl Record {
         let usage = json!({"input_tokens": 1000 + n, "cache_read_input_tokens": 20000 + n,
             "cache_creation_input_tokens": 300 + n, "output_tokens": 40 + n,
             "output_tokens_details": {"thinking_tokens": n}});
+        self.reply_with(request, id, content, usage)
+    }
+
+    fn reply_with(
+        &mut self,
+        request: Option<&str>,
+        id: &str,
+        content: Vec<Value>,
+        usage: Value,
+    ) -> Value {
         for (i, block) in content.iter().enumerate() {
             let mut line = json!({"type": "assistant", "cwd": self.cwd, "apiBlockIndex": i,
                 "message": {"id": id, "role": "assistant", "model": MODEL,
@@ -549,6 +559,91 @@ fn a_prefix_of_a_grown_record_gives_the_trace_the_record_had_at_that_length() {
     for step in 0..then.trace().steps.len() as u32 {
         assert_eq!(pieces(&again, step), pieces(&then, step));
     }
+}
+
+/// Usage with a prompt of `input + cache_read + cache_write` tokens.
+fn usage(input: u64, read: u64, write: u64, output: u64, thinking: u64) -> Value {
+    json!({"input_tokens": input, "cache_read_input_tokens": read,
+        "cache_creation_input_tokens": write, "output_tokens": output,
+        "output_tokens_details": {"thinking_tokens": thinking}})
+}
+
+#[test]
+fn fitted_sizes_follow_the_prompt_sizes_and_the_thinking_tokens_of_each_reply() {
+    let fx = Fixture::new();
+    let mut r = Record::new(&fx.project());
+    let u1 = r.user(json!("list the files"));
+    r.shape();
+    r.request("r1", None, 0, std::slice::from_ref(&u1));
+    // Two thinking blocks whose text the record leaves out, signed 1 to 3 (session spec 6).
+    let a1 = r.reply_with(
+        Some("r1"),
+        "m1",
+        vec![
+            json!({"type": "thinking", "thinking": "", "signature": "s".repeat(100)}),
+            json!({"type": "thinking", "thinking": "", "signature": "s".repeat(300)}),
+            json!({"type": "text", "text": "Listing them."}),
+            json!({"type": "tool_use", "id": "toolu_1", "name": "Echo", "input": {"x": 1}}),
+        ],
+        usage(10, 0, 990, 80, 40),
+    );
+    let result = json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "a b c"});
+    r.push(
+        json!({"type": "user", "cwd": r.cwd, "message": {"role": "user", "content": [result]},
+        "toolUseResult": {"stdout": "a b c"}}),
+    );
+    let t1 = json!({"role": "user", "content": [result]});
+    // The agent sends the reply back with the tool call's input rewritten, so the request holds
+    // it as a blob, not as the reply's records.
+    let mut a1 = a1;
+    a1["content"][3]["input"] = json!({"x": 1, "verbose": false});
+    let a1 = r.blob(a1);
+    r.request("r2", Some("r1"), 1, &[u1.clone(), a1.clone(), t1.clone()]);
+    r.reply_with(
+        Some("r2"),
+        "m2",
+        vec![json!({"type": "text", "text": "Three files."})],
+        usage(5, 1000, 300, 20, 0),
+    );
+    // A request whose reply never came.
+    let u2 = r.user(json!("and the folders"));
+    r.request("r3", Some("r2"), 3, &[u1, a1, t1, u2]);
+    r.write(&fx, "sess-f");
+    let open = open(&fx, "sess-f");
+    assert_eq!(check(&open, &r.sent, &secrets()), 3);
+
+    let steps = &open.trace().steps;
+    let fitted: Vec<bool> = steps
+        .iter()
+        .map(|s| s.sent.as_ref().unwrap().fitted)
+        .collect();
+    assert_eq!(fitted, [true, true, false]);
+    let sizes = |step: u32| -> Vec<(PieceKind, u32)> {
+        let pieces = open.step_pieces(step).unwrap();
+        pieces.iter().map(|p| (p.kind, p.tokens)).collect()
+    };
+    let first = sizes(0);
+    assert_eq!(first.iter().map(|(_, n)| n).sum::<u32>(), 1000);
+    // The second prompt is 1,305 tokens, so the reply and the tool result cost 305: the thinking
+    // 40, shared by the signatures; the text and the call the other 40 of the output; the tool
+    // result the remaining 225.
+    let second = sizes(1);
+    assert_eq!(second[..first.len()], first[..]);
+    let added = &second[first.len()..];
+    let kinds: Vec<PieceKind> = added.iter().map(|(k, _)| *k).collect();
+    assert_eq!(
+        kinds,
+        [
+            PieceKind::Thinking,
+            PieceKind::Thinking,
+            PieceKind::ModelText,
+            PieceKind::ToolCall,
+            PieceKind::ToolResult
+        ]
+    );
+    assert_eq!((added[0].1, added[1].1), (10, 30));
+    assert_eq!(added[2].1 + added[3].1, 40);
+    assert_eq!(added[4].1, 225);
 }
 
 #[test]

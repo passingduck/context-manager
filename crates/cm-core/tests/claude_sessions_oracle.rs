@@ -19,7 +19,7 @@ use cm_core::agents::claude::Claude;
 use cm_core::agents::{Agent, ScanCx};
 use cm_core::env::ScanEnv;
 use cm_core::probe_fs::ProbeFs;
-use cm_core::trace::OpenTrace;
+use cm_core::trace::{Fit, OpenTrace};
 use cm_core::*;
 use serde_json::Value;
 use trace_checks::{Expect, Sent, check, text};
@@ -217,20 +217,11 @@ fn open(sandbox: &Sandbox, id: &TraceId, part: Option<&str>) -> OpenTrace {
     OpenTrace::new(data)
 }
 
-/// The script's endpoint answers request `n` of a run with input 1000+n, cache read 20000+n,
-/// cache write 300+n and output 40+n.
+/// The script's endpoint reports usage for every reply. Its numbers follow the request it
+/// answers (`usage_of` in the script), and the script compares them with the reply records.
 fn assert_endpoint_usage(open: &OpenTrace, what: &str) {
     for (i, step) in open.trace().steps.iter().enumerate() {
-        let u = step
-            .usage
-            .as_ref()
-            .unwrap_or_else(|| panic!("{what}: step {i} has usage"));
-        let n = u.input.checked_sub(1000).expect("input from the endpoint");
-        assert_eq!(
-            (u.cache_read, u.cache_write, u.output),
-            (20000 + n, 300 + n, 40 + n),
-            "{what}: step {i}"
-        );
+        assert!(step.usage.is_some(), "{what}: step {i} has usage");
     }
 }
 
@@ -374,6 +365,26 @@ fn the_reader_reads_every_oracle_scenario_exactly() {
                 );
             }
             "bash" => {
+                // The first reply leads with a thinking block signed with 200 bytes, which the
+                // endpoint counts as 50 thinking tokens. The second request extends the first, so
+                // its sizes are split by that reply's usage.
+                let split = only
+                    .fits()
+                    .iter()
+                    .position(|f| f.fit == Fit::Split)
+                    .expect("bash: a request split by the reply before it");
+                let added = only.fits()[split].added.unwrap();
+                let thinking: Vec<u32> = only.step_pieces(split as u32).unwrap()
+                    [added.after as usize..]
+                    .iter()
+                    .filter(|p| p.kind == PieceKind::Thinking)
+                    .map(|p| p.tokens)
+                    .collect();
+                assert_eq!(
+                    thinking,
+                    [50],
+                    "bash: the thinking piece costs its thinking tokens"
+                );
                 let calls = found(PieceKind::ToolCall);
                 let results = found(PieceKind::ToolResult);
                 assert!(

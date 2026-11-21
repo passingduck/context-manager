@@ -8,7 +8,9 @@
 //! ```
 //!
 //! The first form prints, for one record: steps, steps with a request, exact requests, problems
-//! by kind, pieces by kind, the time to open, and the peak memory of the process. `--row` prints
+//! by kind, pieces by kind, how the steps' sizes were fitted, the ratio of the real size of the
+//! pieces a request added to their o200k count, the time to open, and the peak memory of the
+//! process. `--row` prints
 //! one line per record, `index requests exact`, to compare with
 //! `tools/oracle/claude/session_shape.py --row`.
 
@@ -83,6 +85,29 @@ fn main() {
         println!("pieces by kind (pieces over all requests, fresh tokens):");
         for (kind, (pieces, fresh)) in kinds {
             println!("  {kind:?}: {pieces} {fresh}");
+        }
+        let mut fits: BTreeMap<String, usize> = BTreeMap::new();
+        let mut ratios: Vec<f64> = Vec::new();
+        for fit in open.fits() {
+            *fits.entry(format!("{:?}", fit.fit)).or_default() += 1;
+            if let Some(added) = fit.added.filter(|a| a.raw > 0) {
+                ratios.push(added.real as f64 / added.raw as f64);
+            }
+        }
+        println!("steps by fit:");
+        for (fit, steps) in fits {
+            println!("  {fit}: {steps}");
+        }
+        ratios.sort_by(f64::total_cmp);
+        let at = |q: f64| ratios[((ratios.len() - 1) as f64 * q).round() as usize];
+        if !ratios.is_empty() {
+            println!(
+                "real over raw size of the added pieces ({} steps): p10 {:.2}, median {:.2}, p90 {:.2}",
+                ratios.len(),
+                at(0.1),
+                at(0.5),
+                at(0.9)
+            );
         }
         println!("read ms: {read_ms}");
         println!("open ms (read, count, project): {total_ms}");

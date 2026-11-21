@@ -631,14 +631,18 @@ impl Reader {
                 };
                 (vec![Span::new(kind, text).labelled(label)], kind)
             }
-            "thinking" => {
+            // The record keeps a thinking block's signature, and its text only when the request
+            // asked to display it (session spec, section 6).
+            "thinking" | "redacted_thinking" => {
                 let text = str_at(block, "thinking").unwrap_or("");
+                let opaque = str_at(block, "signature")
+                    .or_else(|| str_at(block, "data"))
+                    .map_or(0, str::len);
                 (
-                    vec![Span::new(PieceKind::Thinking, text)],
+                    vec![Span::new(PieceKind::Thinking, text).with_opaque(opaque as u64)],
                     PieceKind::Thinking,
                 )
             }
-            "redacted_thinking" => (Vec::new(), PieceKind::Thinking),
             _ if is_tool_call(block) => {
                 let input = block.get("input").map_or_else(String::new, json_text);
                 let name = str_at(block, "name").map(str::to_owned);

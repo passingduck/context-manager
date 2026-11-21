@@ -7,8 +7,8 @@ Usage (from the repository root):
 
 Each scenario builds a sandbox under $TMPDIR with its own HOME and CLAUDE_CONFIG_DIR, starts a
 loopback endpoint that speaks the streaming Messages API, and runs the installed `claude -p`
-against it with a dummy key. The endpoint answers from a script, reports usage numbers it
-chooses, and stores every request with its headers. Every proxy variable points at a tripwire
+against it with a dummy key. The endpoint answers from a script, reports usage numbers from a
+stand-in tokenizer (`block_tokens`), and stores every request with its headers. Every proxy variable points at a tripwire
 listener, so a request that honours a proxy is counted instead of leaving the machine. Nothing
 under ~/.claude is read or written.
 
@@ -55,12 +55,56 @@ def sse(events):
     return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
 
 
+def block_tokens(b):
+    """The endpoint's stand-in tokenizer: a quarter of a block's JSON length, without its cache
+    mark. A thinking block costs a quarter of its signature, as if the signature grew with the
+    thinking it holds."""
+    if isinstance(b, dict):
+        b = {k: v for k, v in b.items() if k != "cache_control"}
+        if b.get("type") == "thinking":
+            return len(b.get("signature", "")) // 4
+    return (len(json.dumps(b, separators=(",", ":"), ensure_ascii=False)) + 3) // 4
+
+
+def prompt_tokens(body):
+    """The prompt size of a request body: system blocks, tools, and each message's blocks plus 4."""
+    system = body.get("system") or []
+    n = sum(block_tokens(b) for b in (system if isinstance(system, list) else [system]))
+    n += sum(block_tokens(t) for t in body.get("tools") or [])
+    for m in body.get("messages") or []:
+        n += 4 + sum(block_tokens(b) for b in sr.as_blocks(m.get("content")))
+    return n
+
+
+def usage_of(body, blocks, n):
+    """Usage that follows the request: the prompt split into input, cache read and cache write,
+    and the reply's blocks as output, with its thinking blocks counted apart."""
+    prompt = prompt_tokens(body)
+    inp = min(prompt, 3 + n)
+    write = (prompt - inp) // 3
+    hour = min(write, 200)
+    usage = {"input_tokens": inp, "cache_read_input_tokens": prompt - inp - write,
+             "cache_creation_input_tokens": write,
+             "cache_creation": {"ephemeral_5m_input_tokens": write - hour, "ephemeral_1h_input_tokens": hour},
+             "output_tokens": sum(block_tokens(b) for b in blocks), "service_tier": "standard"}
+    thinking = sum(block_tokens(b) for b in blocks if b.get("type") == "thinking")
+    if thinking:
+        usage["output_tokens_details"] = {"thinking_tokens": thinking}
+    return usage
+
+
 def stream_events(msg):
     start = dict(msg, content=[], stop_reason=None, stop_sequence=None,
                  usage=dict(msg["usage"], output_tokens=1))
     ev = [{"type": "message_start", "message": start}]
     for i, b in enumerate(msg["content"]):
-        if b["type"] == "tool_use":
+        if b["type"] == "thinking":
+            # The thinking is not displayed: the stream carries the signature only.
+            ev.append({"type": "content_block_start", "index": i,
+                       "content_block": {"type": "thinking", "thinking": "", "signature": ""}})
+            ev.append({"type": "content_block_delta", "index": i,
+                       "delta": {"type": "signature_delta", "signature": b["signature"]}})
+        elif b["type"] == "tool_use":
             ev.append({"type": "content_block_start", "index": i,
                        "content_block": {"type": "tool_use", "id": b["id"], "name": b["name"], "input": {}}})
             ev.append({"type": "content_block_delta", "index": i,
@@ -69,9 +113,10 @@ def stream_events(msg):
             ev.append({"type": "content_block_start", "index": i, "content_block": {"type": "text", "text": ""}})
             ev.append({"type": "content_block_delta", "index": i, "delta": {"type": "text_delta", "text": b["text"]}})
         ev.append({"type": "content_block_stop", "index": i})
+    keys = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens",
+            "output_tokens_details")
     ev.append({"type": "message_delta", "delta": {"stop_reason": msg["stop_reason"], "stop_sequence": None},
-               "usage": {k: msg["usage"][k] for k in ("input_tokens", "cache_read_input_tokens",
-                                                      "cache_creation_input_tokens", "output_tokens")}})
+               "usage": {k: msg["usage"][k] for k in keys if k in msg["usage"]}})
     ev.append({"type": "message_stop"})
     return ev
 
@@ -102,10 +147,7 @@ class Endpoint:
                 if not self.path.startswith("/v1/messages") or not isinstance(body, dict):
                     return self._json({"type": "error", "error": {"type": "not_found_error", "message": "oracle"}}, 404)
                 blocks, stop = outer.script(body, n)
-                usage = {"input_tokens": 1000 + n, "cache_read_input_tokens": 20000 + n,
-                         "cache_creation_input_tokens": 300 + n,
-                         "cache_creation": {"ephemeral_5m_input_tokens": 100 + n, "ephemeral_1h_input_tokens": 200},
-                         "output_tokens": 40 + n, "service_tier": "standard"}
+                usage = usage_of(body, blocks, n)
                 msg = {"id": f"msg_oracle_{n:03d}", "type": "message", "role": "assistant",
                        "model": body.get("model", "claude-opus-5-5"), "content": blocks,
                        "stop_reason": stop, "stop_sequence": None, "usage": usage}
@@ -250,10 +292,16 @@ def text_then_tool(note, name, inp, n):
     return [{"type": "text", "text": note}] + blocks, stop
 
 
+def thinking_then(reply):
+    """`reply` led by a thinking block whose text is not displayed (session spec, section 6)."""
+    blocks, stop = reply
+    return [{"type": "thinking", "thinking": "", "signature": "oracle-signature-" + "s" * 183}] + blocks, stop
+
+
 @scenario("bash")
 def s_bash(box):
-    steps = [lambda b, n: text_then_tool("Running it.", "Bash",
-                                         {"command": "echo oracle-bash-output", "description": "Print a marker"}, n),
+    steps = [lambda b, n: thinking_then(text_then_tool(
+                 "Running it.", "Bash", {"command": "echo oracle-bash-output", "description": "Print a marker"}, n)),
              lambda b, n: text("The command printed the marker.")]
     return [{"prompt": "Run the echo command.", "script": plan(steps), "args": ["--allowedTools", "Bash"]}]
 
@@ -479,7 +527,10 @@ def compare(box, received):
             u = rr["message"].get("usage") or {}
             keys = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens",
                     "cache_creation")
-            if any(u.get(k) != sent_usage.get(k) for k in keys) or rr["message"].get("id") != reply.get("id"):
+            # The CLI records `output_tokens_details` with a thinking count of 0 when the endpoint sent none.
+            details = sent_usage.get("output_tokens_details", {"thinking_tokens": 0})
+            if any(u.get(k) != sent_usage.get(k) for k in keys) or rr["message"].get("id") != reply.get("id") \
+                    or u.get("output_tokens_details") != details:
                 d.append(f"usage of reply record {rr.get('apiBlockIndex')} differs")
         if len(replies) != len(reply.get("content", [])):
             d.append(f"{len(replies)} reply records for {len(reply.get('content', []))} content blocks")
