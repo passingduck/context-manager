@@ -1222,10 +1222,13 @@ records! {
         pub fresh: u32,
     }
 
+    /// One piece of a step's reply.
     pub struct ReplyPiece {
         pub kind: PieceKind,
         pub label: Option<String>,
         pub bytes: u64,
+        /// When the step has usage: fitted to it, so the thinking pieces add up to the thinking
+        /// tokens and the other pieces to the rest of the output. Otherwise the o200k count.
         pub tokens: u32,
     }
 

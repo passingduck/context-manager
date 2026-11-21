@@ -335,6 +335,58 @@ impl<'a> Fitter<'a> {
     }
 }
 
+/// A reply's own pieces, fitted to the usage of that reply: its thinking pieces add up to the
+/// thinking tokens, and its other pieces to the rest of the output. Each piece is its kind, the
+/// weight of a thinking piece (its text, else its signature) and its o200k count. The o200k
+/// counts stay when the usage is missing or a share does not close.
+pub(super) fn reply(usage: Option<&Usage>, pieces: &[(PieceKind, u64, u32)]) -> Vec<u32> {
+    let raw = || pieces.iter().map(|&(_, _, raw)| raw).collect::<Vec<u32>>();
+    let Some(usage) = usage else {
+        return raw();
+    };
+    let thinks = |kind: PieceKind| kind == PieceKind::Thinking;
+    let has_thinking = pieces.iter().any(|&(kind, _, _)| thinks(kind));
+    let thinking = match (has_thinking, usage.thinking) {
+        (false, _) => 0,
+        (true, Some(thinking)) => thinking,
+        (true, None) => return raw(),
+    };
+    let Some(other) = usage.output.checked_sub(usage.thinking.unwrap_or(0)) else {
+        return raw();
+    };
+    let mut thinking_weights: Vec<u64> = pieces
+        .iter()
+        .filter(|piece| thinks(piece.0))
+        .map(|piece| piece.1)
+        .collect();
+    if thinking_weights.iter().all(|&w| w == 0) {
+        thinking_weights.iter_mut().for_each(|w| *w = 1);
+    }
+    let other_weights: Vec<u64> = pieces
+        .iter()
+        .filter(|piece| !thinks(piece.0))
+        .map(|piece| u64::from(piece.2))
+        .collect();
+    let (Some(thinking), Some(other)) = (
+        share(thinking, &thinking_weights),
+        share(other, &other_weights),
+    ) else {
+        return raw();
+    };
+    let (mut thinking, mut other) = (thinking.into_iter(), other.into_iter());
+    pieces
+        .iter()
+        .map(|&(kind, _, _)| {
+            let next = if thinks(kind) {
+                thinking.next()
+            } else {
+                other.next()
+            };
+            next.expect("one share per piece")
+        })
+        .collect()
+}
+
 /// `total` shared by `weights`, in whole tokens that add up to `total` (largest remainder).
 /// `None` when `total` is not zero and no weight is.
 fn share(total: u64, weights: &[u64]) -> Option<Vec<u32>> {
@@ -367,7 +419,58 @@ fn share(total: u64, weights: &[u64]) -> Option<Vec<u32>> {
 
 #[cfg(test)]
 mod tests {
-    use super::share;
+    use super::{reply, share};
+    use crate::model::{PieceKind, Usage};
+
+    fn usage(output: u64, thinking: Option<u64>) -> Usage {
+        Usage {
+            input: 1,
+            cache_read: 0,
+            cache_write: 0,
+            output,
+            thinking,
+        }
+    }
+
+    /// The thinking pieces take the thinking tokens by signature size, and the rest of the
+    /// output goes to the other pieces by their o200k counts.
+    #[test]
+    fn a_reply_is_fitted_to_its_own_usage() {
+        let pieces = [
+            (PieceKind::Thinking, 3_000, 0),
+            (PieceKind::Thinking, 1_000, 0),
+            (PieceKind::ModelText, 0, 10),
+            (PieceKind::ToolCall, 0, 30),
+        ];
+        assert_eq!(
+            reply(Some(&usage(500, Some(300))), &pieces),
+            [225, 75, 50, 150]
+        );
+    }
+
+    #[test]
+    fn a_reply_keeps_its_o200k_counts_when_its_usage_cannot_place_them() {
+        let pieces = [
+            (PieceKind::Thinking, 3_000, 2),
+            (PieceKind::ModelText, 0, 10),
+        ];
+        assert_eq!(reply(None, &pieces), [2, 10], "no usage");
+        assert_eq!(
+            reply(Some(&usage(500, None)), &pieces),
+            [2, 10],
+            "thinking pieces and no thinking count"
+        );
+        assert_eq!(
+            reply(Some(&usage(100, Some(300))), &pieces),
+            [2, 10],
+            "more thinking than output"
+        );
+        assert_eq!(
+            reply(Some(&usage(500, Some(300))), &[(PieceKind::Thinking, 9, 2)]),
+            [2],
+            "output left over and no piece to take it"
+        );
+    }
 
     #[test]
     fn a_share_adds_up_to_the_total_and_follows_the_weights() {
