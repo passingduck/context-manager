@@ -50,9 +50,10 @@ export default {
     // A call's pieces, in the order the model received them.
     await page.click(bars, 2);
     await page.waitFor(`${callPane(3)} ${rows}`);
+    check("the rebuilt request matches its digest", (await page.eval(`document.querySelector("[data-testid=exactness]")?.dataset.exactness`)) === "exact");
     const order = await places(page);
     check("the pieces start with the system blocks, then the tools, then the messages", order[0] === "System block 1" && order[1] === "System block 2" && order[2] === "Tool definition 1" && order[3] === "Tool definition 2" && order[4]?.startsWith("Message 1"), JSON.stringify(order));
-    const messageNumbers = order.filter((p) => p.startsWith("Message")).map((p) => Number(p.split(" ")[1]));
+    const messageNumbers = order.filter((p) => p.startsWith("Message")).map((p) => parseInt(p.split(" ")[1], 10));
     check("the message numbers never go down", messageNumbers.every((n, i) => i === 0 || n >= messageNumbers[i - 1]), JSON.stringify(messageNumbers));
     const fresh = await page.eval(`[...document.querySelectorAll(${JSON.stringify(rows)})].filter((r) => r.dataset.fresh === "true").length`);
     check("some pieces are fresh and some are shared", fresh > 0 && fresh < order.length, `${fresh} of ${order.length}`);
@@ -86,9 +87,10 @@ export default {
     await page.click("[data-testid=chart-mode-cache]");
     await page.eval(`document.querySelector("[data-testid=chart] [role=group]").focus()`);
     const before = await page.eval(`document.querySelector("[data-testid=call]").dataset.call`);
-    await page.eval(`document.querySelector("[data-testid=chart] [role=group]").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }))`);
+    const step = Number(before) > 1 ? -1 : 1;
+    await page.eval(`document.querySelector("[data-testid=chart] [role=group]").dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(step < 0 ? "ArrowLeft" : "ArrowRight")}, bubbles: true }))`);
     await page.until(`document.querySelector("[data-testid=call]")?.dataset.call !== ${JSON.stringify(before)}`, "the arrow key to move the selection");
-    check("the left arrow selects the call before", Number(await page.eval(`document.querySelector("[data-testid=call]").dataset.call`)) === Number(before) - 1);
+    check("an arrow key selects the neighbouring call", Number(await page.eval(`document.querySelector("[data-testid=call]").dataset.call`)) === Number(before) + step);
 
     // A reload keeps the selection.
     const hash = await page.eval("location.hash");
@@ -121,7 +123,7 @@ export default {
       await shoot(`22-cache-${theme}`, `${base}&call=7`, `${callPane(7)} ${rows}`, theme);
       await shoot(`22-kinds-${theme}`, `${base}&call=3&cm=kind`, `${callPane(3)} ${rows}`, theme);
       await shoot(`22-text-${theme}`, `${base}&call=3&pc=s4`, "[data-testid=piece-text]", theme, `document.querySelector("[data-testid=piece-detail]")?.scrollIntoView({ block: "center" })`);
-      await shoot(`22-lost-${theme}`, `${base}&call=4`, "[data-testid=loss-note]", theme);
+      await shoot(`22-lost-${theme}`, `${base}&call=4`, `${callPane(4)} ${rows}`, theme);
     }
   },
 };
