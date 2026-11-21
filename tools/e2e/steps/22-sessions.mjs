@@ -47,6 +47,12 @@ export default {
     const expired = await page.eval(`document.querySelector("[data-testid=loss-note]").innerText`);
     check("the panel says that every piece is shared and gives the time since the previous call", expired.includes("shares every piece") && expired.includes("6 min"), expired);
 
+    // A reply's thinking row shows the thinking tokens of the usage.
+    await page.click(bars, 1);
+    await page.waitFor(`${callPane(2)} [data-testid=reply-piece]`);
+    const reply = await page.eval(`[...document.querySelectorAll("[data-testid=reply-piece]")].map((r) => r.innerText.replace(/\\s+/g, " "))`);
+    check("the thinking row of a reply shows the thinking tokens of the usage", reply.some((r) => /Thinking.*\b12\b/.test(r)), JSON.stringify(reply));
+
     // A call with no usage shows the plain-estimate wording.
     await page.click(bars, 7);
     await page.waitFor(`${callPane(8)} [data-testid=estimate-note]`);
