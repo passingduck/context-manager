@@ -108,7 +108,7 @@ function Usage({ trace, index }: { trace: Trace; index: number }) {
         <Num label={t.sessions.tip.read} value={exact(u.cacheRead)} />
         <Num label={t.sessions.tip.written} value={exact(u.cacheWrite)} />
         <Num label={t.sessions.tip.uncached} value={exact(u.input)} />
-        <Num label={c.prompt} value={exact(prompt)} />
+        <Num label={c.prompt} value={exact(prompt)} testid="usage-prompt" data={prompt} />
         <Num label={t.sessions.tip.output} value={exact(u.output)} />
         <Num label={t.sessions.tip.grew} value={grew === null ? t.sessions.tip.none : `${grew > 0 ? "+" : ""}${exact(grew)}`} />
         {u.thinking !== null && <Num label={c.thinking} value={exact(u.thinking)} />}
@@ -117,11 +117,11 @@ function Usage({ trace, index }: { trace: Trace; index: number }) {
   );
 }
 
-function Num({ label, value }: { label: string; value: string }) {
+function Num({ label, value, testid, data }: { label: string; value: string; testid?: string; data?: number }) {
   return (
     <div>
       <dt className="text-[11px] text-muted">{label}</dt>
-      <dd>{value}</dd>
+      <dd data-testid={testid} data-value={data}>{value}</dd>
     </div>
   );
 }
@@ -216,7 +216,7 @@ function Strip({ fitted, pieces, sharedCount, marks, open, select, present }: { 
     <section aria-label={t.sessions.call.stripTitle} className="pt-2">
       <h3 className="text-[12px] font-semibold"><Badge tone="warn">{fitted ? t.sessions.tagFitted : t.sessions.tagEstimate}</Badge> {t.sessions.call.stripTitle}</h3>
       <p data-testid="estimate-note" data-fitted={fitted} className="text-[11px] text-muted">{fitted ? t.sessions.call.fittedNote : t.sessions.call.plainNote}</p>
-      <p className="mb-1 text-[11px] text-muted">{t.sessions.call.stripNote(exact(total))}</p>
+      <p data-testid="strip-total" data-total={total} className="mb-1 text-[11px] text-muted">{t.sessions.call.stripNote(exact(total))}</p>
       <div className="overflow-x-auto pb-1">
         <div data-testid="strip" onClick={(e) => { const at = (e.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"); if (at) select(Number(at)); }} className="relative flex h-7 bg-sunken" style={{ minWidth: "100%", width: Math.max(0, pieces.length * 3) }}>
           {pieces.map((piece, i) => (

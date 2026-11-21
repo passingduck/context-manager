@@ -3,7 +3,7 @@
 // hashes, section 6 for replies and usage, section 8 for a compaction, section 9 for a subagent. Every text is a
 // short stand-in. Nothing here is copied from a real session or a real system prompt.
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export const SESSION_ID = "5e55e55e-0000-4000-8000-000000000001";
@@ -81,6 +81,8 @@ function script() {
       { at: 150, compactBefore: true, system: sys(TEXTS.system1Changed), messages: [sum], reply: [text("Ready.")], usage: { input: 25, read: 300, write: 200, output: 10 } },
       // Six minutes later the cache is gone, though every piece is the same as before.
       { at: 150 + 360, system: sys(TEXTS.system1Changed), messages: [sum, model([text("Ready.")]), u3], reply: [text("Fine.")], usage: { input: 30, read: 0, write: 560, output: 12 } },
+      // An interrupted call: the record holds its request and no reply, so it has no usage.
+      { at: 150 + 400, system: sys(TEXTS.system1Changed), messages: [sum, model([text("Ready.")]), u3, model([text("Fine.")]), user("Prompt four: stop.")], reply: [], usage: null },
     ],
     sub: [
       { at: 40, system: [text("STAND-IN SUBAGENT SYSTEM BLOCK.")], messages: [user("Subagent task: find the stand-in files.")], reply: [text("Found two.")], usage: { input: 10, read: 0, write: 300, output: 8 } },
@@ -90,11 +92,11 @@ function script() {
 }
 
 /** One chain of requests: the records it writes and the replies' conversation records. */
-function writeChain({ calls, start, lines, agentId, sessionId, cwd }) {
+function writeChain({ calls, start, lines, agentId, sessionId, cwd, state }) {
   const stamp = (seconds) => new Date(start + seconds * 1000).toISOString();
-  let previous = null;
-  let written = new Set();
-  const shapes = new Set();
+  let previous = state?.previous ?? null;
+  let written = state?.written ?? new Set();
+  const shapes = state?.shapes ?? new Set();
   const facts = [];
   calls.forEach((call, i) => {
     const at = stamp(call.at);
@@ -138,7 +140,7 @@ function writeChain({ calls, start, lines, agentId, sessionId, cwd }) {
     });
     // Section 6: one assistant record per content block, each with the final usage.
     const messageId = `msg_${id.slice(0, 8)}`;
-    const usage = { input_tokens: call.usage.input, cache_read_input_tokens: call.usage.read, cache_creation_input_tokens: call.usage.write, output_tokens: call.usage.output };
+    const usage = call.usage && { input_tokens: call.usage.input, cache_read_input_tokens: call.usage.read, cache_creation_input_tokens: call.usage.write, output_tokens: call.usage.output };
     call.reply.forEach((block, n) => {
       lines.push({
         type: "assistant", sessionId, uuid: randomUUID(), timestamp: stamp(call.at + 5), cwd, version: VERSION, requestRef: id, apiBlockIndex: n, ...(agentId ? { agentId, isSidechain: true } : {}),
@@ -148,7 +150,7 @@ function writeChain({ calls, start, lines, agentId, sessionId, cwd }) {
     previous = { id, hashes };
     facts.push({ id, at, hashes, keep, usage: call.usage, system: call.system.map((b) => b.text) });
   });
-  return facts;
+  return { facts, state: { previous, written, shapes } };
 }
 
 /**
@@ -162,9 +164,9 @@ export function writeSession(home, cwd) {
   const lines = [];
   lines.push({ type: "user", sessionId: SESSION_ID, uuid: randomUUID(), timestamp: new Date(start).toISOString(), cwd, version: VERSION, message: { role: "user", content: TEXTS.promptOne } });
   lines.push({ type: "ai-title", sessionId: SESSION_ID, aiTitle: "Stand-in session for the e2e run" });
-  const mainFacts = writeChain({ calls: main, start, lines, agentId: null, sessionId: SESSION_ID, cwd });
+  const { facts: mainFacts, state } = writeChain({ calls: main, start, lines, agentId: null, sessionId: SESSION_ID, cwd });
   const subLines = [];
-  const subFacts = writeChain({ calls: sub, start, lines: subLines, agentId: AGENT_ID, sessionId: SESSION_ID, cwd });
+  const { facts: subFacts } = writeChain({ calls: sub, start, lines: subLines, agentId: AGENT_ID, sessionId: SESSION_ID, cwd });
   const file = join(dir, `${SESSION_ID}.jsonl`);
   const subFile = join(dir, SESSION_ID, "subagents", `agent-${AGENT_ID}.jsonl`);
   const meta = join(dir, SESSION_ID, "subagents", `agent-${AGENT_ID}.meta.json`);
@@ -172,5 +174,12 @@ export function writeSession(home, cwd) {
   writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   writeFileSync(subFile, subLines.map((l) => JSON.stringify(l)).join("\n") + "\n");
   writeFileSync(meta, JSON.stringify({ agentType: "explorer", description: "Find the stand-in files", toolUseId: "toolu_agent", finished: true }));
-  return { file, calls: mainFacts, sub: subFacts, texts: TEXTS, compactBefore: 5, lostByChange: 3, lostByExpiry: 6, bytes: lines.length };
+  const last = main[main.length - 1];
+  const append = () => {
+    const call = { at: 150 + 460, system: last.system, messages: [...last.messages, user("Prompt five: a call that arrives while the session is open.")], reply: [text("Appended.")], usage: { input: 14, read: 900, write: 60, output: 7 } };
+    const more = [];
+    writeChain({ calls: [call], start, lines: more, agentId: null, sessionId: SESSION_ID, cwd, state });
+    appendFileSync(file, more.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  };
+  return { file, append, calls: mainFacts, sub: subFacts, texts: TEXTS, compactBefore: 5, lostByChange: 3, lostByExpiry: 6, bytes: lines.length };
 }
