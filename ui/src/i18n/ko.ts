@@ -781,6 +781,7 @@ export const ko: typeof en = {
       axisReal: "API가 보고한 프롬프트 토큰",
       axisEstimate: "프로그램이 계산한 요청의 추정 토큰",
       estimateNote: "이 크기는 API 값이 아니라 추정값입니다.",
+      overview: "세션 전체입니다. 누르거나 끌면 아래 막대 줄이 움직입니다.",
       legendRead: "캐시에서 읽음",
       costLane: "아래 줄은 호출마다 캐시에서 읽지 못한 양입니다. 캐시에 쓴 양과 캐시 없이 보낸 양을 더한 값입니다.",
       legendWrite: "캐시에 씀",
@@ -807,6 +808,7 @@ export const ko: typeof en = {
       noRequest: "요청 기록 없음",
     },
     lost: {
+      next: "캐시를 잃은 다음 호출로 이동합니다.",
       badge: "캐시 손실",
       whyChanged: "이 호출은 요청의 조각이 달라져서 캐시를 잃었습니다.",
       whyExpired: "이 호출은 요청의 조각이 그대로인데도 캐시를 잃었습니다.",

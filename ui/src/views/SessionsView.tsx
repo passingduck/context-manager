@@ -57,6 +57,10 @@ function SessionList({ go }: { go: Go }) {
                   className="block w-full border-l-2 border-transparent px-3 py-2 text-left hover:bg-subtle"
                 >
                   <b className="block truncate">{info.title ?? t.sessions.untitled}</b>
+                  <span className="flex items-center gap-1.5 text-[11px] text-muted">
+                    <span className="size-2 rounded-full" style={{ background: project.color(info.agent) }} aria-hidden />
+                    <span data-testid="session-agent">{project.name(info.agent)}</span>
+                  </span>
                   <span className="flex flex-wrap gap-x-4 text-[11px] text-muted">
                     <span>{t.sessions.startedHead}: {info.started ? fmt.when(info.started, lang) : t.sessions.unknown}</span>
                     <span>{t.sessions.ranHead}: {seconds === null ? t.sessions.unknown : t.sessions.duration(seconds)}</span>
@@ -120,7 +124,9 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
       </>
     );
   }
-  const lostCount = trace.steps.filter((_, i) => cacheLoss(trace, i)).length;
+  const lostAt = trace.steps.flatMap((_, i) => (cacheLoss(trace, i) ? [i] : []));
+  const lostCount = lostAt.length;
+  const nextLost = () => select(lostAt.find((i) => selected === null || i > selected) ?? lostAt[0]!);
   return (
     <div className="space-y-3 px-3 py-2">
       <dl data-testid="stats" className="grid grid-cols-4 gap-2">
@@ -138,7 +144,9 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
             {route.cm === "cache" ? t.sessions.chart.axisReal : t.sessions.chart.axisEstimate}
             {lostCount > 0 && (
               <span className="ml-2">
-                <Badge tone="bad">{t.sessions.lost.count(lostCount)}</Badge>
+                <button type="button" data-testid="lost-next" title={t.sessions.lost.next} onClick={nextLost} className="cursor-pointer rounded hover:underline">
+                  <Badge tone="bad">{t.sessions.lost.count(lostCount)}</Badge>
+                </button>
               </span>
             )}
           </p>

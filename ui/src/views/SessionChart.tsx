@@ -1,11 +1,11 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import type { PieceKind } from "../gen/PieceKind";
 import type { Step } from "../gen/Step";
 import type { Trace } from "../gen/Trace";
 import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
 import { exact } from "../lib/prefix";
-import { axisTicks, cacheLoss, estimateOf, growth, KINDS, kindColor, promptOf } from "../lib/trace";
+import { axisTicks, cacheLoss, type CacheLoss, estimateOf, growth, KINDS, kindColor, promptOf } from "../lib/trace";
 import { LossNote } from "./LossNote";
 
 export type ChartMode = "cache" | "kind";
@@ -39,9 +39,33 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
   const max = useMemo(() => steps.reduce((m, s) => Math.max(m, mode === "cache" ? (s.usage ? promptOf(s.usage) : 0) : estimateOf(s)), 1), [steps, mode]);
   const losses = useMemo(() => steps.map((_, i) => cacheLoss(trace, i)), [trace, steps]);
 
+  // The selected bar goes to the middle of the strip.
   useEffect(() => {
-    scroller.current?.querySelector("[data-selected=true]")?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    const box = scroller.current;
+    const bar = box?.querySelector<HTMLElement>("[data-selected=true]");
+    if (box && bar) box.scrollLeft = bar.offsetLeft - (box.clientWidth - bar.offsetWidth) / 2;
   }, [selected]);
+
+  // What the strip shows of the whole session, for the overview.
+  const [view, setView] = useState({ left: 0, shown: 0, total: 0 });
+  useEffect(() => {
+    const box = scroller.current;
+    if (!box) return;
+    const read = () => setView({ left: box.scrollLeft, shown: box.clientWidth, total: box.scrollWidth });
+    read();
+    box.addEventListener("scroll", read, { passive: true });
+    const watch = new ResizeObserver(read);
+    watch.observe(box);
+    if (box.firstElementChild) watch.observe(box.firstElementChild);
+    return () => {
+      box.removeEventListener("scroll", read);
+      watch.disconnect();
+    };
+  }, [steps.length, mode]);
+  const scrollTo = useCallback((fraction: number) => {
+    const box = scroller.current;
+    if (box) box.scrollLeft = fraction * box.scrollWidth - box.clientWidth / 2;
+  }, []);
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     const to = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
@@ -67,6 +91,7 @@ export function SessionChart({ trace, mode, selected, onSelect }: { trace: Trace
   const tipStep = tip ? steps[tip.index] : null;
   return (
     <div data-testid="chart" data-mode={mode} className="relative pt-3">
+      {view.total > view.shown + 1 && <Overview trace={trace} mode={mode} losses={losses} max={max} view={view} onScrollTo={scrollTo} />}
       <div className="flex">
         <div aria-hidden className="relative shrink-0 text-[10px] tabular-nums text-faint" style={{ width: 40, height: BAR_H + LANE_H }}>
           {ticks.map((v) => (
@@ -287,6 +312,79 @@ function CostRow({ trace, width }: { trace: Trace; width: number }) {
           <span className="block w-full" style={{ height: v > 0 ? Math.max(1, Math.round((v / max) * COST_H)) : 0, background: CACHE_FILL.write }} />
         </div>
       ))}
+    </div>
+  );
+}
+
+const OVERVIEW_H = 40;
+const COL = 2;
+
+/** The whole session in one fixed-width row: every call's size (the largest of the calls that share a column), the compactions, the calls that lost their cache and the part the strip shows. */
+function Overview({ trace, mode, losses, max, view, onScrollTo }: { trace: Trace; mode: ChartMode; losses: (CacheLoss | null)[]; max: number; view: { left: number; shown: number; total: number }; onScrollTo: (fraction: number) => void }) {
+  const { t } = useI18n();
+  const box = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const watch = new ResizeObserver(() => setWidth(el.clientWidth));
+    watch.observe(el);
+    setWidth(el.clientWidth);
+    return () => watch.disconnect();
+  }, []);
+  const steps = trace.steps;
+  const cols = Math.max(1, Math.min(steps.length, Math.floor(width / COL)));
+  const column = (i: number) => Math.min(cols - 1, Math.floor((i / steps.length) * cols));
+  const { heights, lost, cut } = useMemo(() => {
+    const heights = new Array<number>(cols).fill(0);
+    const lost = new Set<number>();
+    steps.forEach((s, i) => {
+      const v = mode === "cache" ? (s.usage ? promptOf(s.usage) : 0) : estimateOf(s);
+      const c = column(i);
+      heights[c] = Math.max(heights[c]!, v);
+      if (losses[i]) lost.add(c);
+    });
+    return { heights, lost, cut: new Set(trace.boundaries.map((b) => column(Math.min(b.before, steps.length - 1)))) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps, mode, losses, cols, trace.boundaries]);
+  const move = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.buttons !== 1 && event.type !== "pointerdown") return;
+    const r = event.currentTarget.getBoundingClientRect();
+    onScrollTo(Math.max(0, Math.min(1, (event.clientX - r.left) / r.width)));
+  };
+  const total = view.total || 1;
+  return (
+    <div className="mb-1 flex" data-testid="overview">
+      <div style={{ width: 40 }} className="shrink-0" />
+      <div
+        ref={box}
+        role="presentation"
+        aria-label={t.sessions.chart.overview}
+        title={t.sessions.chart.overview}
+        className="relative min-w-0 flex-1 cursor-pointer touch-none select-none border-b border-line bg-subtle"
+        style={{ height: OVERVIEW_H + 8 }}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          move(e);
+        }}
+        onPointerMove={move}
+      >
+        <div className="absolute inset-x-0 top-0 flex" style={{ height: OVERVIEW_H, alignItems: "flex-end" }}>
+          {heights.map((v, c) => (
+            <span key={c} className="relative block" style={{ width: `${100 / cols}%`, height: Math.max(v > 0 ? 1 : 0, Math.round((v / max) * OVERVIEW_H)), background: mode === "cache" ? "var(--c1)" : "var(--fg-faint)" }}>
+              {cut.has(c) && <span aria-hidden className="absolute bottom-0 left-0 border-l-2 border-dashed border-warn" style={{ height: OVERVIEW_H + 2, bottom: 0 }} />}
+            </span>
+          ))}
+        </div>
+        <div aria-hidden className="absolute inset-x-0 bottom-0 flex" style={{ height: 8 }}>
+          {Array.from({ length: cols }, (_, c) => (
+            <span key={c} className="block" style={{ width: `${100 / cols}%` }}>
+              {lost.has(c) && <span data-testid="overview-lost" className="mx-auto block bg-bad" style={{ width: 5, height: 7, clipPath: "polygon(50% 0, 100% 100%, 0 100%)" }} />}
+            </span>
+          ))}
+        </div>
+        <div aria-hidden data-testid="overview-window" className="pointer-events-none absolute top-0 border-2 border-accent bg-accent-bg opacity-60" style={{ left: `${(view.left / total) * 100}%`, width: `${(view.shown / total) * 100}%`, height: OVERVIEW_H + 8 }} />
+      </div>
     </div>
   );
 }

@@ -812,6 +812,7 @@ export const en = {
       axisReal: "Prompt tokens, as the API reported them",
       axisEstimate: "Estimated tokens of the request, counted by this program",
       estimateNote: "These sizes are estimates, not numbers from the API.",
+      overview: "The whole session. Click or drag to move the strip below.",
       legendRead: "Read from the cache",
       costLane: "The lower row shows, for each call, what it could not read from the cache. That is the part written to the cache plus the part sent uncached.",
       legendWrite: "Written to the cache",
@@ -838,6 +839,7 @@ export const en = {
       noRequest: "no request recorded",
     },
     lost: {
+      next: "Go to the next call that lost its cache",
       badge: "Cache lost",
       whyChanged: "This call lost the cache because a piece of the request changed.",
       whyExpired: "This call lost the cache although no piece of the request changed.",
