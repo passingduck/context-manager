@@ -354,7 +354,7 @@ fn every_request_rebuilds_exactly_with_its_pieces_labelled_from_the_record() {
     let r = conversation(&fx);
     r.write(&fx, "sess-1");
     let open = open(&fx, "sess-1");
-    check(&open, &r.sent, &secrets());
+    assert_eq!(check(&open, &r.sent, &secrets()), r.sent.len());
     let trace = open.trace();
     assert_eq!(trace.problems, Vec::<TraceProblem>::new());
     assert_eq!(trace.steps.len(), 3);
@@ -479,7 +479,7 @@ fn a_digest_that_does_not_match_makes_the_step_inexact() {
     );
     r.write(&fx, "sess-3");
     let open = open(&fx, "sess-3");
-    check(&open, &r.sent, &secrets());
+    assert_eq!(check(&open, &r.sent, &secrets()), r.sent.len());
     assert!(!open.trace().steps[0].sent.as_ref().unwrap().exact);
     assert_eq!(
         open.trace().problems,
@@ -498,7 +498,7 @@ fn a_partial_last_line_is_ignored_and_a_broken_line_is_counted() {
     bytes.extend_from_slice(b"{\"type\":\"assistant\",\"message\":{\"id\":\"m9\",\"ro");
     std::fs::write(file.as_path(), &bytes).unwrap();
     let partial = open(&fx, "sess-4");
-    check(&partial, &r.sent, &secrets());
+    assert_eq!(check(&partial, &r.sent, &secrets()), r.sent.len());
     assert_eq!(partial.trace().problems, Vec::<TraceProblem>::new());
     assert_eq!(partial.trace().steps, open_whole.trace().steps);
     assert_eq!(partial.read(), bytes.len() as u64);
@@ -580,7 +580,7 @@ fn a_record_over_the_limit_keeps_the_steps_read_so_far() {
         .trace(&ScanCx::new(&env, &fs), &TraceId("sess-6".into()), None)
         .unwrap();
     let open = OpenTrace::new(data);
-    check(&open, &r.sent, &secrets());
+    assert_eq!(check(&open, &r.sent, &secrets()), 1);
     let trace = open.trace();
     assert_eq!(trace.steps.len(), 1);
     assert!(trace.steps[0].sent.as_ref().unwrap().exact);

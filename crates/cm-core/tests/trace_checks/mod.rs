@@ -40,8 +40,8 @@ pub fn text(open: &OpenTrace, step: u32, piece: u32) -> String {
 
 /// Runs every check. `sent` lists the requests the record holds, found by their time; a step
 /// whose time is not in it is checked for everything but its texts. `secrets` are the values of
-/// the identity fields the record holds.
-pub fn check(open: &OpenTrace, sent: &[Sent], secrets: &[String]) {
+/// the identity fields the record holds. Returns how many steps had their texts checked.
+pub fn check(open: &OpenTrace, sent: &[Sent], secrets: &[String]) -> usize {
     let trace = open.trace();
     let json = serde_json::to_string(trace).unwrap();
     for secret in secrets {
@@ -51,6 +51,7 @@ pub fn check(open: &OpenTrace, sent: &[Sent], secrets: &[String]) {
         );
     }
     let mut previous: Option<u32> = None;
+    let mut texts = 0;
     for (i, step) in trace.steps.iter().enumerate() {
         let i = i as u32;
         let pieces = open.step_pieces(i).expect("every step answers");
@@ -88,8 +89,10 @@ pub fn check(open: &OpenTrace, sent: &[Sent], secrets: &[String]) {
         assert_eq!(by_kind, tokens, "step {i}: by_kind adds up to the pieces");
         if let Some(expected) = sent.iter().find(|s| s.at == step.at) {
             check_texts(open, i, &pieces, expected);
+            texts += 1;
         }
     }
+    texts
 }
 
 fn check_texts(open: &OpenTrace, step: u32, pieces: &[TracePiece], expected: &Sent) {
