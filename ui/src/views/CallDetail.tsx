@@ -12,7 +12,7 @@ import { useI18n } from "../i18n";
 import * as fmt from "../lib/format";
 import { exact } from "../lib/prefix";
 import { NO_SESSION, type Route } from "../lib/route";
-import { cacheLoss, growth, KINDS, kindColor, parsePick, pickText, placeOf, promptOf, SHARED_HATCH, type Picked } from "../lib/trace";
+import { cacheLoss, fittedOf, growth, KINDS, kindColor, parsePick, pickText, placeOf, promptOf, SHARED_HATCH, type Picked } from "../lib/trace";
 import { CACHE_FILL } from "./SessionChart";
 import { LossNote } from "./LossNote";
 import { useTraceKey } from "./SessionsView";
@@ -147,6 +147,7 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
   const [kind, setKind] = useState<PieceKind | "">("");
   const [onlyFresh, setOnlyFresh] = useState(false);
   const shared = sent.shared;
+  const fitted = fittedOf(sent);
   const present = useMemo(() => KINDS.filter((k) => pieces.some((p) => p.kind === k)), [pieces]);
   const rows = pieces.map((piece, i) => ({ piece, i })).filter(({ piece, i }) => (kind === "" || piece.kind === kind) && (!onlyFresh || i >= shared));
   const select = useCallback((i: number) => go({ pc: pickText("sent", i) }), [go]);
@@ -166,10 +167,10 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
 
   return (
     <>
-      <Strip pieces={pieces} sharedCount={shared} marks={sent.marks} open={open} select={select} present={present} />
+      <Strip fitted={fittedOf(sent)} pieces={pieces} sharedCount={shared} marks={sent.marks} open={open} select={select} present={present} />
       <section aria-label={t.sessions.call.piecesTitle}>
         <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <h3 className="text-[12px] font-semibold"><Badge tone="warn">{t.sessions.tagEstimate}</Badge> {t.sessions.call.piecesTitle}</h3>
+          <h3 className="text-[12px] font-semibold"><Badge tone="warn">{fitted ? t.sessions.tagFitted : t.sessions.tagEstimate}</Badge> {t.sessions.call.piecesTitle}</h3>
           <label className="flex items-center gap-1 text-[12px]">
             <span className="text-muted">{t.sessions.call.kindFilter}</span>
             <select data-testid="kind-filter" value={kind} onChange={(e) => setKind(e.target.value as PieceKind | "")} className="rounded border border-line bg-bg px-1 py-0.5">
@@ -207,13 +208,14 @@ function Request({ step, pieces, index, keyOf, trace, picked, go }: { step: Step
   );
 }
 
-function Strip({ pieces, sharedCount, marks, open, select, present }: { pieces: TracePiece[]; sharedCount: number; marks: number[]; open: number | null; select: (i: number) => void; present: PieceKind[] }) {
+function Strip({ fitted, pieces, sharedCount, marks, open, select, present }: { fitted: boolean; pieces: TracePiece[]; sharedCount: number; marks: number[]; open: number | null; select: (i: number) => void; present: PieceKind[] }) {
   const { t } = useI18n();
   const total = Math.max(1, pieces.reduce((n, p) => n + p.tokens, 0));
   const markSet = new Set(marks);
   return (
     <section aria-label={t.sessions.call.stripTitle} className="pt-2">
-      <h3 className="text-[12px] font-semibold"><Badge tone="warn">{t.sessions.tagEstimate}</Badge> {t.sessions.call.stripTitle}</h3>
+      <h3 className="text-[12px] font-semibold"><Badge tone="warn">{fitted ? t.sessions.tagFitted : t.sessions.tagEstimate}</Badge> {t.sessions.call.stripTitle}</h3>
+      <p data-testid="estimate-note" data-fitted={fitted} className="text-[11px] text-muted">{fitted ? t.sessions.call.fittedNote : t.sessions.call.plainNote}</p>
       <p className="mb-1 text-[11px] text-muted">{t.sessions.call.stripNote(exact(total))}</p>
       <div className="overflow-x-auto pb-1">
         <div data-testid="strip" onClick={(e) => { const at = (e.target as HTMLElement).closest("[data-index]")?.getAttribute("data-index"); if (at) select(Number(at)); }} className="relative flex h-7 bg-sunken" style={{ minWidth: "100%", width: Math.max(0, pieces.length * 3) }}>

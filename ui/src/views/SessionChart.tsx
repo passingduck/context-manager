@@ -251,7 +251,7 @@ function Tooltip({ tip, step, index, trace, mode }: { tip: Tip; step: Step; inde
   );
 }
 
-export function ChartLegend({ mode }: { mode: ChartMode }) {
+export function ChartLegend({ mode, fitted }: { mode: ChartMode; fitted: boolean }) {
   const { t } = useI18n();
   const c = t.sessions.chart;
   const swatch = (fill: string) => <span aria-hidden className="inline-block h-2.5 w-5" style={{ background: fill }} />;
@@ -269,7 +269,7 @@ export function ChartLegend({ mode }: { mode: ChartMode }) {
         </>
       ) : (
         <>
-          <li className="w-full font-semibold text-warn">{c.estimateNote}</li>
+          <li className="w-full font-semibold text-warn">{fitted ? c.fittedNote : c.estimateNote}</li>
           {KINDS.map((kind) => (
             <li key={kind} className="flex items-center gap-1">
               {swatch(kindColor(kind))}

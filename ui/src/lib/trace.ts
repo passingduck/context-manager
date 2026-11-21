@@ -1,5 +1,6 @@
 import type { PieceKind } from "../gen/PieceKind";
 import type { PiecePlace } from "../gen/PiecePlace";
+import type { Sent } from "../gen/Sent";
 import type { Step } from "../gen/Step";
 import type { Trace } from "../gen/Trace";
 import type { Usage } from "../gen/Usage";
@@ -80,6 +81,15 @@ export function growth(trace: Trace, index: number): number | null {
   const prev = trace.steps[index - 1]?.usage;
   return cur && prev ? promptOf(cur) - promptOf(prev) : null;
 }
+
+/** Whether the reader fitted the piece sizes of a request to the prompt size the API reported. */
+export const fittedOf = (sent: Sent): boolean => (sent as Sent & { fitted?: boolean }).fitted === true;
+
+/** True when every call that has a request has fitted sizes, so the kind mode shares the scale of the real chart. */
+export const allFitted = (trace: Trace): boolean => {
+  const sent = trace.steps.flatMap((s) => (s.sent ? [s.sent] : []));
+  return sent.length > 0 && sent.every(fittedOf);
+};
 
 /** The estimated size of a request: its tokens by kind, summed. */
 export const estimateOf = (step: Step): number => (step.sent ? step.sent.byKind.reduce((n, k) => n + k.shared + k.fresh, 0) : 0);

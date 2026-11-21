@@ -64,7 +64,7 @@ export const useHistory = (cwd: AbsPath) =>
 export const useChange = (id: string | null) =>
   useQuery({ queryKey: ["change", id], queryFn: () => call("change", { id: id as string }), enabled: id !== null });
 
-export const useTraces = (cwd: AbsPath) => useQuery({ queryKey: ["traces", cwd], queryFn: () => call("traces", { cwd }) });
+export const useTraces = (cwd: AbsPath) => useQuery({ queryKey: ["traces", cwd], queryFn: () => call("traces", { cwd }), refetchInterval: 15_000 });
 
 export const useTrace = (cwd: AbsPath, key: TraceKey | null) =>
   useQuery({ queryKey: ["trace", cwd, key], queryFn: () => call("trace", { cwd, key: key as TraceKey }), enabled: key !== null });

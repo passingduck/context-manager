@@ -12,7 +12,7 @@ import { say } from "../i18n/types";
 import * as fmt from "../lib/format";
 import { exact } from "../lib/prefix";
 import { NO_SESSION, type Route } from "../lib/route";
-import { cacheLoss, totals } from "../lib/trace";
+import { allFitted, cacheLoss, totals } from "../lib/trace";
 import { ChartLegend, SessionChart } from "./SessionChart";
 
 type Go = (patch: Partial<Route>, replace?: boolean) => void;
@@ -90,13 +90,23 @@ function SessionBody({ route, go }: { route: Route; go: Go }) {
   }, [trace, route.call, go]);
 
   const inPart = route.pt !== "";
+  const listed = useTraces(project.cwd);
+  const info = listed.data?.find((i) => i.agent === key.agent && i.id === key.id);
+  // The record of a running session keeps growing, and the trace the view holds does not.
+  const grew = !inPart && trace !== undefined && info !== undefined && info.bytes > trace.read;
+  const refresh = () => void Promise.all([query.refetch(), listed.refetch()]);
   const back = () => (inPart ? go({ pt: "", call: 0, pc: "" }) : go(NO_SESSION));
   return (
     <>
-      <PaneTitle right={<Button data-testid="sessions-back" onClick={back}>{inPart ? t.sessions.backToSession : t.sessions.backToList}</Button>}>
+      <PaneTitle right={<><Button data-testid="sessions-refresh" onClick={refresh}>{t.sessions.refresh.button}</Button><Button data-testid="sessions-back" onClick={back}>{inPart ? t.sessions.backToSession : t.sessions.backToList}</Button></>}>
         {inPart ? t.sessions.subagentTitle(trace?.parts.find((p) => p.part === route.pt)?.label ?? null) : (trace?.info.title ?? t.sessions.untitled)}
       </PaneTitle>
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {grew && (
+          <p data-testid="session-grew" role="status" className="border-b border-line bg-info-bg px-3 py-1 text-info">
+            {t.sessions.refresh.grew} {t.sessions.refresh.hint}
+          </p>
+        )}
         {query.isPending && <Loading />}
         {query.isError && <ErrorNote error={query.error} onRetry={() => void client.invalidateQueries({ queryKey: ["trace", project.cwd, key] })} />}
         {trace && <TraceBody trace={trace} route={route} go={go} />}
@@ -124,6 +134,7 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
       </>
     );
   }
+  const fitted = allFitted(trace);
   const lostAt = trace.steps.flatMap((_, i) => (cacheLoss(trace, i) ? [i] : []));
   const lostCount = lostAt.length;
   const nextLost = () => select(lostAt.find((i) => selected === null || i > selected) ?? lostAt[0]!);
@@ -140,8 +151,8 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
       <section aria-label={t.sessions.chart.label}>
         <div className="mb-1 flex items-center justify-between gap-2">
           <p className="text-[12px] font-semibold">
-            <Badge tone={route.cm === "cache" ? "info" : "warn"}>{route.cm === "cache" ? t.sessions.tagReal : t.sessions.tagEstimate}</Badge>{" "}
-            {route.cm === "cache" ? t.sessions.chart.axisReal : t.sessions.chart.axisEstimate}
+            <Badge tone={route.cm === "cache" ? "info" : "warn"}>{route.cm === "cache" ? t.sessions.tagReal : fitted ? t.sessions.tagFitted : t.sessions.tagEstimate}</Badge>{" "}
+            {route.cm === "cache" ? t.sessions.chart.axisReal : fitted ? t.sessions.chart.axisFitted : t.sessions.chart.axisEstimate}
             {lostCount > 0 && (
               <span className="ml-2">
                 <button type="button" data-testid="lost-next" title={t.sessions.lost.next} onClick={nextLost} className="cursor-pointer rounded hover:underline">
@@ -160,7 +171,7 @@ function TraceBody({ trace, route, go }: { trace: Trace; route: Route; go: Go })
         </div>
         <SessionChart trace={trace} mode={route.cm} selected={selected} onSelect={select} />
         <div className="mt-1.5">
-          <ChartLegend mode={route.cm} />
+          <ChartLegend mode={route.cm} fitted={fitted} />
         </div>
       </section>
 

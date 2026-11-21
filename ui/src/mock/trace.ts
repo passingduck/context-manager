@@ -13,6 +13,7 @@ import { CWD } from "./texts";
 const AGENT = "claude";
 const ID = "0f8e1c52-4f6e-4e0a-9d3e-0c5a2b7a9d11";
 const PART = "a7c1";
+const READ = 420_000;
 const START = Date.parse("2026-11-20T09:00:00Z");
 
 /** A piece with the text it stands for. Two pieces are equal when their signatures are. */
@@ -63,7 +64,7 @@ function stepOf(i: number, part: boolean, before: Spec[] | null): { step: Step; 
     at: new Date(START + (part ? 40_000 : 0) + i * 45_000 + (i >= 8 ? 600_000 : 0)).toISOString(),
     model: "mock-model-1",
     usage: noUsage ? null : { input: Math.max(40, tokens - sharedTokens - 500), cacheRead: sharedTokens, cacheWrite: Math.min(500, tokens - sharedTokens), output: 150 + i * 20, thinking: null },
-    sent: { exact: i !== 2, pieces: specs.length, shared, byKind: [...kinds.values()], marks: [1, specs.length - 1] },
+    sent: { exact: i !== 2, pieces: specs.length, shared, byKind: [...kinds.values()], marks: [1, specs.length - 1], fitted: part || i !== 2 } as Step["sent"],
     reply: [
       { kind: "modelText", label: null, bytes: 320, tokens: 80 },
       { kind: "toolCall", label: "Read", bytes: 160, tokens: 40 },
@@ -95,7 +96,7 @@ function build(part: boolean): { trace: Trace; specs: Spec[][] } {
     .slice(0, 30);
   const trace: Trace = {
     info: info(part),
-    read: 4096,
+    read: READ,
     steps,
     boundaries: part ? [] : [{ before: 8, preTokens: 9100, postTokens: 2400 }],
     parts: part ? [] : [{ part: PART, label: "explorer", description: "Look for the cache code", bytes: 18_400 }],
@@ -116,13 +117,13 @@ export const traceOf = (req: TraceReq): Trace | null => (req.key.id === ID ? bui
 export function stepPieces(req: TraceReq & { read: number; step: number }): StepPieces {
   const built = req.key.id === ID ? build(req.key.part === PART) : null;
   const specs = built?.specs[req.step];
-  return req.read !== 4096 || !specs ? { kind: "stale" } : { kind: "current", pieces: specs.map((s) => s.piece) };
+  return req.read !== READ || !specs ? { kind: "stale" } : { kind: "current", pieces: specs.map((s) => s.piece) };
 }
 
 export function pieceText(req: TraceReq & { read: number; step: number; piece: { kind: "sent" | "reply"; piece: number } }): PieceText {
   const built = req.key.id === ID ? build(req.key.part === PART) : null;
   const spec = req.piece.kind === "sent" ? built?.specs[req.step]?.[req.piece.piece] : undefined;
-  if (req.read !== 4096 || !spec) return { kind: "stale" };
+  if (req.read !== READ || !spec) return { kind: "stale" };
   const text = spec.text();
   return { kind: "current", text, bytes: text.length, cut: false };
 }
