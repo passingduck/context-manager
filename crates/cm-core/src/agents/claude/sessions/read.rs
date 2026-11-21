@@ -41,11 +41,15 @@ const COMMAND_TAGS: [&str; 4] = [
     "<local-command-stderr>",
 ];
 
-/// Reads the record at `info.file`.
-pub(super) fn read(fs: &ProbeFs, info: TraceInfo) -> Result<TraceData, ApiError> {
+/// Reads the record at `info.file`, or only its first `prefix` bytes.
+pub(super) fn read(
+    fs: &ProbeFs,
+    info: TraceInfo,
+    prefix: Option<u64>,
+) -> Result<TraceData, ApiError> {
     let mut reader = Reader::default();
     let mut line_no = 0usize;
-    let lines = fs.read_lines(&info.file, &mut |bytes, ended| {
+    let lines = fs.read_lines(&info.file, prefix, &mut |bytes, ended| {
         reader.line(line_no, bytes, ended);
         line_no += 1;
     })?;
@@ -627,14 +631,18 @@ impl Reader {
                 };
                 (vec![Span::new(kind, text).labelled(label)], kind)
             }
-            "thinking" => {
+            // The record keeps a thinking block's signature, and its text only when the request
+            // asked to display it (session spec, section 6).
+            "thinking" | "redacted_thinking" => {
                 let text = str_at(block, "thinking").unwrap_or("");
+                let opaque = str_at(block, "signature")
+                    .or_else(|| str_at(block, "data"))
+                    .map_or(0, str::len);
                 (
-                    vec![Span::new(PieceKind::Thinking, text)],
+                    vec![Span::new(PieceKind::Thinking, text).with_opaque(opaque as u64)],
                     PieceKind::Thinking,
                 )
             }
-            "redacted_thinking" => (Vec::new(), PieceKind::Thinking),
             _ if is_tool_call(block) => {
                 let input = block.get("input").map_or_else(String::new, json_text);
                 let name = str_at(block, "name").map(str::to_owned);

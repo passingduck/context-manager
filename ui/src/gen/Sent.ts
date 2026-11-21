@@ -12,7 +12,12 @@ exact: boolean, pieces: number,
  */
 shared: number, 
 /**
- * Estimated tokens per kind.
+ * The pieces' `tokens` were fitted to the usage the API reported, and add up to the
+ * prompt size `input + cache_read + cache_write` (design section 14).
+ */
+fitted: boolean, 
+/**
+ * Estimated tokens per kind, fitted when `fitted`.
  */
 byKind: Array<KindTotal>, 
 /**

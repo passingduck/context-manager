@@ -154,12 +154,14 @@ pub trait Agent: Sync {
         Vec::new()
     }
     /// One session of [`Agent::traces`], or one subagent of it. The id is matched against the
-    /// agent's own listing, never joined into a path.
+    /// agent's own listing, never joined into a path. With `prefix`, the trace is built from the
+    /// record's first `prefix` bytes, as though the record ended there (design section 14).
     fn trace(
         &self,
         _cx: &ScanCx,
         _id: &TraceId,
         _part: Option<&str>,
+        _prefix: Option<u64>,
     ) -> Result<TraceData, ApiError> {
         Err(ApiError::NotFound)
     }

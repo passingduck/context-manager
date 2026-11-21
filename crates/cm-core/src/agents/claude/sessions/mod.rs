@@ -41,13 +41,14 @@ pub(super) fn list(cx: &ScanCx, agent: &AgentId) -> Vec<TraceInfo> {
         .collect()
 }
 
-/// One session of [`list`], or one subagent of it. `id` and `part` are compared with the names
-/// the listings return and never joined into a path.
+/// One session of [`list`], or one subagent of it, whole or only its first `prefix` bytes. `id`
+/// and `part` are compared with the names the listings return and never joined into a path.
 pub(super) fn open(
     cx: &ScanCx,
     agent: &AgentId,
     id: &TraceId,
     part: Option<&str>,
+    prefix: Option<u64>,
 ) -> Result<TraceData, ApiError> {
     let cwd = real_cwd(cx);
     let (id, file) = records(cx, &cwd)
@@ -63,7 +64,7 @@ pub(super) fn open(
     let parts = parts(cx.fs, &session_dir);
     let Some(part) = part else {
         info.bytes = cx.fs.stat(&info.file)?.len;
-        let mut data = read::read(cx.fs, info)?;
+        let mut data = read::read(cx.fs, info, prefix)?;
         data.parts = parts.into_iter().map(|(part, _)| part).collect();
         return Ok(data);
     };
@@ -74,7 +75,7 @@ pub(super) fn open(
     info.bytes = cx.fs.stat(&file)?.len;
     info.file = file;
     info.title = found.description.or(found.label);
-    read::read(cx.fs, info)
+    read::read(cx.fs, info, prefix)
 }
 
 /// One record read whole, without the session list.
@@ -94,7 +95,7 @@ pub(super) fn read_file(
         last: None,
         cwd: None,
     };
-    read::read(fs, info)
+    read::read(fs, info, None)
 }
 
 /// The working directory as Claude Code names it: with its links resolved (spec section 1.2).

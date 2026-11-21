@@ -65,13 +65,15 @@ impl ProbeFs {
     /// Calls `each` with every line of a regular file, without its newline, in order, and with
     /// whether a newline ended it. Only the last line can lack one. It reads at most
     /// [`LineLimits::record`] bytes and drops the line the limit cuts. It skips a line over
-    /// [`LineLimits::line`] without holding it.
+    /// [`LineLimits::line`] without holding it. With `prefix`, it reads the file as though it
+    /// ended after that many bytes.
     pub fn read_lines(
         &self,
         path: &AbsPath,
+        prefix: Option<u64>,
         each: &mut dyn FnMut(&[u8], bool),
     ) -> Cached<LinesRead> {
-        let result = stream_lines(path, self.line_limits, each);
+        let result = stream_lines(path, self.line_limits, prefix, each);
         self.note_probe(path, result.is_ok());
         result
     }
@@ -108,10 +110,12 @@ fn open_regular(path: &AbsPath) -> Cached<fs::File> {
 fn stream_lines(
     path: &AbsPath,
     limits: LineLimits,
+    prefix: Option<u64>,
     each: &mut dyn FnMut(&[u8], bool),
 ) -> Cached<LinesRead> {
     let file = open_regular(path)?;
-    let mut reader = io::BufReader::with_capacity(BUFFER, file.take(limits.record));
+    let bound = prefix.map_or(limits.record, |prefix| prefix.min(limits.record));
+    let mut reader = io::BufReader::with_capacity(BUFFER, file.take(bound));
     let mut out = LinesRead::default();
     let mut line: Vec<u8> = Vec::new();
     let mut skipping = false;
@@ -177,7 +181,7 @@ mod tests {
     fn lines(fs: &ProbeFs, path: &AbsPath) -> (Vec<(String, bool)>, LinesRead) {
         let mut seen = Vec::new();
         let read = fs
-            .read_lines(path, &mut |line, ended| {
+            .read_lines(path, None, &mut |line, ended| {
                 seen.push((String::from_utf8(line.to_vec()).unwrap(), ended))
             })
             .unwrap();
@@ -226,6 +230,25 @@ mod tests {
     }
 
     #[test]
+    fn a_prefix_reads_as_though_the_file_ended_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = file(&dir, b"aaaa\nbbbb\ncccc\n");
+        let fs = ProbeFs::new();
+        let mut seen = Vec::new();
+        let read = fs
+            .read_lines(&path, Some(7), &mut |line, ended| {
+                seen.push((String::from_utf8(line.to_vec()).unwrap(), ended))
+            })
+            .unwrap();
+        assert_eq!(
+            seen,
+            [("aaaa".to_string(), true), ("bb".to_string(), false)]
+        );
+        assert_eq!(read.bytes, 7);
+        assert_eq!(read.stopped_at_limit, None);
+    }
+
+    #[test]
     fn head_and_tail_read_at_most_their_bound() {
         let dir = tempfile::tempdir().unwrap();
         let path = file(&dir, b"0123456789");
@@ -248,7 +271,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = AbsPath::parse(dir.path().to_str().unwrap()).unwrap();
         let err = ProbeFs::new()
-            .read_lines(&path, &mut |_, _| {})
+            .read_lines(&path, None, &mut |_, _| {})
             .unwrap_err();
         assert_eq!(err.kind, super::super::ProbeErrorKind::NotRegular);
     }

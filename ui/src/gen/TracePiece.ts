@@ -18,7 +18,8 @@ label: string | null,
  */
 file: AbsPath | null, bytes: number, 
 /**
- * o200k estimate of this piece alone.
+ * Estimate of this piece alone: fitted to the usage when the step's `Sent.fitted`,
+ * else the o200k count.
  */
 tokens: number, 
 /**

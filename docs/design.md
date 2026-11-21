@@ -641,7 +641,8 @@ pub struct TraceKey { pub agent: AgentId, pub id: TraceId, pub part: Option<Stri
 
 pub struct Trace {
     pub info: TraceInfo,
-    pub read: u64,                   // bytes of the record this trace was built from. A detail request names it.
+    pub read: u64,                   // bytes of the record this trace was built from. A detail request names it,
+                                     // and gets the answer for the trace of the record's first `read` bytes.
     pub steps: Vec<Step>,            // one per call of the model, in the order they were made
     pub boundaries: Vec<Boundary>,
     pub parts: Vec<PartInfo>,        // subagents recorded under the session
@@ -664,6 +665,7 @@ pub struct Sent {
     pub exact: bool,                 // the rebuilt request matches the digest the agent recorded for it
     pub pieces: u32,
     pub shared: u32,                 // how many leading pieces equal the previous step's request, piece for piece
+    pub fitted: bool,                // the pieces' tokens were fitted to the usage and add up to the prompt size
     pub by_kind: Vec<KindTotal>,     // estimated tokens per kind
     pub marks: Vec<u32>,             // indexes of the pieces that end at a cache mark
 }
@@ -689,7 +691,7 @@ pub struct Piece {
     pub label: Option<String>,       // a short name from the record: the tool, the skill, the hook event
     pub file: Option<AbsPath>,       // the file the piece came from, when the record names it
     pub bytes: u64,
-    pub tokens: u32,                 // o200k estimate of this piece alone
+    pub tokens: u32,                 // estimate of this piece alone: fitted when the step's `sent.fitted`, else o200k
     pub head: String,                // its first 160 characters
 }
 pub enum PiecePlace { System { block: u32 }, Tool { index: u32 }, Message { message: u32, role: Role, block: u32 } }
@@ -707,7 +709,7 @@ pub enum PieceText { Current { text: String, bytes: u64, cut: bool }, Stale }
 
 ### The rules the types carry
 
-- **Real and estimated numbers stay apart.** `Usage` holds only what the agent recorded from the API. `tokens` on a piece is always the o200k estimate. The difference between the prompt totals of two consecutive steps is real, so the UI can say how much a step added without an estimate.
+- **Real and estimated numbers stay apart.** `Usage` holds only what the agent recorded from the API. `tokens` on a piece, `KindTotal` and `TopPiece.tokens` are estimates, and `Sent.fitted` says which kind. A raw estimate is the o200k count of the piece's text. A fitted estimate is a raw estimate scaled so that the step's pieces add up to the prompt size the API reported (`input + cache_read + cache_write`). When a request extends an earlier fitted request, the pieces it adds cost the difference of the two prompt sizes, which is real. Among them, the earlier reply's thinking pieces share that reply's thinking tokens by the size of what the record holds for each (the text, else the signature), its other pieces share the rest of its output tokens by their raw counts, and the new pieces share what is left by their raw counts. A step that extends no earlier fitted request (the first of a chain, after a compaction, or one that changed its own past) fits its fresh pieces by one factor to its prompt size minus what its shared pieces cost. When the arithmetic does not close, one factor fits every fresh piece. A step without usage, or whose shared pieces already cost more than its prompt, keeps the raw counts and is not fitted. The difference between the prompt totals of two consecutive steps is real, so the UI can say how much a step added without an estimate.
 - **A piece is a span of text with one kind.** The pieces of a message joined give the message's text, as the pieces of a `RenderedBlock` give its text. Separators and wrappers are `Frame`.
 - **A kind comes from the record, not from guessing at prose.** An adapter labels a piece from the record type, the content block type, the flags of the conversation record it came from, or the attachment whose rendered text it holds. A piece that nothing explains is `Other`.
 - **`shared` is what a prompt cache can reuse.** A cache reads a prefix. A request that shares fewer pieces with the previous request than that request had has changed its own past, and `shared` is the index of the first piece that differs.
@@ -717,13 +719,15 @@ pub enum PieceText { Current { text: String, bytes: u64, cut: bool }, Stale }
 
 `Agent::traces` and `Agent::trace` have empty defaults. An agent without a reader returns nothing, so the UI needs no flag and no agent name.
 
-`trace` returns a `TraceData`: every distinct message once, as its pieces, and every step as references to them. `trace.rs` projects that into `Trace`, `StepPieces` and `PieceText`. It counts tokens once per distinct message and computes `shared`, `by_kind` and `top`. No adapter builds those.
+`trace` returns a `TraceData`: every distinct message once, as its pieces, and every step as references to them. `trace.rs` projects that into `Trace`, `StepPieces` and `PieceText`. It counts tokens once per distinct message, fits the counts of each step to its usage, and computes `shared`, `by_kind` and `top`. No adapter builds those.
 
 A record is far larger than the 8 MiB that a scan may read from one file. `ProbeFs` gains a bounded line reader (at most 512 MiB per record and 64 MiB per line) and bounded reads of the head and the tail of a file. A record over the limit yields the steps read so far and `RecordTooLarge`. A last line that does not parse belongs to a record that is still being written, and is ignored.
 
 A session id in a request is matched against the adapter's own listing. A string from the client is never joined into a path.
 
-The host keeps the two traces it opened last in memory, keyed by file, length and modification time. That is a memo of a pure function of the file, checked on every use. It is the one exception to "the host keeps no state" in section 2, and it is not state of record.
+A record only grows by appending, so the trace of its first `read` bytes stays true while the session goes on. `trace` builds from the record as it is now and returns `read`. `trace_step` and `trace_piece` answer for the trace of the first `read` bytes, also when the record has grown since. They answer `Stale` only when the record is now shorter than `read`, or is gone. An index that does not exist is `NotFound`.
+
+The host keeps the two traces it opened last in memory, keyed by the record and `read`. A detail request takes the trace from the memo when the memo holds that `read` and the record is still at least that long. When the memo does not hold it, the host reads the record's first `read` bytes again, as though the record ended there. `trace` takes the memo's trace when the record has the length and modification time the memo read it at, else it reads the whole record and the new trace replaces the older ones of the same record. The memo holds a pure function of a prefix of the file. It is the one exception to "the host keeps no state" in section 2, and it is not state of record.
 
 ### What the first version leaves out
 
@@ -822,7 +826,8 @@ Three candidates wrote this design independently against one grounding file: one
 - One-way unit: `Agent::write_warnings` carries every warning that belongs to a file, for all three agents, so a plain save gets it too: `AgentAlsoWrites` for the user Codex `config.toml`, Claude `settings.local.json`, Gemini's settings layers and the private memory index. A hook edit in the project `.codex/config.toml` no longer carries `AgentAlsoWrites`, because spec 7.2 says Codex rewrites that file only through migration. `TakesEffect` stays with the hook planners, because its text is about hooks. A plan that writes nothing carries no write warning, and `Planner::add_write_warnings` still drops a repeat, because a change that writes two of one agent's files would repeat an agent-level warning.
 - One-way unit: the Gemini scan lists the on-access context files by calling `jit_files` for every directory the walk entered, the same function `on_access` uses. `Candidate` gains `skip: Option<Skip>`, which an adapter sets when it finds a file and does not load it. Gemini sets `Skip::Untrusted` for every on-access file of an untrusted folder, and the simulator reports such a candidate as a skipped load without reading it, so the scan and the simulator agree and the file stays in the snapshot.
 - Trace reader unit: the `Piece` of section 14 is `TracePiece` in Rust and TypeScript, because `Piece` already names a run of a session-start block. `TraceData` stores each distinct content block, system block and tool definition once as its spans (`trace::Block`), and a message as the list of its blocks, so a request that sends a prefix of a reply shares that reply's blocks. `trace.rs` derives `NoRequests` and `Inexact` from the steps; the reader reports only `UnreadableLines` and `RecordTooLarge`.
-- Trace reader unit: the host memo is keyed by the request's `cwd` and `TraceKey` and holds the file the adapter's listing named. Every use compares that file's length and modification time with the ones the trace was read at, and reads it again when they differ.
+- Trace reader unit: the host memo is keyed by the request's `cwd`, `TraceKey` and `read`, and holds the file the adapter's listing named. `Agent::trace` takes `prefix: Option<u64>`, and `ProbeFs::read_lines` reads a file as though it ended after `prefix` bytes, so a detail request can rebuild the trace of a record's first `read` bytes.
 - Trace reader unit: Claude Code takes a session folder's key from the working directory in NFC form (session spec, section 1.2). The reader takes it from the path as the disk names it, because the crate has no Unicode normalization. It lists the folders whose names start with the first 200 characters of that key and confirms each record by its first `cwd`, so a directory whose name is stored decomposed lists no sessions.
 - Trace reader unit: the session list takes the first `cwd` from the first 4 MiB of a record and the titles and the last time from its first 4 MiB and last 64 KiB. A record with no `cwd` in that head is not listed. A title record that sits only in the middle of a long record is not seen.
+- Trace reader unit: a request is fitted against the latest of the last 8 steps with a request whose whole request it extends and whose sizes were fitted, not only the step before it, because a main thread interleaves side requests (a title, a summary) with its own chain. When none extends, the fresh pieces are those after the longest prefix shared with one of those steps. The earlier reply's pieces among the added ones are the pieces of the added messages of the model, and the split needs them to hold each kind as often as the reply does, because the agent may send a reply back rewritten (session spec, section 6). `trace::Span` gains `opaque`, the bytes the record holds for a span besides its text (a thinking block's signature), so thinking pieces can share their tokens. `ReplyPiece.tokens` stays the o200k count.
 - Trace reader unit: the trace of a subagent carries its session's `TraceInfo` with `file` and `bytes` of the subagent's record and `title` set to the subagent's description, else its type. It has no `parts`.

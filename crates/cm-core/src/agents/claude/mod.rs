@@ -76,8 +76,9 @@ impl Agent for Claude {
         cx: &ScanCx,
         id: &TraceId,
         part: Option<&str>,
+        prefix: Option<u64>,
     ) -> Result<crate::trace::TraceData, ApiError> {
-        sessions::open(cx, &self.id(), id, part)
+        sessions::open(cx, &self.id(), id, part, prefix)
     }
 
     /// Spec 6.1: the whole scanner.
