@@ -18,6 +18,7 @@ mod instructions;
 mod memory;
 mod plan;
 mod render;
+mod sessions;
 mod setup;
 mod slots;
 #[cfg(test)]
@@ -27,6 +28,16 @@ use instructions::ASSUMED_WINDOW_TOKENS;
 use setup::{SettingsKind, Setup};
 
 pub struct Claude;
+
+/// One record file read whole, without the session list: for the developer tool
+/// `examples/trace_stats.rs`. The operations read through [`Agent::trace`].
+#[doc(hidden)]
+pub fn read_record(
+    fs: &crate::probe_fs::ProbeFs,
+    file: &AbsPath,
+) -> Result<crate::trace::TraceData, ApiError> {
+    sessions::read_file(fs, &Claude.id(), file)
+}
 
 static RULES: OnceLock<Vec<RuleSpec>> = OnceLock::new();
 
@@ -52,6 +63,21 @@ impl Agent for Claude {
 
     fn hook_schema(&self) -> &'static HookSchema {
         hooks::schema()
+    }
+
+    /// Session spec section 1.2 and section 12.
+    fn traces(&self, cx: &ScanCx) -> Vec<TraceInfo> {
+        sessions::list(cx, &self.id())
+    }
+
+    /// Session spec sections 3 to 11.
+    fn trace(
+        &self,
+        cx: &ScanCx,
+        id: &TraceId,
+        part: Option<&str>,
+    ) -> Result<crate::trace::TraceData, ApiError> {
+        sessions::open(cx, &self.id(), id, part)
     }
 
     /// Spec 6.1: the whole scanner.
