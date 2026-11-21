@@ -27,7 +27,7 @@ evidence = "docs/agents/claude-code.md section 4, Skills, skills hidden from the
 [[rule]]
 id = "claude.ext.hidden_override"
 en = "A skillOverrides entry in the settings sets this skill to user-invocable-only or off, so Claude Code leaves it out of the listing."
-ko = "설정의 skillOverrides 항목이 이 스킬을 user-invocable-only 또는 off로 정해 두었기 때문에 Claude Code가 목록에서 뺍니다."
+ko = "설정의 skillOverrides 항목이 이 스킬을 user-invocable-only 또는 off로 정해 두었습니다. 그래서 Claude Code가 이 스킬을 목록에서 뺍니다."
 evidence = "docs/agents/claude-code.md section 4, Skills, skills hidden from the listing (CONFIRMED)."
 
 [[rule]]
@@ -81,13 +81,13 @@ evidence = "docs/agents/claude-code.md section 3, Handler types and fields (CONF
 [[rule]]
 id = "claude.hook.plugin_variable_outside_plugin"
 en = "The command uses CLAUDE_PLUGIN_ROOT or CLAUDE_PLUGIN_DATA, which Claude Code resolves only in plugin hooks. In a settings file the hook fails, so this tool cannot run it."
-ko = "이 command는 CLAUDE_PLUGIN_ROOT 또는 CLAUDE_PLUGIN_DATA를 사용하는데, Claude Code는 이 변수를 플러그인 훅에서만 해석합니다. 설정 파일에서는 훅이 실패하므로 이 도구도 실행할 수 없습니다."
+ko = "이 command는 CLAUDE_PLUGIN_ROOT 또는 CLAUDE_PLUGIN_DATA를 사용합니다. Claude Code는 이 변수를 플러그인 훅에서만 해석합니다. 설정 파일에서는 훅이 실패하므로 이 도구도 실행할 수 없습니다."
 evidence = "docs/agents/claude-code.md section 3, Path placeholders and hook environment (CONFIRMED). What CLAUDE_PLUGIN_ROOT means in a skill outside a plugin is UNVERIFIED (H2)."
 
 [[rule]]
 id = "claude.hook.user_config_needs_exec_form"
 en = "The command uses a user_config placeholder. Claude Code substitutes it only in the exec form of a plugin hook, where args is set, and this tool does not hold the user's plugin options, so it cannot run the hook."
-ko = "이 command는 user_config 자리표시자를 사용합니다. Claude Code는 플러그인 훅의 실행 형식, 즉 args를 지정한 경우에만 이 값을 치환하고, 이 도구는 사용자의 플러그인 옵션을 가지고 있지 않으므로 훅을 실행할 수 없습니다."
+ko = "이 command는 user_config 자리표시자를 사용합니다. Claude Code는 플러그인 훅이 args를 지정한 실행 형식일 때만 이 값을 치환합니다. 이 도구에는 사용자의 플러그인 옵션이 없습니다. 그래서 이 도구는 이 훅을 실행할 수 없습니다."
 evidence = "docs/agents/claude-code.md section 3, Path placeholders and hook environment (CONFIRMED)."
 
 [[rule]]
