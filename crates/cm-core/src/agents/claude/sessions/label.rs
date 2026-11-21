@@ -140,13 +140,12 @@ fn unwrap_reminder(text: &str) -> Option<&str> {
     Some(inner)
 }
 
-/// The spans of one blob text block. `used` marks the sources a previous block of the same
-/// message already explained, so one record explains one place.
-pub(super) fn split(text: &str, sources: &[Source], used: &mut [bool]) -> Vec<Span> {
+/// The spans of one blob text block, and the indexes of the sources that explain a part of it.
+pub(super) fn split(text: &str, sources: &[&Source]) -> (Vec<Span>, Vec<usize>) {
     let mut found: Vec<(usize, usize, usize)> = sources
         .iter()
         .enumerate()
-        .filter(|(i, s)| !used[*i] && !s.text.is_empty())
+        .filter(|(_, s)| !s.text.is_empty())
         .filter_map(|(i, s)| text.find(&s.text).map(|at| (at, at + s.text.len(), i)))
         .collect();
     // The longest text wins a place, so a short prompt quoted inside a long attachment does not
@@ -164,14 +163,15 @@ pub(super) fn split(text: &str, sources: &[Source], used: &mut [bool]) -> Vec<Sp
     chosen.sort_unstable();
     let mut spans = Vec::new();
     let mut at = 0;
+    let mut used = Vec::with_capacity(chosen.len());
     for (start, end, i) in chosen {
-        used[i] = true;
+        used.push(i);
         gap(&mut spans, &text[at..start]);
-        spans.extend(source_spans(&sources[i]));
+        spans.extend(source_spans(sources[i]));
         at = end;
     }
     gap(&mut spans, &text[at..]);
-    merge_frames(spans)
+    (merge_frames(spans), used)
 }
 
 /// Adjacent frames become one piece.
@@ -287,9 +287,9 @@ mod tests {
         let date = Source::new("Today is Monday.".into(), PieceKind::Environment, None);
         let skills = Source::new("- a: does a".into(), PieceKind::Catalog, None);
         let text = "# Environment\ncwd\n\n- a: does a\n\nToday is Monday.";
-        let sources = [env, date, skills];
-        let mut used = [false; 3];
-        let spans = split(text, &sources, &mut used);
+        let sources = [&env, &date, &skills];
+        let (spans, mut used) = split(text, &sources);
+        used.sort_unstable();
         assert_eq!(joined(&spans), text);
         let kinds: Vec<_> = spans.iter().map(|s| s.kind).collect();
         assert_eq!(
@@ -302,7 +302,7 @@ mod tests {
                 PieceKind::Environment
             ]
         );
-        assert_eq!(used, [true; 3]);
+        assert_eq!(used, [0, 1, 2]);
     }
 
     #[test]
@@ -323,7 +323,7 @@ mod tests {
             parts: vec![file("be brief", "/p/CLAUDE.md")],
         };
         let block = format!("{rendered}\n");
-        let spans = split(&block, &[source], &mut [false]);
+        let (spans, _) = split(&block, &[&source]);
         assert_eq!(joined(&spans), block);
         let pieces: Vec<_> = spans
             .iter()
@@ -344,7 +344,7 @@ mod tests {
         let prompt = Source::new("hello".into(), PieceKind::UserText, None);
         let quote = Source::new("they said hello twice".into(), PieceKind::Reminder, None);
         let text = "they said hello twice; odd";
-        let spans = split(text, &[prompt, quote], &mut [false, false]);
+        let (spans, _) = split(text, &[&prompt, &quote]);
         let kinds: Vec<_> = spans.iter().map(|s| (s.kind, s.text.as_str())).collect();
         assert_eq!(
             kinds,

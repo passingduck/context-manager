@@ -170,14 +170,6 @@ struct Reply {
     blocks: Vec<BlockId>,
 }
 
-/// How the text blocks of one message get their kind.
-enum TextAs<'a> {
-    /// A conversation record says what its text is.
-    Record(PieceKind, Option<String>),
-    /// A blob joins the texts of several records; split it where they occur.
-    Split(&'a [Source], &'a mut [bool]),
-}
-
 #[derive(Default)]
 struct Reader {
     blocks: Blocks,
@@ -195,9 +187,13 @@ struct Reader {
     tool_names: HashMap<String, String>,
     /// `tool_use` id to the structured result recorded beside its `tool_result`.
     tool_results: HashMap<String, ToolUseResult>,
-    /// What the records since the last request say was sent, by the role it was sent as.
-    pending_user: Vec<Source>,
-    pending_system: Vec<Source>,
+    /// Every text a record says was sent, in record order, with the requests read before it.
+    sources: Vec<Source>,
+    source_turns: Vec<u32>,
+    /// The text blocks of blobs, with the requests read before each. Their spans come from the
+    /// sources once the whole record is read (see [`Reader::label_blobs`]).
+    deferred: Vec<(BlockId, u32)>,
+    requests_read: u32,
     boundaries: Vec<(usize, Boundary)>,
     unreadable: u32,
 }
@@ -268,20 +264,16 @@ impl Reader {
         let mut canons = Vec::with_capacity(blocks.len());
         for block in &blocks {
             let canon = canon::text(block, true);
-            let as_text = TextAs::Record(text_as.0, text_as.1.clone());
-            ids.push(self.intern(Origin::Record, block, &canon, role, as_text));
+            ids.push(self.intern(Origin::Record, block, &canon, role, &text_as));
             canons.push(canon);
         }
         if role == "user" && ty == "user" {
-            for block in &blocks {
-                if let Some(text) = text_of(block) {
-                    self.pending_user.push(Source::new(
-                        text.to_owned(),
-                        text_as.0,
-                        text_as.1.clone(),
-                    ));
-                }
-            }
+            let sources: Vec<Source> = blocks
+                .iter()
+                .filter_map(text_of)
+                .map(|text| Source::new(text.to_owned(), text_as.0, text_as.1.clone()))
+                .collect();
+            self.add_sources(sources);
         }
 
         // 4.2: a run continues for the same role, and for `assistant` the same message id.
@@ -424,11 +416,14 @@ impl Reader {
                 .map(|text| Source::new(text, PieceKind::Other, None))
                 .collect(),
         };
-        if system {
-            self.pending_system.extend(sources);
-        } else {
-            self.pending_user.extend(sources);
-        }
+        self.add_sources(sources);
+    }
+
+    fn add_sources(&mut self, sources: Vec<Source>) {
+        let turn = self.requests_read;
+        self.source_turns
+            .extend(std::iter::repeat_n(turn, sources.len()));
+        self.sources.extend(sources);
     }
 
     /// Section 8: a compaction boundary.
@@ -537,22 +532,27 @@ impl Reader {
             }
         }
         after.push(b'}');
-        let sources = if role == "system" {
-            std::mem::take(&mut self.pending_system)
-        } else {
-            std::mem::take(&mut self.pending_user)
-        };
-        let mut used = vec![false; sources.len()];
         let mut ids = Vec::new();
         for block in as_blocks(content) {
             let canon = canon::text(&block, true);
-            let as_text = TextAs::Split(&sources, &mut used);
-            ids.push(self.intern(Origin::Blob, &block, &canon, &role, as_text));
-        }
-        if role == "system" {
-            self.pending_system = sources;
-        } else {
-            self.pending_user = sources;
+            let text = text_of(&block).filter(|_| role != "assistant");
+            let Some(text) = text else {
+                let other = (PieceKind::Other, None);
+                ids.push(self.intern(Origin::Blob, &block, &canon, &role, &other));
+                continue;
+            };
+            let hash = canon::sha256(&canon);
+            let id = match self.blocks.find(Origin::Blob, &hash) {
+                Some(id) => id,
+                None => {
+                    let whole =
+                        Block::new(vec![Span::new(PieceKind::Other, text)], PieceKind::Other);
+                    let id = self.blocks.add(Origin::Blob, hash, &canon, whole);
+                    self.deferred.push((id, self.requests_read));
+                    id
+                }
+            };
+            ids.push(id);
         }
         self.blobs.insert(
             hash,
@@ -565,10 +565,9 @@ impl Reader {
         );
     }
 
-    /// Section 3.1: one request. The sources of the next request start empty.
+    /// Section 3.1: one request.
     fn request(&mut self, no: usize, line: &Line) {
-        self.pending_user.clear();
-        self.pending_system.clear();
+        self.requests_read += 1;
         let Some(id) = get::<String>(line.id) else {
             return;
         };
@@ -600,7 +599,7 @@ impl Reader {
         block: &Value,
         canon: &[u8],
         role: &str,
-        text_as: TextAs,
+        text_as: &(PieceKind, Option<String>),
     ) -> BlockId {
         let hash = canon::sha256(canon);
         if let Some(id) = self.blocks.find(origin, &hash) {
@@ -612,23 +611,21 @@ impl Reader {
     }
 
     /// The spans of one content block (design section 14, "A kind comes from the record").
-    fn spans(&self, block: &Value, role: &str, text_as: TextAs) -> (Vec<Span>, PieceKind) {
+    fn spans(
+        &self,
+        block: &Value,
+        role: &str,
+        text_as: &(PieceKind, Option<String>),
+    ) -> (Vec<Span>, PieceKind) {
         let ty = str_at(block, "type").unwrap_or("");
         match ty {
             "text" => {
                 let text = text_of(block).unwrap_or("");
-                match text_as {
-                    _ if role == "assistant" => (
-                        vec![Span::new(PieceKind::ModelText, text)],
-                        PieceKind::ModelText,
-                    ),
-                    TextAs::Record(kind, label) => {
-                        (vec![Span::new(kind, text).labelled(label)], kind)
-                    }
-                    TextAs::Split(sources, used) => {
-                        (label::split(text, sources, used), PieceKind::Other)
-                    }
-                }
+                let (kind, label) = match role {
+                    "assistant" => (PieceKind::ModelText, None),
+                    _ => text_as.clone(),
+                };
+                (vec![Span::new(kind, text).labelled(label)], kind)
             }
             "thinking" => {
                 let text = str_at(block, "thinking").unwrap_or("");
@@ -668,8 +665,34 @@ impl Reader {
         }
     }
 
-    /// Phase two: rebuild every request, pair replies with requests, order the steps.
-    fn finish(self) -> (Vec<Block>, Vec<Message>, Vec<StepData>, Vec<Boundary>) {
+    /// The spans of every blob text block (session spec, section 11): where the texts of the
+    /// records around it occur in it. The request record is written on its own schedule (3.5),
+    /// so a turn's records can come after its blobs as well as before them. A blob's sources are
+    /// the records from the request before its own to the request after it, and each record
+    /// explains one place, the first blob in record order that holds it.
+    fn label_blobs(&mut self) {
+        let mut used = vec![false; self.sources.len()];
+        for &(id, turn) in &self.deferred {
+            let start = self.source_turns.partition_point(|&t| t + 1 < turn);
+            let end = self.source_turns.partition_point(|&t| t <= turn + 1);
+            let candidates: Vec<usize> = (start..end).filter(|&i| !used[i]).collect();
+            let near: Vec<&Source> = candidates.iter().map(|&i| &self.sources[i]).collect();
+            let block = &mut self.blocks.blocks[id as usize];
+            let text = std::mem::take(&mut block.spans[0].text);
+            let (spans, chosen) = label::split(&text, &near);
+            for n in chosen {
+                used[candidates[n]] = true;
+            }
+            *block = Block::new(spans, PieceKind::Other);
+        }
+        self.sources = Vec::new();
+        self.source_turns = Vec::new();
+    }
+
+    /// Phase two: label the blobs, rebuild every request, pair replies with requests, order the
+    /// steps.
+    fn finish(mut self) -> (Vec<Block>, Vec<Message>, Vec<StepData>, Vec<Boundary>) {
+        self.label_blobs();
         let mut built = Built::new(&self);
         let lists = built.message_lists();
         let mut steps: Vec<(usize, StepData)> = Vec::new();

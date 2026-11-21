@@ -662,3 +662,46 @@ fn the_list_holds_the_sessions_started_here_or_below_with_their_titles() {
     let json = serde_json::to_string(&list).unwrap();
     assert!(secrets().iter().all(|s| !json.contains(s.as_str())));
 }
+
+#[test]
+fn a_record_written_after_its_request_still_labels_the_blob() {
+    let fx = Fixture::new();
+    let mut r = Record::new(&fx.project());
+    r.shape();
+    // Spec section 11: the request record is written on its own schedule, so the prompt and the
+    // attachment the blob holds can come after it.
+    let u1 = r.blob(json!({"role": "user", "content": [
+        {"type": "text", "text": "<system-reminder>\nA hook said hello.\n</system-reminder>\n"},
+        {"type": "text", "text": "late prompt"}]}));
+    r.request("r1", None, 0, &[u1]);
+    r.attachment(
+        json!({"type": "hook_additional_context", "hookEvent": "UserPromptSubmit"}),
+        "<system-reminder>\nA hook said hello.\n</system-reminder>",
+        "user",
+    );
+    r.user(json!("late prompt"));
+    r.reply(
+        Some("r1"),
+        "m1",
+        vec![json!({"type": "text", "text": "ok"})],
+        0,
+    );
+    r.write(&fx, "sess-late");
+    let open = open(&fx, "sess-late");
+    assert_eq!(check(&open, &r.sent, &secrets()), 1);
+    let all = pieces(&open, 0);
+    let kinds: Vec<(PieceKind, &str)> = all
+        .iter()
+        .filter(|(p, _)| matches!(p.place, PiecePlace::Message { .. }))
+        .map(|(p, t)| (p.kind, t.as_str()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            (PieceKind::Frame, "<system-reminder>\n"),
+            (PieceKind::HookOutput, "A hook said hello."),
+            (PieceKind::Frame, "\n</system-reminder>\n"),
+            (PieceKind::UserText, "late prompt"),
+        ]
+    );
+}
