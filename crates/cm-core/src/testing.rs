@@ -3,7 +3,10 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::agents::{Agent, AgentScan, FileClaim, PlanCx, ScanCx, home_only_scan, home_with_env};
+use crate::agents::{
+    Agent, AgentScan, FileClaim, HomeChoice, PlanCx, ScanCx, empty_view, home_dir, home_with_env,
+    presence,
+};
 use crate::env::ScanEnv;
 use crate::model::*;
 
@@ -82,6 +85,28 @@ impl Fixture {
     }
 }
 
+pub(crate) static NO_HOOKS: HookSchema = HookSchema {
+    events: Vec::new(),
+    handler_kinds: Vec::new(),
+};
+
+/// Resolves the home of an adapter whose view is otherwise empty.
+pub(crate) fn home_only_scan(
+    cx: &ScanCx,
+    agent: AgentId,
+    bin: &str,
+    role: &'static str,
+    choice: HomeChoice,
+) -> AgentScan {
+    let home = home_dir(cx, role, &choice);
+    let presence = presence(cx, bin, home.exists);
+    AgentScan {
+        view: empty_view(agent, presence, vec![home]),
+        files: Vec::new(),
+        diagnostics: Vec::new(),
+    }
+}
+
 /// The `PATH` for a real agent CLI that a test starts under a fixture home.
 ///
 /// Claude Code asks the macOS `security` tool for its credentials and finds that tool on `PATH`.
@@ -131,7 +156,7 @@ impl Agent for TestAgent {
         &[]
     }
     fn hook_schema(&self) -> &'static HookSchema {
-        &crate::agents::NO_HOOKS
+        &NO_HOOKS
     }
     fn scan(&self, cx: &ScanCx) -> AgentScan {
         let mut scan = home_only_scan(

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::{
     Agent, AgentScan, Candidate, FileClaim, PlanCx, ScanCx, home_dir, home_with_env, presence,
-    rules_from,
+    rules_from, unbudgeted,
 };
 use crate::model::*;
 use crate::walk;
@@ -18,6 +18,7 @@ mod instructions;
 mod memory;
 mod plan;
 mod render;
+mod sessions;
 mod setup;
 mod slots;
 #[cfg(test)]
@@ -27,6 +28,16 @@ use instructions::ASSUMED_WINDOW_TOKENS;
 use setup::{SettingsKind, Setup};
 
 pub struct Claude;
+
+/// One record file read whole, without the session list: for the developer tool
+/// `examples/trace_stats.rs`. The operations read through [`Agent::trace`].
+#[doc(hidden)]
+pub fn read_record(
+    fs: &crate::probe_fs::ProbeFs,
+    file: &AbsPath,
+) -> Result<crate::trace::TraceData, ApiError> {
+    sessions::read_file(fs, &Claude.id(), file)
+}
 
 static RULES: OnceLock<Vec<RuleSpec>> = OnceLock::new();
 
@@ -52,6 +63,21 @@ impl Agent for Claude {
 
     fn hook_schema(&self) -> &'static HookSchema {
         hooks::schema()
+    }
+
+    /// Session spec section 1.2 and section 12.
+    fn traces(&self, cx: &ScanCx) -> Vec<TraceInfo> {
+        sessions::list(cx, &self.id())
+    }
+
+    /// Session spec sections 3 to 11.
+    fn trace(
+        &self,
+        cx: &ScanCx,
+        id: &TraceId,
+        part: Option<&str>,
+    ) -> Result<crate::trace::TraceData, ApiError> {
+        sessions::open(cx, &self.id(), id, part)
     }
 
     /// Spec 6.1: the whole scanner.
@@ -97,7 +123,6 @@ impl Agent for Claude {
         let hook_out = hooks::scan(cx, &setup, &ext);
 
         let blocks = render::session(cx, &setup, &loads, &ext.extensions);
-        let budget = render::budget(&blocks, &loads);
 
         let mut stores = mem.stores;
         stores.extend(agent_stores);
@@ -131,7 +156,7 @@ impl Agent for Claude {
             ),
             loads,
             session: blocks.into_iter().map(|b| b.block).collect(),
-            budget,
+            budget: unbudgeted(),
             hooks: hook_out.hooks,
             hook_files: hook_out.hook_files,
             memory: stores,
@@ -196,6 +221,16 @@ impl Agent for Claude {
     /// Spec 2.6, 3, 6.2: the edits that mean something to Claude Code.
     fn plan(&self, cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>> {
         plan::plan(cx, edit)
+    }
+
+    fn write_warnings(
+        &self,
+        _cx: &PlanCx,
+        path: &AbsPath,
+        _before: Option<&str>,
+        _after: Option<&str>,
+    ) -> Vec<Warning> {
+        plan::write_warnings(path)
     }
 
     /// Spec 6.2: what a write may not touch, and what it must keep valid.

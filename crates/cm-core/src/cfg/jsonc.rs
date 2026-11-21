@@ -138,22 +138,6 @@ pub fn array_append(text: &str, pointer: &str, value: &Value) -> Result<String, 
     Ok(root.to_string())
 }
 
-/// Inserts into the array at `pointer` before `at`, creating it and any missing objects.
-pub fn array_insert(
-    text: &str,
-    pointer: &str,
-    at: usize,
-    value: &Value,
-) -> Result<String, JsoncError> {
-    let root = parse(text)?;
-    let arr = array_at(&root, pointer)?;
-    if at > arr.elements().len() {
-        return Err(JsoncError::Shape(format!("index {at} is past the end")));
-    }
-    arr.insert(at, to_input(value));
-    Ok(root.to_string())
-}
-
 fn array_at(root: &CstRootNode, pointer: &str) -> Result<jsonc_parser::cst::CstArray, JsoncError> {
     let path = tokens(pointer)?;
     let Some((last, parents)) = path.split_last() else {
@@ -528,13 +512,6 @@ mod tests {
         assert_eq!(parses(&out), json!({"a": {"b": {"c": 1}}}));
         let out = set("", "/a", &json!(true)).unwrap();
         assert_eq!(parses(&out), json!({"a": true}));
-    }
-
-    #[test]
-    fn insert_puts_the_element_at_the_index() {
-        let out = array_insert(FILE, "/hooks/BeforeTool", 0, &json!({"matcher": "first"})).unwrap();
-        assert_eq!(parses(&out)["hooks"]["BeforeTool"][0]["matcher"], "first");
-        assert!(array_insert(FILE, "/hooks/BeforeTool", 9, &json!(1)).is_err());
     }
 
     #[test]

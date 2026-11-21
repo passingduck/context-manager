@@ -1,6 +1,5 @@
 //! The `@path` import expander, driven by data. [`ImportRules::claude`] encodes Claude spec 1.5,
-//! [`ImportRules::gemini`] encodes Gemini spec 3, and [`ImportRules::none`] is an agent with
-//! no imports.
+//! and [`ImportRules::gemini`] encodes Gemini spec 3.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -32,7 +31,6 @@ pub enum Protect {
     MarkdownAndInlineComments,
     /// A run of N backticks up to the next run of N, and nothing else.
     BacktickRuns,
-    Nothing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,23 +211,6 @@ impl ImportRules {
             ..ImportRules::claude(home, cwd)
         }
     }
-
-    /// An agent with no imports: `expand` returns a tree with no nodes.
-    pub fn none() -> ImportRules {
-        ImportRules {
-            syntax: TokenSyntax::None,
-            home: None,
-            root: None,
-            outside: OutsidePolicy::Refuse,
-            root_by_real_path: false,
-            max_depth: 0,
-            report_too_deep: false,
-            protect: Protect::Nothing,
-            cycles: CyclePolicy::OneSeenSet,
-            file_types: FileTypes::Any,
-            max_bytes: MAX_EXPANDED_BYTES,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +280,7 @@ pub struct ImportTree {
 
 impl ImportTree {
     /// The files that were imported, depth first, parent before children.
+    #[cfg(test)]
     pub fn imported(&self) -> Vec<&ImportNode> {
         fn walk<'a>(nodes: &'a [ImportNode], out: &mut Vec<&'a ImportNode>) {
             for node in nodes {
@@ -499,7 +481,6 @@ impl Expander<'_> {
 
     fn protected(&self, text: &str) -> Vec<Range<usize>> {
         match self.rules.protect {
-            Protect::Nothing => Vec::new(),
             Protect::BacktickRuns => spans::backtick_regions(text),
             Protect::MarkdownAndInlineComments => {
                 let s = spans::regions(text);
@@ -947,14 +928,6 @@ mod tests {
         let cut = c.run(&budget(100, c.claude()), "A.md");
         assert_eq!(cut.capped, Some(ImportCap::Bytes(100)));
         assert!(cut.nodes.is_empty());
-    }
-
-    // ---- no imports ----
-
-    #[test]
-    fn an_agent_without_imports_has_no_nodes() {
-        let c = Case::new(&[("AGENTS.md", "@a.md\n"), ("a.md", "")]);
-        assert!(c.run(&ImportRules::none(), "AGENTS.md").nodes.is_empty());
     }
 
     #[test]

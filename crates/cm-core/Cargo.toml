@@ -27,3 +27,4 @@ tempfile = { workspace = true, optional = true }
 cm-core = { path = ".", features = ["testing"] }
 tempfile.workspace = true
 tokio.workspace = true
+libc.workspace = true

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use cm_core::agents::{Agent, ScanCx, registry};
+use cm_core::agents::{Agent, ScanCx, find_in, registry};
 use cm_core::env::ScanEnv;
 use cm_core::probe_fs::{EntryKind, ProbeFs, fingerprint_of};
 use cm_core::scan::{Scanned, scan_with_parked};
@@ -167,12 +167,7 @@ impl Host {
     }
 
     fn agent(&self, id: &AgentId) -> Result<&'static dyn Agent, ApiError> {
-        self.ctx
-            .agents
-            .iter()
-            .copied()
-            .find(|agent| agent.id() == *id)
-            .ok_or(ApiError::NotFound)
+        find_in(self.ctx.agents, id).ok_or(ApiError::NotFound)
     }
 
     async fn probed_paths(&self, cwd: &AbsPath) -> Result<Vec<AbsPath>, ApiError> {
@@ -321,11 +316,7 @@ impl Api for Host {
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            let cx = ScanCx {
-                env: &env,
-                fs: &fs,
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, &fs);
             let mut known: BTreeMap<AbsPath, Vec<AgentId>> = BTreeMap::new();
             for agent in agents {
                 for path in agent.known_projects(&cx) {
@@ -359,11 +350,7 @@ impl Api for Host {
                 .iter()
                 .find(|view| view.agent == agent.id())
                 .ok_or(ApiError::NotFound)?;
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             Ok(agent.render(&cx, view))
         })
         .await
@@ -386,11 +373,7 @@ impl Api for Host {
                 .iter()
                 .find(|view| view.agent == agent.id())
                 .ok_or(ApiError::NotFound)?;
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             Ok(LoadTexts::Current {
                 texts: texts::load_texts(agent, &cx, view, &req.file),
             })
@@ -404,11 +387,7 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let cx = ScanCx::new(&env, scanned.fs());
             simulate::simulate(agents, &cx, &scanned.snapshot, &req.path)
         })
         .await
@@ -427,14 +406,7 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         tokio::task::spawn_blocking(move || {
             let fs = ProbeFs::new();
-            agent.sample_input(
-                &req.event,
-                &ScanCx {
-                    env: &env,
-                    fs: &fs,
-                    parked_dir: None,
-                },
-            )
+            agent.sample_input(&req.event, &ScanCx::new(&env, &fs))
         })
         .await
         .map_err(join_error)
@@ -452,19 +424,9 @@ impl Api for Host {
         let env = self.config.env.with_cwd(req.cwd);
         let agents = self.ctx.agents;
         tokio::task::spawn_blocking(move || {
-            let (agent, hook) = agents
-                .iter()
-                .zip(&scanned.snapshot.agents)
-                .find_map(|(agent, view)| {
-                    let hook = view.hooks.iter().find(|hook| hook.id == req.hook)?;
-                    Some((*agent, hook))
-                })
-                .ok_or(ApiError::NotFound)?;
-            let cx = ScanCx {
-                env: &env,
-                fs: scanned.fs(),
-                parked_dir: None,
-            };
+            let (view, hook) = scanned.snapshot.hook(&req.hook).ok_or(ApiError::NotFound)?;
+            let agent = find_in(agents, &view.agent).ok_or(ApiError::NotFound)?;
+            let cx = ScanCx::new(&env, scanned.fs());
             let spec = agent
                 .exec_spec(hook, &req.input, &cx)
                 .map_err(|why| ApiError::Forbidden { why })?;
@@ -535,6 +497,154 @@ mod tests {
 
     async fn call(host: &Host, json: &str) -> Result<serde_json::Value, ApiError> {
         dispatch(host, serde_json::from_str(json).expect("request parses")).await
+    }
+
+    /// A Claude Code record in the fixture home: one prompt, one request, one reply. The hashes
+    /// are stand-ins, so the request resolves but is not exact.
+    fn write_record(fx: &Fixture) -> AbsPath {
+        let cwd = fx.project();
+        let key: String = cwd
+            .as_str()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let (shape, blob) = ("a".repeat(64), "b".repeat(64));
+        let lines = [
+            serde_json::json!({"type": "user", "cwd": cwd.as_str(), "timestamp": "2026-11-20T10:00:01.000Z",
+                "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"type": "api-request-shape", "shapeHash": shape,
+                "shape": {"system": [{"type": "text", "text": "a stand-in system block"}], "tools": []}}),
+            serde_json::json!({"type": "api-request-blob", "hash": blob,
+                "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"type": "api-request", "id": "r1", "timestamp": "2026-11-20T10:00:02.000Z",
+                "shapeHash": shape, "params": {"model": "m"}, "keep": 0, "tail": [blob],
+                "requestDigest": "c".repeat(64)}),
+            serde_json::json!({"type": "assistant", "requestRef": "r1", "cwd": cwd.as_str(),
+                "timestamp": "2026-11-20T10:00:03.000Z",
+                "message": {"id": "m1", "role": "assistant", "model": "m",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "usage": {"input_tokens": 1, "cache_read_input_tokens": 2,
+                              "cache_creation_input_tokens": 3, "output_tokens": 4}}}),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        let file = fx.home_path(&format!(".claude/projects/{key}/s1.jsonl"));
+        fx.write(&file, &text);
+        file
+    }
+
+    #[tokio::test]
+    async fn the_trace_operations_answer_and_a_changed_record_is_stale() {
+        let fx = Fixture::new();
+        let file = write_record(&fx);
+        let host = host(&fx, Duration::from_millis(100));
+        let cwd = serde_json::to_string(&fx.project()).unwrap();
+        let key = r#"{"agent":"claude","id":"s1","part":null}"#;
+
+        let list = call(
+            &host,
+            &format!(r#"{{"op":"traces","args":{{"cwd":{cwd}}}}}"#),
+        )
+        .await
+        .unwrap();
+        let list: Vec<TraceInfo> = serde_json::from_value(list).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, TraceId("s1".into()));
+        assert_eq!(list[0].title.as_deref(), Some("hi"));
+
+        let trace = call(
+            &host,
+            &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{key}}}}}"#),
+        )
+        .await
+        .unwrap();
+        let trace: Trace = serde_json::from_value(trace).unwrap();
+        let read = std::fs::metadata(file.as_path()).unwrap().len();
+        assert_eq!(trace.read, read);
+        assert_eq!(trace.steps.len(), 1);
+        assert_eq!(trace.problems, vec![TraceProblem::Inexact { steps: 1 }]);
+
+        let step = |read: u64| {
+            format!(
+                r#"{{"op":"trace_step","args":{{"cwd":{cwd},"key":{key},"read":{read},"step":0}}}}"#
+            )
+        };
+        let piece = |read: u64, piece: &str| {
+            format!(
+                r#"{{"op":"trace_piece","args":{{"cwd":{cwd},"key":{key},"read":{read},"step":0,"piece":{piece}}}}}"#
+            )
+        };
+        let pieces: StepPieces =
+            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
+        let StepPieces::Current { pieces } = pieces else {
+            panic!("the record did not change");
+        };
+        let kinds: Vec<PieceKind> = pieces.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [PieceKind::System, PieceKind::UserText]);
+        let sent: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"sent","piece":1}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sent,
+            PieceText::Current {
+                text: "hi".into(),
+                bytes: 2,
+                cut: false
+            }
+        );
+        let reply: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            PieceText::Current {
+                text: "hello".into(),
+                bytes: 5,
+                cut: false
+            }
+        );
+        let missing = call(&host, &piece(read, r#"{"kind":"sent","piece":9}"#)).await;
+        assert_eq!(missing.err(), Some(ApiError::NotFound));
+
+        // The session goes on: the record grows, and a request naming the old length is stale.
+        let mut bytes = std::fs::read(file.as_path()).unwrap();
+        bytes.extend_from_slice(
+            b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"more\"}}\n",
+        );
+        std::fs::write(file.as_path(), &bytes).unwrap();
+        let stale: StepPieces =
+            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
+        assert_eq!(stale, StepPieces::Stale);
+        let stale: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stale, PieceText::Stale);
+        let fresh: Trace = serde_json::from_value(
+            call(
+                &host,
+                &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{key}}}}}"#),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fresh.read, bytes.len() as u64);
+
+        let unknown = r#"{"agent":"claude","id":"../s1","part":null}"#;
+        let missing = call(
+            &host,
+            &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{unknown}}}}}"#),
+        )
+        .await;
+        assert_eq!(missing.err(), Some(ApiError::NotFound));
     }
 
     #[tokio::test]

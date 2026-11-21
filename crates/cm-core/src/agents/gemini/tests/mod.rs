@@ -24,34 +24,19 @@ pub(super) fn trusted(fx: &Fixture) -> ScanEnv {
 
 pub(super) fn scan(env: &ScanEnv) -> AgentScan {
     let fs = ProbeFs::new();
-    Gemini.scan(&ScanCx {
-        env,
-        fs: &fs,
-        parked_dir: None,
-    })
+    Gemini.scan(&ScanCx::new(env, &fs))
 }
 
 pub(super) fn render(env: &ScanEnv) -> Vec<RenderedBlock> {
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(env, &fs);
     let scanned = Gemini.scan(&cx);
     Gemini.render(&cx, &scanned.view)
 }
 
 pub(super) fn on_access(env: &ScanEnv, dir: &AbsPath) -> Vec<crate::agents::Candidate> {
     let fs = ProbeFs::new();
-    Gemini.on_access(
-        &ScanCx {
-            env,
-            fs: &fs,
-            parked_dir: None,
-        },
-        dir,
-    )
+    Gemini.on_access(&ScanCx::new(env, &fs), dir)
 }
 
 pub(super) fn git(fx: &Fixture, dir: &AbsPath) {

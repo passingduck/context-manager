@@ -238,6 +238,9 @@ def scenario(name):
 
 @scenario("oneshot")
 def s_oneshot(box):
+    """One prompt, one reply, with a user and a project instruction file."""
+    w(os.path.join(box["cfg"], "CLAUDE.md"), "ORACLE-USER-INSTRUCTIONS: answer briefly.\n")
+    w(os.path.join(box["cwd"], "CLAUDE.md"), "ORACLE-PROJECT-INSTRUCTIONS: greet the oracle.\n")
     return [{"prompt": "Say hello to the oracle.", "script": plan([lambda b, n: text("Hello, oracle.")])}]
 
 

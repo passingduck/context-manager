@@ -21,6 +21,8 @@ mod boundary_tests;
 #[cfg(test)]
 mod codex_tests;
 #[cfg(test)]
+mod e2e;
+#[cfg(test)]
 mod pipeline_tests;
 
 #[cfg(test)]

@@ -373,6 +373,7 @@ An `attachment` record holds `attachment: {type, ...}`. When the attachment was 
 | A piece with `renderedRole: "user"` appears verbatim inside a `user` message of the next request, as a text block beside the prompt or the tool result. | RUN:all (2 of 2 per scenario); COUNT[10 rendered attachments in the next request] | CONFIRMED |
 | Pieces with `renderedRole: "system"` are sent in a `system`-role message (a message in `messages`, not the `system` parameter). The `<system-reminder>\n...\n</system-reminder>` wrapper is removed and the pieces of one turn are joined with a blank line into **one** text block. | RUN:all (6 of 6, 7 of 7 with a SessionStart hook); COUNT | CONFIRMED |
 | Attachments are attribution, not the source of truth. The request record already holds the exact message. A reader can use `rendered` to label which part of a message came from which attachment, by text containment. | RUN:all; COUNT (a few pieces per type are not found in the last 8 messages of the next recorded request; open question 6) | OBSERVED |
+| The records whose text a blob holds can come after the blob and its request record in the file, because the request record is written on its own schedule (3.5). Over the 17 local main transcripts, 1,397 records explained a part of a blob: 731 sat between the previous request record and the blob's own, 663 after the blob's request record and before the next one, and 3 before the previous request record. A reader that labels a blob from the records before it alone leaves about half of those parts unexplained. | COUNT (the trace reader's own counters, numbers only) | OBSERVED |
 
 The 35 attachment types seen locally (COUNT[10 attachment fields] and a per-type count):
 
@@ -520,7 +521,7 @@ All three tools are in `tools/oracle/claude/` and share `session_record.py`, whi
 
 | Scenario | What it shows | Result on 2.1.329 |
 | :- | :- | :- |
-| `oneshot` | One prompt, one reply. | PASS |
+| `oneshot` | One prompt, one reply, with a user and a project `CLAUDE.md`. | PASS |
 | `bash` | A Bash `echo` round trip; a reply of two blocks. | PASS |
 | `bigbash` | A Bash output large enough to be saved under `tool-results/`. | PASS |
 | `skill` | A skill invoked through the Skill tool. | PASS |

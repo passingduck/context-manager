@@ -206,12 +206,9 @@ mod tests {
     fn blocks(fx: &Fixture) -> (AgentView, Vec<RenderedBlock>) {
         let env = fx.env();
         let fs = ProbeFs::new();
-        let cx = ScanCx {
-            env: &env,
-            fs: &fs,
-            parked_dir: None,
-        };
-        let view = Claude.scan(&cx).view;
+        let cx = ScanCx::new(&env, &fs);
+        let mut view = Claude.scan(&cx).view;
+        crate::passes::budget(&mut view);
         let rendered = Claude.render(&cx, &view);
         (view, rendered)
     }

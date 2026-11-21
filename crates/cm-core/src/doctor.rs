@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::agents::{Agent, ScanCx};
+use crate::agents::{Agent, ScanCx, find_in};
 use crate::md::spans;
 use crate::model::*;
 use crate::program::{self, Program};
@@ -15,7 +15,6 @@ const MAX_PARSE_BYTES: u64 = 2 * 1024 * 1024;
 pub struct Input<'a> {
     pub cx: &'a ScanCx<'a>,
     pub agents: &'a [&'a dyn Agent],
-    /// `views[i]` belongs to `agents[i]`.
     pub views: &'a [AgentView],
     pub files: &'a BTreeMap<AbsPath, FileEntry>,
     pub project_root: &'a AbsPath,
@@ -161,7 +160,10 @@ fn link_candidates(target: &str, dir: &AbsPath, root: &AbsPath) -> Option<Vec<Ab
 /// A command hook whose program is on no `PATH` entry and is no file, or is a file that cannot
 /// run.
 fn hook_programs(input: &Input, out: &mut Vec<Diagnostic>) {
-    for (agent, view) in input.agents.iter().zip(input.views) {
+    for view in input.views {
+        let Some(agent) = find_in(input.agents, &view.agent) else {
+            continue;
+        };
         for hook in &view.hooks {
             if hook.handler.handler_kind != "command"
                 || matches!(hook.state, HookState::Disabled { .. })

@@ -24,7 +24,25 @@ pub struct ScanCx<'a> {
     pub fs: &'a ProbeFs,
     /// Where the tool keeps parked hook records. `None` for a caller that has no data
     /// directory: no hook is then reported as parked.
-    pub parked_dir: Option<&'a AbsPath>,
+    pub(crate) parked_dir: Option<&'a AbsPath>,
+}
+
+impl<'a> ScanCx<'a> {
+    pub fn new(env: &'a ScanEnv, fs: &'a ProbeFs) -> ScanCx<'a> {
+        ScanCx {
+            env,
+            fs,
+            parked_dir: None,
+        }
+    }
+
+    /// Reads the parked hook records in `dir`, which only the Claude hook reader uses.
+    pub fn with_parked(self, dir: &'a AbsPath) -> ScanCx<'a> {
+        ScanCx {
+            parked_dir: Some(dir),
+            ..self
+        }
+    }
 }
 
 /// What a planner reads through.
@@ -35,6 +53,9 @@ pub struct PlanCx<'a> {
     pub snapshot: &'a Snapshot,
     /// Where the tool keeps parked hook records (`parked/`). A planner may write inside it.
     pub parked_dir: &'a AbsPath,
+    /// The hook a `UpdateHook`, `RemoveHook` or `SetHookEnabled` names, resolved in `snapshot`.
+    /// The planner resolves it and calls only the agent that lists it. `None` for every other edit.
+    pub hook: Option<&'a Hook>,
 }
 
 /// A file an adapter looked at, with the edit policy it claims for it.
@@ -61,6 +82,8 @@ pub struct Candidate {
     pub scope: Scope,
     pub rule: RuleRef,
     pub access: AccessRule,
+    /// Set when the agent finds the file and does not load it, such as in an untrusted folder.
+    pub skip: Option<Skip>,
 }
 
 pub trait Agent: Sync {
@@ -226,7 +249,13 @@ pub fn registry() -> &'static [&'static dyn Agent] {
 }
 
 pub fn find(id: &AgentId) -> Option<&'static dyn Agent> {
-    registry().iter().copied().find(|agent| agent.id() == *id)
+    find_in(registry(), id)
+}
+
+/// The agent with `id` among `agents`. Every pairing of an agent with its view goes through this
+/// lookup, never through a shared position.
+pub fn find_in<'a>(agents: &[&'a dyn Agent], id: &AgentId) -> Option<&'a dyn Agent> {
+    agents.iter().copied().find(|agent| agent.id() == *id)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -319,6 +348,17 @@ pub(crate) fn home_dir(cx: &ScanCx, role: &'static str, choice: &HomeChoice) -> 
     }
 }
 
+/// The budget an adapter reports. `passes::budget` computes the real one after every adapter
+/// has run, from the view's session blocks and loads.
+pub(crate) fn unbudgeted() -> Budget {
+    Budget {
+        session_start: 0,
+        by_label: Vec::new(),
+        on_access_max: 0,
+        method: TokenMethod::O200kEstimate,
+    }
+}
+
 pub(crate) fn empty_view(agent: AgentId, presence: Presence, homes: Vec<HomeDir>) -> AgentView {
     AgentView {
         agent,
@@ -331,39 +371,12 @@ pub(crate) fn empty_view(agent: AgentId, presence: Presence, homes: Vec<HomeDir>
         assumptions: Vec::new(),
         loads: Vec::new(),
         session: Vec::new(),
-        budget: Budget {
-            session_start: 0,
-            by_label: Vec::new(),
-            on_access_max: 0,
-            method: TokenMethod::O200kEstimate,
-        },
+        budget: unbudgeted(),
         hooks: Vec::new(),
         hook_files: Vec::new(),
         memory: Vec::new(),
         extensions: Vec::new(),
         slots: Vec::new(),
-    }
-}
-
-pub(crate) static NO_HOOKS: HookSchema = HookSchema {
-    events: Vec::new(),
-    handler_kinds: Vec::new(),
-};
-
-/// Resolves the home of an adapter whose view is otherwise empty.
-pub(crate) fn home_only_scan(
-    cx: &ScanCx,
-    agent: AgentId,
-    bin: &str,
-    role: &'static str,
-    choice: HomeChoice,
-) -> AgentScan {
-    let home = home_dir(cx, role, &choice);
-    let presence = presence(cx, bin, home.exists);
-    AgentScan {
-        view: empty_view(agent, presence, vec![home]),
-        files: Vec::new(),
-        diagnostics: Vec::new(),
     }
 }
 

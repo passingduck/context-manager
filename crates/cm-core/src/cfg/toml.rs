@@ -74,23 +74,6 @@ pub fn set(text: &str, path: &[&str], value: &Value) -> Result<String, TomlError
     Ok(doc.to_string())
 }
 
-/// Removes the key at `path`. A missing key leaves the text as it was.
-pub fn remove(text: &str, path: &[&str]) -> Result<String, TomlError> {
-    let mut doc = parse(text)?;
-    let Some((last, parents)) = path.split_last() else {
-        return Err(TomlError::Shape("the path is empty".to_owned()));
-    };
-    let mut table: &mut dyn TableLike = doc.as_table_mut();
-    for key in parents {
-        let Some(next) = table.get_mut(key).and_then(Item::as_table_like_mut) else {
-            return Ok(text.to_owned());
-        };
-        table = next;
-    }
-    table.remove(last);
-    Ok(doc.to_string())
-}
-
 /// Appends a table to the array of tables at `path` (`[[a.b]]`), creating the array and any
 /// missing tables. `value` must be an object.
 pub fn aot_append(text: &str, path: &[&str], value: &Value) -> Result<String, TomlError> {
@@ -112,33 +95,6 @@ pub fn aot_append(text: &str, path: &[&str], value: &Value) -> Result<String, To
         .and_then(Item::as_array_of_tables_mut)
         .ok_or_else(|| TomlError::Shape(format!("{last} is not an array of tables")))?
         .push(entry);
-    Ok(doc.to_string())
-}
-
-/// Removes element `index` of the array of tables at `path`. A missing element leaves the text
-/// as it was. An array left empty is removed.
-pub fn aot_remove(text: &str, path: &[&str], index: usize) -> Result<String, TomlError> {
-    let mut doc = parse(text)?;
-    let Some((last, parents)) = path.split_last() else {
-        return Err(TomlError::Shape("the path is empty".to_owned()));
-    };
-    let mut table: &mut dyn TableLike = doc.as_table_mut();
-    for key in parents {
-        let Some(next) = table.get_mut(key).and_then(Item::as_table_like_mut) else {
-            return Ok(text.to_owned());
-        };
-        table = next;
-    }
-    let Some(aot) = table.get_mut(last).and_then(Item::as_array_of_tables_mut) else {
-        return Ok(text.to_owned());
-    };
-    if index >= aot.len() {
-        return Ok(text.to_owned());
-    }
-    aot.remove(index);
-    if aot.is_empty() {
-        table.remove(last);
-    }
     Ok(doc.to_string())
 }
 
@@ -453,17 +409,6 @@ x = 1
     }
 
     #[test]
-    fn removing_a_table_keeps_comments_and_untouched_lines() {
-        let out = remove(FILE, &["hooks", "state", "a:b"]).unwrap();
-        assert!(!out.contains("trusted_hash"));
-        assert!(parses(&out).get("hooks").unwrap().get("state").is_none());
-        assert!(
-            out.contains("# keep") && out.contains("# first") && out.contains("# default model")
-        );
-        untouched_lines_survive(FILE, &out, &["a:b", "trusted_hash", "# state for one hook"]);
-    }
-
-    #[test]
     fn changing_a_value_keeps_its_comment_and_every_other_line() {
         let out = set(FILE, &["model"], &json!("gpt-6")).unwrap();
         assert!(out.contains(r#"model = "gpt-6""#));
@@ -503,16 +448,6 @@ x = 1
         assert_eq!(pre[2]["matcher"].as_str(), Some("new"));
         let fresh = aot_append("", &["a", "b"], &json!({"k": 1})).unwrap();
         assert_eq!(fresh, "[[a.b]]\nk = 1\n");
-    }
-
-    #[test]
-    fn removing_an_array_of_tables_entry_keeps_the_others() {
-        let out = aot_remove(FILE, &["hooks", "PreToolUse"], 1).unwrap();
-        let pre = &parses(&out)["hooks"]["PreToolUse"];
-        assert_eq!(pre.as_array().unwrap().len(), 1);
-        assert_eq!(pre[0]["matcher"].as_str(), Some("shell"));
-        all_comments_survive(&out);
-        assert_eq!(aot_remove(FILE, &["hooks", "PreToolUse"], 9).unwrap(), FILE);
     }
 
     #[test]
@@ -560,11 +495,5 @@ x = 1
         assert_eq!(element_remove(text, &group).unwrap(), "");
         let set_matcher = table_set_key(text, &group, "matcher", None).unwrap();
         assert!(!set_matcher.contains("matcher"));
-    }
-
-    #[test]
-    fn removing_a_missing_key_changes_nothing() {
-        assert_eq!(remove(FILE, &["nope", "x"]).unwrap(), FILE);
-        assert_eq!(remove(FILE, &["tail", "y"]).unwrap(), FILE);
     }
 }

@@ -310,11 +310,7 @@ fn sample_input_carries_the_base_fields_and_the_event_fields() {
     let fx = Fixture::new();
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let input = Gemini.sample_input("BeforeTool", &cx);
     assert_eq!(input["hook_event_name"], "BeforeTool");
     assert_eq!(input["cwd"], fx.project().as_str());
@@ -335,11 +331,7 @@ fn exec_spec_runs_bash_with_the_five_names_replaced_and_exported() {
     );
     let env = trusted(&fx);
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let scanned = Gemini.scan(&cx);
     let input = Gemini.sample_input("BeforeTool", &cx);
     let spec = Gemini
@@ -381,11 +373,7 @@ fn an_extension_hook_has_its_extension_path_substituted_for_a_test_run() {
     );
     let env = fx.env();
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env: &env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(&env, &fs);
     let scanned = Gemini.scan(&cx);
     let spec = Gemini
         .exec_spec(
