@@ -64,7 +64,7 @@ function stepOf(i: number, part: boolean, before: Spec[] | null): { step: Step; 
     at: new Date(START + (part ? 40_000 : 0) + i * 45_000 + (i >= 8 ? 600_000 : 0)).toISOString(),
     model: "mock-model-1",
     usage: noUsage ? null : { input: Math.max(40, tokens - sharedTokens - 500), cacheRead: sharedTokens, cacheWrite: Math.min(500, tokens - sharedTokens), output: 150 + i * 20, thinking: null },
-    sent: { exact: i !== 2, pieces: specs.length, shared, byKind: [...kinds.values()], marks: [1, specs.length - 1], fitted: part || i !== 2 } as Step["sent"],
+    sent: { exact: i !== 2, pieces: specs.length, shared, byKind: [...kinds.values()], marks: [1, specs.length - 1], fitted: part || i !== 2 },
     reply: [
       { kind: "modelText", label: null, bytes: 320, tokens: 80 },
       { kind: "toolCall", label: "Read", bytes: 160, tokens: 40 },

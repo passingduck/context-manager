@@ -83,7 +83,7 @@ export function growth(trace: Trace, index: number): number | null {
 }
 
 /** Whether the reader fitted the piece sizes of a request to the prompt size the API reported. */
-export const fittedOf = (sent: Sent): boolean => (sent as Sent & { fitted?: boolean }).fitted === true;
+export const fittedOf = (sent: Sent): boolean => sent.fitted;
 
 /** True when every call that has a request has fitted sizes, so the kind mode shares the scale of the real chart. */
 export const allFitted = (trace: Trace): boolean => {
@@ -110,8 +110,8 @@ const FAMILY: Record<PieceKind, [string, number]> = {
   summary: ["--c4", 30],
   toolCall: ["--c0", 100],
   toolResult: ["--c0", 62],
-  modelText: ["--c3", 100],
-  thinking: ["--c3", 55],
+  modelText: ["--c3", 40],
+  thinking: ["--c3", 100],
   frame: ["--fg-faint", 60],
   other: ["--fg-faint", 100],
 };

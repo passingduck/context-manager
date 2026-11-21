@@ -344,7 +344,7 @@ function Reply({ step, index, keyOf, trace, picked, go }: { step: Step; index: n
   const shown = open !== null ? step.reply[open] : undefined;
   return (
     <section aria-label={t.sessions.call.reply} className="pb-4">
-      <h3 className="text-[12px] font-semibold">{t.sessions.call.reply}</h3>
+      <h3 className="text-[12px] font-semibold"><Badge tone="warn">{t.sessions.tagEstimate}</Badge> {t.sessions.call.reply}</h3>
       {step.reply.length === 0 && <p className="text-muted">{t.sessions.call.noReply}</p>}
       {step.reply.length > 0 && (
         <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_4rem_4rem] gap-x-2 border-b border-line px-1 pb-0.5 text-[11px] text-muted">
