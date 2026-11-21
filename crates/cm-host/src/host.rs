@@ -13,6 +13,7 @@ use crate::apply::{Ctx, OsTrash, Trasher};
 use crate::history::History;
 use crate::recovery;
 use crate::runner;
+use crate::traces::{self, TraceMemo};
 
 /// How long `watch` waits before it answers with the unchanged fingerprint (design section 8).
 pub const WATCH_TIMEOUT: Duration = Duration::from_secs(25);
@@ -89,6 +90,8 @@ pub struct Host {
     probes: Mutex<HashMap<AbsPath, Vec<AbsPath>>>,
     /// What `plan`, `apply`, `history` and `change` read and write.
     pub(crate) ctx: Arc<Ctx>,
+    /// The two traces opened last (design section 14).
+    traces: Arc<TraceMemo>,
     /// A test stops the apply pipeline after this step, as a crash would.
     #[cfg(test)]
     pub(crate) fail_after: Arc<Mutex<Option<crate::apply::Step>>>,
@@ -131,6 +134,7 @@ impl Host {
             config,
             probes: Mutex::new(HashMap::new()),
             ctx,
+            traces: Arc::new(TraceMemo::default()),
             #[cfg(test)]
             fail_after: Arc::new(Mutex::new(None)),
         };
@@ -435,6 +439,45 @@ impl Api for Host {
         .await
         .map_err(join_error)?
     }
+
+    async fn traces(&self, req: TracesReq) -> Result<Vec<TraceInfo>, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let agents = self.ctx.agents;
+        tokio::task::spawn_blocking(move || traces::traces(agents, &env))
+            .await
+            .map_err(join_error)
+    }
+
+    async fn trace(&self, req: TraceReq) -> Result<Trace, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || Ok(memo.open(agents, &env, &req.key)?.trace().clone()))
+            .await
+            .map_err(join_error)?
+    }
+
+    /// `Stale` when the record no longer has the length the client's trace was built from.
+    async fn trace_step(&self, req: TraceStepReq) -> Result<StepPieces, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || {
+            let open = memo.open(agents, &env, &req.key)?;
+            traces::step_pieces(&open, req.read, req.step)
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    async fn trace_piece(&self, req: TracePieceReq) -> Result<PieceText, ApiError> {
+        let env = self.config.env.with_cwd(req.cwd);
+        let (agents, memo) = (self.ctx.agents, self.traces.clone());
+        tokio::task::spawn_blocking(move || {
+            let open = memo.open(agents, &env, &req.key)?;
+            traces::piece_text(&open, req.read, req.step, req.piece)
+        })
+        .await
+        .map_err(join_error)?
+    }
 }
 
 #[cfg(test)]
@@ -454,6 +497,154 @@ mod tests {
 
     async fn call(host: &Host, json: &str) -> Result<serde_json::Value, ApiError> {
         dispatch(host, serde_json::from_str(json).expect("request parses")).await
+    }
+
+    /// A Claude Code record in the fixture home: one prompt, one request, one reply. The hashes
+    /// are stand-ins, so the request resolves but is not exact.
+    fn write_record(fx: &Fixture) -> AbsPath {
+        let cwd = fx.project();
+        let key: String = cwd
+            .as_str()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let (shape, blob) = ("a".repeat(64), "b".repeat(64));
+        let lines = [
+            serde_json::json!({"type": "user", "cwd": cwd.as_str(), "timestamp": "2026-11-20T10:00:01.000Z",
+                "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"type": "api-request-shape", "shapeHash": shape,
+                "shape": {"system": [{"type": "text", "text": "a stand-in system block"}], "tools": []}}),
+            serde_json::json!({"type": "api-request-blob", "hash": blob,
+                "message": {"role": "user", "content": "hi"}}),
+            serde_json::json!({"type": "api-request", "id": "r1", "timestamp": "2026-11-20T10:00:02.000Z",
+                "shapeHash": shape, "params": {"model": "m"}, "keep": 0, "tail": [blob],
+                "requestDigest": "c".repeat(64)}),
+            serde_json::json!({"type": "assistant", "requestRef": "r1", "cwd": cwd.as_str(),
+                "timestamp": "2026-11-20T10:00:03.000Z",
+                "message": {"id": "m1", "role": "assistant", "model": "m",
+                    "content": [{"type": "text", "text": "hello"}],
+                    "usage": {"input_tokens": 1, "cache_read_input_tokens": 2,
+                              "cache_creation_input_tokens": 3, "output_tokens": 4}}}),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        let file = fx.home_path(&format!(".claude/projects/{key}/s1.jsonl"));
+        fx.write(&file, &text);
+        file
+    }
+
+    #[tokio::test]
+    async fn the_trace_operations_answer_and_a_changed_record_is_stale() {
+        let fx = Fixture::new();
+        let file = write_record(&fx);
+        let host = host(&fx, Duration::from_millis(100));
+        let cwd = serde_json::to_string(&fx.project()).unwrap();
+        let key = r#"{"agent":"claude","id":"s1","part":null}"#;
+
+        let list = call(
+            &host,
+            &format!(r#"{{"op":"traces","args":{{"cwd":{cwd}}}}}"#),
+        )
+        .await
+        .unwrap();
+        let list: Vec<TraceInfo> = serde_json::from_value(list).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, TraceId("s1".into()));
+        assert_eq!(list[0].title.as_deref(), Some("hi"));
+
+        let trace = call(
+            &host,
+            &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{key}}}}}"#),
+        )
+        .await
+        .unwrap();
+        let trace: Trace = serde_json::from_value(trace).unwrap();
+        let read = std::fs::metadata(file.as_path()).unwrap().len();
+        assert_eq!(trace.read, read);
+        assert_eq!(trace.steps.len(), 1);
+        assert_eq!(trace.problems, vec![TraceProblem::Inexact { steps: 1 }]);
+
+        let step = |read: u64| {
+            format!(
+                r#"{{"op":"trace_step","args":{{"cwd":{cwd},"key":{key},"read":{read},"step":0}}}}"#
+            )
+        };
+        let piece = |read: u64, piece: &str| {
+            format!(
+                r#"{{"op":"trace_piece","args":{{"cwd":{cwd},"key":{key},"read":{read},"step":0,"piece":{piece}}}}}"#
+            )
+        };
+        let pieces: StepPieces =
+            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
+        let StepPieces::Current { pieces } = pieces else {
+            panic!("the record did not change");
+        };
+        let kinds: Vec<PieceKind> = pieces.iter().map(|p| p.kind).collect();
+        assert_eq!(kinds, [PieceKind::System, PieceKind::UserText]);
+        let sent: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"sent","piece":1}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            sent,
+            PieceText::Current {
+                text: "hi".into(),
+                bytes: 2,
+                cut: false
+            }
+        );
+        let reply: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            reply,
+            PieceText::Current {
+                text: "hello".into(),
+                bytes: 5,
+                cut: false
+            }
+        );
+        let missing = call(&host, &piece(read, r#"{"kind":"sent","piece":9}"#)).await;
+        assert_eq!(missing.err(), Some(ApiError::NotFound));
+
+        // The session goes on: the record grows, and a request naming the old length is stale.
+        let mut bytes = std::fs::read(file.as_path()).unwrap();
+        bytes.extend_from_slice(
+            b"{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"more\"}}\n",
+        );
+        std::fs::write(file.as_path(), &bytes).unwrap();
+        let stale: StepPieces =
+            serde_json::from_value(call(&host, &step(read)).await.unwrap()).unwrap();
+        assert_eq!(stale, StepPieces::Stale);
+        let stale: PieceText = serde_json::from_value(
+            call(&host, &piece(read, r#"{"kind":"reply","piece":0}"#))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(stale, PieceText::Stale);
+        let fresh: Trace = serde_json::from_value(
+            call(
+                &host,
+                &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{key}}}}}"#),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(fresh.read, bytes.len() as u64);
+
+        let unknown = r#"{"agent":"claude","id":"../s1","part":null}"#;
+        let missing = call(
+            &host,
+            &format!(r#"{{"op":"trace","args":{{"cwd":{cwd},"key":{unknown}}}}}"#),
+        )
+        .await;
+        assert_eq!(missing.err(), Some(ApiError::NotFound));
     }
 
     #[tokio::test]
@@ -544,6 +735,11 @@ mod tests {
         let snapshot = host.scan(ScanReq { cwd: cwd.clone() }).await.unwrap();
         let hook = snapshot.agents[0].hooks[0].id.clone();
         let claude = AgentId::parse("claude").unwrap();
+        let key = TraceKey {
+            agent: claude.clone(),
+            id: TraceId("none".into()),
+            part: None,
+        };
         let requests = vec![
             Request::Session(()),
             Request::Agents(()),
@@ -606,9 +802,27 @@ mod tests {
                 event: "Stop".into(),
             }),
             Request::RunHook(RunReq {
-                cwd,
+                cwd: cwd.clone(),
                 hook,
                 input: serde_json::json!({}),
+            }),
+            Request::Traces(TracesReq { cwd: cwd.clone() }),
+            Request::Trace(TraceReq {
+                cwd: cwd.clone(),
+                key: key.clone(),
+            }),
+            Request::TraceStep(TraceStepReq {
+                cwd: cwd.clone(),
+                key: key.clone(),
+                read: 0,
+                step: 0,
+            }),
+            Request::TracePiece(TracePieceReq {
+                cwd,
+                key,
+                read: 0,
+                step: 0,
+                piece: PieceRef::Sent { piece: 0 },
             }),
         ];
         assert_eq!(

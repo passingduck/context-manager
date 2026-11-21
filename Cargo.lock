@@ -513,6 +513,7 @@ dependencies = [
  "globset",
  "ignore",
  "jsonc-parser",
+ "libc",
  "regex",
  "serde",
  "serde_json",

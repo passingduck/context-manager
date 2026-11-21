@@ -12,6 +12,7 @@ use crate::env::ScanEnv;
 use crate::model::*;
 use crate::probe_fs::{EntryKind, ProbeFs};
 use crate::tokens;
+use crate::trace::TraceData;
 
 pub mod claude;
 pub mod codex;
@@ -146,6 +147,21 @@ pub trait Agent: Sync {
     }
     fn sample_input(&self, _event: &str, _cx: &ScanCx) -> serde_json::Value {
         serde_json::Value::Null
+    }
+    /// The recorded sessions that started in `cx.env.cwd` or below it (design section 14). An
+    /// agent without a reader has none.
+    fn traces(&self, _cx: &ScanCx) -> Vec<TraceInfo> {
+        Vec::new()
+    }
+    /// One session of [`Agent::traces`], or one subagent of it. The id is matched against the
+    /// agent's own listing, never joined into a path.
+    fn trace(
+        &self,
+        _cx: &ScanCx,
+        _id: &TraceId,
+        _part: Option<&str>,
+    ) -> Result<TraceData, ApiError> {
+        Err(ApiError::NotFound)
     }
 }
 

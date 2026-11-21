@@ -105,6 +105,14 @@ api! {
     HookSample => hook_sample(SampleReq) -> serde_json::Value;
     // ExecSpec, exit code, stdout, stderr, ms, timed_out
     RunHook => run_hook(RunReq) -> HookRun;
+    // every agent's recorded sessions that started in cwd or below, newest first
+    Traces => traces(TracesReq) -> Vec<TraceInfo>;
+    // the calls of one session, or of one subagent of it
+    Trace => trace(TraceReq) -> Trace;
+    // the pieces of one request; Stale when the record changed under the trace
+    TraceStep => trace_step(TraceStepReq) -> StepPieces;
+    // the text of one piece, at most 1 MiB
+    TracePiece => trace_piece(TracePieceReq) -> PieceText;
 }
 
 #[cfg(test)]
