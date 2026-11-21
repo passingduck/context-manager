@@ -120,25 +120,33 @@ fn fires(rule: &AccessRule, target: &AbsPath, touched: &AbsPath) -> bool {
 }
 
 fn extra_load(cx: &ScanCx, id: LoadId, candidate: crate::agents::Candidate) -> Load {
-    let (status, delivered) = match cx.fs.read(&candidate.file) {
-        Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {
-            (LoadStatus::Skipped { skip: Skip::Empty }, None)
-        }
-        Ok(bytes) => (
-            LoadStatus::Loaded,
-            Some(Delivered {
-                bytes: bytes.len() as u64,
-                tokens: crate::tokens::count_cached(&Revision::of(&bytes), &bytes),
-                transformed: false,
-            }),
-        ),
-        Err(err) if err.is_not_found() => (
-            LoadStatus::Skipped {
-                skip: Skip::Missing,
-            },
-            None,
-        ),
-        Err(err) => (LoadStatus::Skipped { skip: err.skip() }, None),
+    let read = match &candidate.skip {
+        // The agent finds the file and does not load it, so the file is not read.
+        Some(skip) => Err(skip.clone()),
+        None => Ok(cx.fs.read(&candidate.file)),
+    };
+    let (status, delivered) = match read {
+        Err(skip) => (LoadStatus::Skipped { skip }, None),
+        Ok(read) => match read {
+            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {
+                (LoadStatus::Skipped { skip: Skip::Empty }, None)
+            }
+            Ok(bytes) => (
+                LoadStatus::Loaded,
+                Some(Delivered {
+                    bytes: bytes.len() as u64,
+                    tokens: crate::tokens::count_cached(&Revision::of(&bytes), &bytes),
+                    transformed: false,
+                }),
+            ),
+            Err(err) if err.is_not_found() => (
+                LoadStatus::Skipped {
+                    skip: Skip::Missing,
+                },
+                None,
+            ),
+            Err(err) => (LoadStatus::Skipped { skip: err.skip() }, None),
+        },
     };
     Load {
         id,

@@ -49,14 +49,17 @@ pub struct OsTrash;
 
 impl Trasher for OsTrash {
     fn trash(&self, path: &Path) -> Result<(), String> {
-        let mut context = trash::TrashContext::default();
         // The Finder method asks the user for permission to control Finder. The file manager
         // method does not, and also works from a process with no window.
         #[cfg(target_os = "macos")]
-        {
+        let context = {
             use trash::macos::{DeleteMethod, TrashContextExtMacos};
+            let mut context = trash::TrashContext::default();
             context.set_delete_method(DeleteMethod::NsFileManager);
-        }
+            context
+        };
+        #[cfg(not(target_os = "macos"))]
+        let context = trash::TrashContext::default();
         context.delete(path).map_err(|e| e.to_string())
     }
 }

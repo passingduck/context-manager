@@ -56,11 +56,7 @@ impl TraceMemo {
             .find(|agent| agent.id() == key.agent)
             .ok_or(ApiError::NotFound)?;
         let fs = ProbeFs::new();
-        let cx = ScanCx {
-            env,
-            fs: &fs,
-            parked_dir: None,
-        };
+        let cx = ScanCx::new(env, &fs);
         let data = agent.trace(&cx, &key.id, key.part.as_deref())?;
         let file = data.info.file.clone();
         let len = data.info.bytes;
@@ -101,11 +97,7 @@ impl TraceMemo {
 /// Every agent's sessions that started in `env.cwd` or below it, newest first.
 pub(crate) fn traces(agents: &'static [&'static dyn Agent], env: &ScanEnv) -> Vec<TraceInfo> {
     let fs = ProbeFs::new();
-    let cx = ScanCx {
-        env,
-        fs: &fs,
-        parked_dir: None,
-    };
+    let cx = ScanCx::new(env, &fs);
     let mut all: Vec<TraceInfo> = agents.iter().flat_map(|a| a.traces(&cx)).collect();
     all.sort_by(|a, b| {
         let at = |info: &TraceInfo| info.last.clone().or_else(|| info.started.clone());

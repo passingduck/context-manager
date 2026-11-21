@@ -218,21 +218,6 @@ impl WalkIndex {
     pub fn dirs_containing(&self, name: &str) -> &[AbsPath] {
         self.by_name.get(name).map_or(&[], Vec::as_slice)
     }
-
-    /// Every file below `dir`, at any depth, in path order.
-    pub fn files_under<'a>(&'a self, dir: &AbsPath) -> impl Iterator<Item = &'a AbsPath> + 'a {
-        let prefix = if dir.as_str() == "/" {
-            "/".to_owned()
-        } else {
-            format!("{}/", dir.as_str())
-        };
-        let start = AbsPath::parse(prefix.trim_end_matches('/')).unwrap_or_else(|_| dir.clone());
-        let skip = prefix.clone();
-        self.files
-            .range(start..)
-            .skip_while(move |p| !p.as_str().starts_with(&skip))
-            .take_while(move |p| p.as_str().starts_with(&prefix))
-    }
 }
 
 /// Walks `root` breadth first.
@@ -390,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn the_index_answers_which_directories_hold_a_file_and_which_files_lie_under_one() {
+    fn the_index_answers_which_directories_hold_a_file() {
         let f = fixture();
         let fs = ProbeFs::new();
         let index = walk(&f.project(), &fs);
@@ -400,14 +385,21 @@ mod tests {
             ["", "pkg", "pkg/deep"]
         );
         assert!(index.dirs_containing("nope.md").is_empty());
+        let under =
+            |index: &WalkIndex, dir: &AbsPath| index.files().filter(|p| p.starts_with(dir)).count();
         assert_eq!(
-            names(index.files_under(&f.project_path("pkg")), &root),
+            names(
+                index
+                    .files()
+                    .filter(|p| p.starts_with(&f.project_path("pkg"))),
+                &root
+            ),
             ["pkg/.gitignore", "pkg/CLAUDE.md", "pkg/deep/CLAUDE.md"]
         );
         // `pkg2` shares a prefix with `pkg` and is not under it.
         f.write(&f.project_path("pkg2/a.md"), "x");
         let index = walk(&f.project(), &ProbeFs::new());
-        assert_eq!(index.files_under(&f.project_path("pkg")).count(), 3);
+        assert_eq!(under(&index, &f.project_path("pkg")), 3);
     }
 
     #[test]
@@ -444,8 +436,9 @@ mod tests {
         f.write(&f.project_path("real/a.md"), "x");
         f.symlink(&f.project_path("link"), &f.project_path("real"));
         let index = walk(&f.project(), &ProbeFs::new());
-        assert_eq!(index.files_under(&f.project_path("link")).count(), 0);
-        assert_eq!(index.files_under(&f.project_path("real")).count(), 1);
+        let under = |dir: &AbsPath| index.files().filter(|p| p.starts_with(dir)).count();
+        assert_eq!(under(&f.project_path("link")), 0);
+        assert_eq!(under(&f.project_path("real")), 1);
     }
 
     fn rels(tree: &[Listed]) -> Vec<String> {

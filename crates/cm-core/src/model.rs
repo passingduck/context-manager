@@ -189,6 +189,21 @@ impl AgentId {
     }
 }
 
+impl Snapshot {
+    /// The view of one agent.
+    pub fn view(&self, agent: &AgentId) -> Option<&AgentView> {
+        self.agents.iter().find(|view| view.agent == *agent)
+    }
+
+    /// The one lookup of a hook by id: the view of the agent that lists it, and the hook.
+    pub fn hook(&self, id: &HookId) -> Option<(&AgentView, &Hook)> {
+        self.agents.iter().find_map(|view| {
+            let hook = view.hooks.iter().find(|hook| hook.id == *id)?;
+            Some((view, hook))
+        })
+    }
+}
+
 impl fmt::Display for AgentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)

@@ -732,6 +732,7 @@ fn another_agents_edits_are_left_to_it() {
         fs: scanned.fs(),
         snapshot: &scanned.snapshot,
         parked_dir: &rig.parked,
+        hook: None,
     };
     assert!(
         Claude

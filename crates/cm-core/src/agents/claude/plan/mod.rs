@@ -35,9 +35,11 @@ pub(super) fn plan(cx: &PlanCx, edit: &Edit) -> Option<Result<Preview, ApiError>
         Edit::AddHook { agent, file, draft } if *agent == claude() => {
             Some(hooks::add(cx, edit, file, draft))
         }
-        Edit::UpdateHook { hook, draft } => hooks::update(cx, edit, hook, draft),
-        Edit::RemoveHook { hook } => hooks::remove(cx, edit, hook),
-        Edit::SetHookEnabled { hook, enabled } => hooks::set_enabled(cx, edit, hook, *enabled),
+        Edit::UpdateHook { draft, .. } => cx.hook.map(|hook| hooks::update(cx, edit, hook, draft)),
+        Edit::RemoveHook { .. } => cx.hook.map(|hook| hooks::remove(cx, edit, hook)),
+        Edit::SetHookEnabled { enabled, .. } => cx
+            .hook
+            .map(|hook| hooks::set_enabled(cx, edit, hook, *enabled)),
         _ => None,
     }
 }
@@ -90,6 +92,17 @@ pub(super) fn preview(edit: &Edit, ops: Vec<FileOp>, warnings: Vec<Warning>) -> 
         before: Default::default(),
         warnings,
         conflicts: Vec::new(),
+    }
+}
+
+/// Warnings that follow a write to a Claude Code file whoever planned it, a plain save included.
+/// Claude Code rewrites `settings.local.json` itself, for example when the user approves a
+/// permission prompt (spec 6, H8).
+pub(super) fn write_warnings(path: &AbsPath) -> Vec<Warning> {
+    if path.file_name() == Some("settings.local.json") {
+        vec![Warning::AgentAlsoWrites { agent: claude() }]
+    } else {
+        Vec::new()
     }
 }
 
