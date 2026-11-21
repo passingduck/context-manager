@@ -19,6 +19,9 @@ use crate::model::{
     AbsPath, ApiError, Fingerprint, Invalid, Limit, LimitKind, RuleRef, Skip, Unit,
 };
 
+mod stream;
+pub use stream::{FileSlice, LineLimits, LinesRead};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryKind {
     File,
@@ -215,6 +218,7 @@ struct State {
 #[derive(Default)]
 pub struct ProbeFs {
     state: Mutex<State>,
+    line_limits: LineLimits,
 }
 
 impl ProbeFs {
