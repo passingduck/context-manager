@@ -63,7 +63,8 @@ function script() {
   const sys = (second) => [text(TEXTS.system0), text(second)];
   const a1 = model([text("Reading the file."), { type: "tool_use", id: "toolu_1", name: "Read", input: { path: "a.txt" } }]);
   const r1 = user([{ type: "tool_result", tool_use_id: "toolu_1", content: TEXTS.readOut }]);
-  const a2 = model([text("Done reading.")]);
+  // A thinking block carries no text in the record, so its size can only come from the usage.
+  const a2 = model([{ type: "thinking", thinking: "", signature: "stand-in-signature" }, text("Done reading.")]);
   const u2 = user(TEXTS.promptTwo);
   const a3 = model([text("Changed it.")]);
   const sum = user(TEXTS.summary);
@@ -72,7 +73,7 @@ function script() {
   return {
     main: [
       { at: 0, system: sys(TEXTS.system1), messages: [user(TEXTS.promptOne)], reply: a1.content, usage: { input: 20, read: 0, write: 700, output: 40 } },
-      { at: 30, system: sys(TEXTS.system1), messages: [user(TEXTS.promptOne), a1, r1], reply: a2.content, usage: { input: 15, read: 700, write: 120, output: 30 } },
+      { at: 30, system: sys(TEXTS.system1), messages: [user(TEXTS.promptOne), a1, r1], reply: a2.content, usage: { input: 15, read: 700, write: 120, output: 30, thinking: 12 } },
       { at: 60, system: sys(TEXTS.system1), messages: [user(TEXTS.promptOne), a1, r1, a2, u2], reply: a3.content, usage: { input: 18, read: 820, write: 110, output: 35 } },
       // The second system block changed: only the first block is read from the cache.
       { at: 90, system: sys(TEXTS.system1Changed), messages: [user(TEXTS.promptOne), a1, r1, a2, u2, a3, user("Prompt two b: one more thing.")], reply: [text("Noted.")], usage: { input: 22, read: 150, write: 900, output: 25 } },
@@ -140,7 +141,7 @@ function writeChain({ calls, start, lines, agentId, sessionId, cwd, state }) {
     });
     // Section 6: one assistant record per content block, each with the final usage.
     const messageId = `msg_${id.slice(0, 8)}`;
-    const usage = call.usage && { input_tokens: call.usage.input, cache_read_input_tokens: call.usage.read, cache_creation_input_tokens: call.usage.write, output_tokens: call.usage.output };
+    const usage = call.usage && { input_tokens: call.usage.input, cache_read_input_tokens: call.usage.read, cache_creation_input_tokens: call.usage.write, output_tokens: call.usage.output, ...(call.usage.thinking ? { output_tokens_details: { thinking_tokens: call.usage.thinking } } : {}) };
     call.reply.forEach((block, n) => {
       lines.push({
         type: "assistant", sessionId, uuid: randomUUID(), timestamp: stamp(call.at + 5), cwd, version: VERSION, requestRef: id, apiBlockIndex: n, ...(agentId ? { agentId, isSidechain: true } : {}),
