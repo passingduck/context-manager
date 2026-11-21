@@ -344,6 +344,14 @@ function Reply({ step, index, keyOf, trace, picked, go }: { step: Step; index: n
     <section aria-label={t.sessions.call.reply} className="pb-4">
       <h3 className="text-[12px] font-semibold">{t.sessions.call.reply}</h3>
       {step.reply.length === 0 && <p className="text-muted">{t.sessions.call.noReply}</p>}
+      {step.reply.length > 0 && (
+        <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)_4rem_4rem] gap-x-2 border-b border-line px-1 pb-0.5 text-[11px] text-muted">
+          <span>{t.sessions.call.colKind}</span>
+          <span>{t.sessions.call.colLabel}</span>
+          <span className="text-right" title={t.sessions.estimatedTokens}>{t.sessions.call.colTokens}</span>
+          <span className="text-right">{t.sessions.call.colSize}</span>
+        </div>
+      )}
       <ul data-testid="reply-pieces">
         {step.reply.map((piece, i) => (
           <li key={i}>
